@@ -5,6 +5,8 @@ import Link from "next/link";
 import { motion } from "framer-motion";
 
 export default function Hero() {
+	const networkName = "Stellar";
+
 	const fadeUp = {
 		hidden: { opacity: 0, y: 40 },
 		show: { opacity: 1, y: 0, transition: { duration: 0.8, ease: "easeOut" } },
@@ -64,8 +66,9 @@ export default function Hero() {
 					variants={fadeUp}
 					className="text-gray-600 max-w-2xl text-sm md:text-base mb-8"
 				>
-					Upload your study materials, past exam papers, and reports — mint them
-					as NFTs, share with others, and get rewarded when they’re downloaded.
+					Upload your study materials, past exam papers, and reports with
+					Stellar-backed ownership, share with others, and get rewarded when
+					they’re unlocked.
 				</motion.p>
 
 				{/* CTA Buttons */}
@@ -90,16 +93,15 @@ export default function Hero() {
 					className="relative mt-8 flex items-center justify-center"
 				>
 					<motion.div
-						className="absolute -left-16 top-10 w-16 h-16 rounded-full  flex items-center justify-center rotate-12"
+						className="absolute -left-16 top-10 rotate-12"
 						animate={{ y: [0, -10, 0] }}
 						transition={{ repeat: Infinity, duration: 3, ease: "easeInOut" }}
 					>
-						<Image
-						src="/images/celo.png"
-						alt="cele Icon"
-						width={80}
-						height={80}
-					/>
+						<div className="flex h-20 w-20 items-center justify-center rounded-full border border-sky-200 bg-white/90 shadow-lg shadow-sky-100">
+							<span className="text-xs font-semibold uppercase tracking-[0.3em] text-sky-700">
+								{networkName}
+							</span>
+						</div>
 					</motion.div>
 
 					<motion.div
@@ -132,7 +134,7 @@ export default function Hero() {
 
 				{/* Footer Text */}
 				<motion.p variants={fadeUp} className="text-xs text-gray-500 mt-10">
-					Supported by Students. Powered by Blockchain.
+					Supported by Students. Powered by {networkName}.
 				</motion.p>
 
 			{/* Partner Logos */}

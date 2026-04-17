@@ -5,20 +5,23 @@ import { motion } from "framer-motion";
 import { FaCrown } from "react-icons/fa";
 
 export default function TopSharedMaterials() {
+	const networkName = "Stellar";
+	const priceUnit = "XLM";
+
 	const sharedMaterials = [
 		{
 			title: "CHM 112 – Lab Report (Year 1)",
-			price: "0.25 CELO",
+			price: `0.25 ${priceUnit}`,
 			authorImg: "/author1.png",
 		},
 		{
 			title: "GNS 201 – Use of English (Year 2)",
-			price: "0.25 CELO",
+			price: `0.25 ${priceUnit}`,
 			authorImg: "/author2.png",
 		},
 		{
 			title: "CSC 301 – Data Structures (Year 3)",
-			price: "0.26 CELO",
+			price: `0.26 ${priceUnit}`,
 			authorImg: "/author3.png",
 		},
 	];
@@ -27,35 +30,35 @@ export default function TopSharedMaterials() {
 		{
 			rank: 1,
 			name: "CryptoFunks",
-			price: "0.25 CELO",
+			price: `0.25 ${priceUnit}`,
 			change: "+26.52%",
 			color: "text-green-500",
 		},
 		{
 			rank: 2,
 			name: "Cryptix",
-			price: "0.25 CELO",
+			price: `0.25 ${priceUnit}`,
 			change: "+10.52%",
 			color: "text-red-500",
 		},
 		{
 			rank: 3,
 			name: "Frenesware",
-			price: "0.25 CELO",
+			price: `0.25 ${priceUnit}`,
 			change: "+5.52%",
 			color: "text-green-500",
 		},
 		{
 			rank: 4,
 			name: "PunkArt",
-			price: "50,008 CELO",
+			price: `50,008 ${priceUnit}`,
 			change: "+1.52%",
 			color: "text-green-500",
 		},
 		{
 			rank: 5,
 			name: "Art Crypto",
-			price: "4,524 CELO",
+			price: `4,524 ${priceUnit}`,
 			change: "+2.52%",
 			color: "text-red-500",
 		},
@@ -123,15 +126,11 @@ export default function TopSharedMaterials() {
 							</p>
 						</div>
 						<div className="flex items-center gap-1">
-							<Image
-								src="/celo.png"
-								alt="CELO"
-								width={18}
-								height={18}
-								className="rounded-full"
-							/>
+							<span className="inline-flex rounded-full border border-sky-200 bg-sky-50 px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.2em] text-sky-700">
+								{networkName}
+							</span>
 							<span className="text-xs font-semibold text-gray-700">
-								0.25 CELO
+								0.25 {priceUnit}
 							</span>
 						</div>
 					</div>
@@ -163,12 +162,9 @@ export default function TopSharedMaterials() {
 										{material.title}
 									</h3>
 									<div className="flex items-center gap-2 mt-1">
-										<Image
-											src="/celo.png"
-											alt="CELO"
-											width={14}
-											height={14}
-										/>
+										<span className="inline-flex rounded-full border border-sky-200 bg-sky-50 px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.2em] text-sky-700">
+											{networkName}
+										</span>
 										<span className="text-xs font-medium text-gray-600">
 											{material.price}
 										</span>

@@ -7,6 +7,7 @@ import { FiFilter } from "react-icons/fi";
 
 export default function DiscoverMaterials() {
 	const [loading, setLoading] = useState(true);
+	const priceUnit = "XLM";
 
     const imageOptions = [
         "/images/Generated Image November 07, 2025 - 6_44AM.png",
@@ -18,7 +19,7 @@ export default function DiscoverMaterials() {
             title: "CHM 112 – Lab Report Template (UNN)",
             author: "Chijioke M.",
             likes: "21.5K",
-            bid: "0.25 CELO",
+            bid: `0.25 ${priceUnit}`,
             time: "01:09:40",
             image: imageOptions[Math.floor(Math.random() * imageOptions.length)],
         })),
