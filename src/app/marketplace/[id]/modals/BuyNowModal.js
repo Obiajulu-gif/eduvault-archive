@@ -5,13 +5,29 @@ import { motion, AnimatePresence } from "framer-motion";
 import { FaTimes } from "react-icons/fa";
 import Image from "next/image";
 import ConnectWalletModal from "./ConnectWalletModal";
+import { createFormState, setFieldState, setSubmitting, validateCheckout } from "@/lib/forms/validation";
 
 export default function BuyNowModal({ isOpen, onClose, price }) {
     const [showWallet, setShowWallet] = useState(false);
-    const [email, setEmail] = useState("");
+    const [formState, setFormState] = useState(
+        createFormState({ email: "", agreeTerms: false })
+    );
+    const [success, setSuccess] = useState(null);
 
-    const handlePay = () => {
-        setShowWallet(true);
+    const handlePay = (e) => {
+        e.preventDefault();
+        setSuccess(null);
+        const errors = validateCheckout(formState.values);
+        if (Object.keys(errors).length > 0) {
+            setFormState((state) => ({ ...state, errors }));
+            return;
+        }
+        setFormState((state) => setSubmitting(state, true));
+        setTimeout(() => {
+            setFormState((state) => setSubmitting(state, false));
+            setSuccess("Checkout started. Continue with your wallet to complete payment.");
+            setShowWallet(true);
+        }, 300);
     };
 
     return (
@@ -58,12 +74,34 @@ export default function BuyNowModal({ isOpen, onClose, price }) {
                                 </label>
                                 <input
                                     type="email"
-                                    value={email}
-                                    onChange={(e) => setEmail(e.target.value)}
+                                    value={formState.values.email}
+                                    onChange={(e) =>
+                                        setFormState((state) => setFieldState(state, "email", e.target.value))
+                                    }
                                     placeholder="Enter your email"
                                     className="w-full border border-gray-300 rounded-lg py-2 px-3 text-sm focus:outline-none focus:ring-2 focus:ring-blue-200"
                                 />
+                                {formState.errors.email && (
+                                    <p className="text-red-600 text-xs mt-1">{formState.errors.email}</p>
+                                )}
                             </div>
+
+                            <div className="flex items-center gap-2 mb-4">
+                                <input
+                                    id="agree-terms"
+                                    type="checkbox"
+                                    checked={formState.values.agreeTerms}
+                                    onChange={(e) =>
+                                        setFormState((state) => setFieldState(state, "agreeTerms", e.target.checked))
+                                    }
+                                />
+                                <label htmlFor="agree-terms" className="text-xs text-gray-600">
+                                    I understand this checkout is gated by wallet confirmation.
+                                </label>
+                            </div>
+                            {formState.errors.agreeTerms && (
+                                <p className="text-red-600 text-xs mb-3">{formState.errors.agreeTerms}</p>
+                            )}
 
                             {/* Price Display */}
                             <div className="flex justify-between items-center mb-5 text-sm">
@@ -80,11 +118,13 @@ export default function BuyNowModal({ isOpen, onClose, price }) {
                             </div>
 
                             {/* Pay Button */}
+                            {success && <p className="text-green-600 text-xs mb-3">{success}</p>}
                             <button
                                 onClick={handlePay}
-                                className="w-full bg-blue-600 hover:bg-blue-700 text-white py-2.5 rounded-lg font-semibold text-sm transition-all"
+                                disabled={formState.isSubmitting}
+                                className="w-full bg-blue-600 hover:bg-blue-700 text-white py-2.5 rounded-lg font-semibold text-sm transition-all disabled:opacity-60"
                             >
-                                Pay with Wallet
+                                {formState.isSubmitting ? "Preparing..." : "Pay with Wallet"}
                             </button>
                         </div>
                     </motion.div>

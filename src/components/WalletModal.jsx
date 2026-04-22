@@ -6,6 +6,7 @@ import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { useWallet } from "@/hooks/useWallet";
 import { formatAddress } from "@/utils/formatAddress";
+import { validateWalletProfile } from "@/lib/forms/validation";
 
 export default function WalletModal({ isOpen, onClose }) {
   const [step, setStep] = useState(1);
@@ -35,19 +36,9 @@ export default function WalletModal({ isOpen, onClose }) {
   const [success, setSuccess] = useState(false);
 
   const validate = () => {
-    const e = {};
-    if (!formData.fullName || formData.fullName.trim().length < 2) {
-      e.fullName = "Please enter your full name.";
-    }
-    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    if (!formData.email || !emailRegex.test(formData.email)) {
-      e.email = "Please enter a valid email address.";
-    }
-    if (formData.bio && formData.bio.length > 300) {
-      e.bio = "Bio should be 300 characters or fewer.";
-    }
-    setErrors(e);
-    return Object.keys(e).length === 0;
+    const nextErrors = validateWalletProfile(formData);
+    setErrors(nextErrors);
+    return Object.keys(nextErrors).length === 0;
   };
 
   const handleNext = () => setStep((prev) => prev + 1);

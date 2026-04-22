@@ -221,6 +221,12 @@ Run backend validation, rate-limit, and indexer tests:
 npm run test:backend
 ```
 
+Run the frontend validation baseline:
+
+```bash
+npm run test:frontend
+```
+
 Run the full local test baseline:
 
 ```bash
