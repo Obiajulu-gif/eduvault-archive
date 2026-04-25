@@ -20,6 +20,33 @@ on:
       - ".github/workflows/contracts.yml"
 
 jobs:
+  soroban:
+    name: Soroban Contract Checks
+    if: ${{ hashFiles('soroban/**/Cargo.toml') != '' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32v1-none
+
+      - name: Cache Rust artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            soroban -> soroban/target
+
+      - name: Run Soroban tests
+        working-directory: soroban
+        run: cargo test
+
+      - name: Build Soroban contract WASM
+        working-directory: soroban
+        run: cargo build --target wasm32v1-none --release
+
   solidity:
     name: Archived Solidity Prototype Checks
     if: ${{ hashFiles('archive/legacy-evm/contracts/**/*.sol') != '' }}
@@ -61,18 +88,18 @@ jobs:
             "${files[@]}"
 
       - name: Setup Foundry
-        if: ${{ hashFiles('foundry.toml') != '' }}
+        if: hashFiles('foundry.toml') != ''
         uses: foundry-rs/foundry-toolchain@v1
 
       - name: Run Foundry tests
-        if: ${{ hashFiles('foundry.toml') != '' }}
+        if: hashFiles('foundry.toml') != ''
         run: forge test -vvv
 
       - name: Run Hardhat tests
-        if: ${{ hashFiles('hardhat.config.js', 'hardhat.config.cjs', 'hardhat.config.ts') != '' }}
+        if: hashFiles('hardhat.config.js', 'hardhat.config.cjs', 'hardhat.config.ts') != ''
         run: npx hardhat test
 
       - name: Note missing Solidity test runner
-        if: ${{ hashFiles('foundry.toml', 'hardhat.config.js', 'hardhat.config.cjs', 'hardhat.config.ts') == '' }}
+        if: hashFiles('foundry.toml', 'hardhat.config.js', 'hardhat.config.cjs', 'hardhat.config.ts') == ''
         shell: bash
         run: echo "No Solidity test runner is configured in this repository yet. Compilation, formatting, and lint checks still ran."

@@ -9,6 +9,6 @@ module.exports = {
   },
   paths: {
     sources: "./contracts",
-    tests: "./tests/contracts",
+    tests: "./tests/legacy-evm",
   },
 };

@@ -38,6 +38,8 @@ EduVault needs to do four things reliably:
 
 ## 3. Target Stellar-Native Architecture
 
+The canonical Soroban contract boundary and event model are documented in [`docs/soroban-contract-architecture.md`](soroban-contract-architecture.md).
+
 ### Off-chain components
 
 - `web-app`
@@ -58,7 +60,7 @@ EduVault needs to do four things reliably:
 
 - `MaterialRegistry`
   - stores immutable references to content metadata
-  - binds creator, price, accepted asset, and rights hash
+  - binds creator, rights hash, accepted-asset quotes, and payout shares
 - `PurchaseManager`
   - receives payment
   - records purchase entitlement
@@ -81,18 +83,20 @@ EduVault needs to do four things reliably:
   - IPFS metadata URL
   - creator wallet
   - search and visibility metadata
-- `purchases_cache`
+- `purchases`
+  - derived cache of settled purchase events
+- `entitlement_cache`
   - denormalized mirror of on-chain entitlement state for fast UI reads
 
 ### On-chain state
 
 - material identifier
 - creator account
-- accepted asset
-- price
+- accepted-asset quotes
+- payout shares
 - rights hash
 - buyer entitlement records
-- payout parameters
+- platform fee and treasury parameters
 
 ## 5. Purchase Flow
 
@@ -131,3 +135,5 @@ EduVault needs to do four things reliably:
 ## 8. Design Principle
 
 The chain should secure settlement and rights. The web application should optimize search, onboarding, and delivery. EduVault does not need to put files on-chain to benefit from Stellar.
+
+For the detailed storage model, invariants, accepted-asset rules, and event contract, use [`docs/soroban-contract-architecture.md`](soroban-contract-architecture.md) as the implementation reference.
