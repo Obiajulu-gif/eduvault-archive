@@ -5,23 +5,22 @@ import Link from "next/link";
 import { motion } from "framer-motion";
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import WalletModal from "@/components/WalletModal";
-import { useWallet } from "@/hooks/useWallet";
 import { formatAddress } from "@/utils/formatAddress";
+import { WalletButton } from "./WalletBtn";
+import { useWallet } from "@/hooks/useWallet";
 
 export default function Navbar() {
 	const [menuOpen, setMenuOpen] = useState(false);
-	const [isModalOpen, setIsModalOpen] = useState(false);
 	const router = useRouter();
 
 	const {
 		address,
 		isConnected,
-		isConnecting,
-		balance,
-		balanceSymbol,
-		disconnectWallet,
+		balances,
+		disconnect
 	} = useWallet();
+	const balance = balances?.snapshot?.native?.balance;
+	const balanceSymbol = 'XLM';
 
 	return (
 		<header className="relative flex justify-center py-6 px-4 md:px-0 overflow-visible bg-[#fffaf6] z-11111">
@@ -106,7 +105,7 @@ export default function Navbar() {
 									View Profile
 								</Link>
 								<button
-									onClick={disconnectWallet}
+									onClick={disconnect}
 									className="w-full text-left px-4 py-2 text-sm text-red-600 hover:bg-red-50 rounded-b-lg"
 								>
 									Disconnect
@@ -115,14 +114,7 @@ export default function Navbar() {
 						</div>
 					</div>
 				) : (
-					<button
-						onClick={() => setIsModalOpen(true)}
-						disabled={isConnecting}
-						className="hidden md:flex items-center gap-2 bg-white hover:bg-gray-100 text-black border border-gray-300 
-						text-sm font-semibold py-2 px-5 rounded-full transition-all duration-300 disabled:opacity-50 disabled:cursor-not-allowed"
-					>
-						{isConnecting ? "Connecting..." : "Connect Wallet →"}
-					</button>
+					<WalletButton	/>
 				)}
 
 				{/* Mobile Menu Button */}
@@ -167,7 +159,7 @@ export default function Navbar() {
 									<button
 										onClick={() => {
 											setMenuOpen(false);
-											disconnectWallet();
+											disconnect();
 										}}
 										className="flex-1 bg-red-50 hover:bg-red-100 text-red-600 text-sm font-semibold py-2 px-4 rounded-full"
 									>
@@ -176,23 +168,11 @@ export default function Navbar() {
 								</div>
 							</div>
 						) : (
-							<button
-								onClick={() => {
-									setMenuOpen(false);
-									setIsModalOpen(true);
-								}}
-								disabled={isConnecting}
-								className="bg-gray-100 hover:bg-gray-200 text-sm font-semibold py-2 px-5 rounded-full disabled:opacity-50"
-							>
-								{isConnecting ? "Connecting..." : "Connect Wallet →"}
-							</button>
+							<WalletButton	/>
 						)}
 					</div>
 				)}
 			</motion.nav>
-
-			{/* Wallet Modal */}
-			<WalletModal isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} />
 		</header>
 	);
 }

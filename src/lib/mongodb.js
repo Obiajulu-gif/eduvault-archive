@@ -24,3 +24,5 @@ export async function getDb() {
   const dbName = process.env.MONGODB_DB || "eduvault";
   return client.db(dbName);
 }
+
+export default clientPromise;

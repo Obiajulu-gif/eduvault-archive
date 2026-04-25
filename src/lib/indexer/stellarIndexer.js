@@ -129,6 +129,12 @@ export async function runIndexerBatch({ db, eventSource, source = "stellar", lim
 }
 
 export function createJsonRpcEventSource({ rpcUrl, contractId, fetchImpl = fetch }) {
+  const contractIds = Array.isArray(contractId)
+    ? contractId.filter(Boolean)
+    : contractId
+      ? [contractId]
+      : [];
+
   return {
     async getEvents({ cursor, limit }) {
       const response = await fetchImpl(rpcUrl, {
@@ -139,7 +145,7 @@ export function createJsonRpcEventSource({ rpcUrl, contractId, fetchImpl = fetch
           id: 1,
           method: "getEvents",
           params: {
-            filters: contractId ? [{ contractIds: [contractId] }] : [],
+            filters: contractIds.length > 0 ? [{ contractIds }] : [],
             pagination: { cursor, limit },
           },
         }),

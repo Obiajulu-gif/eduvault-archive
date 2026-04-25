@@ -14,8 +14,6 @@ on:
       - "jsconfig.json"
       - "postcss.config.mjs"
       - ".github/workflows/frontend.yml"
-    paths-ignore:
-      - "src/app/api/**"
   push:
     branches:
       - main
@@ -32,8 +30,6 @@ on:
       - "jsconfig.json"
       - "postcss.config.mjs"
       - ".github/workflows/frontend.yml"
-    paths-ignore:
-      - "src/app/api/**"
 
 jobs:
   frontend:
