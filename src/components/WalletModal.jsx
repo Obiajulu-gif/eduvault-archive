@@ -311,7 +311,7 @@ export default function WalletModal({ isOpen, onClose }) {
                   onClick={() => setStep(1)}
                   className="text-xs text-gray-500 hover:text-gray-700 underline"
                 >
-                  I don't have a wallet
+                  I don&apos;t have a wallet
                 </button>
               </div>
             </motion.div>
@@ -330,7 +330,7 @@ export default function WalletModal({ isOpen, onClose }) {
                 Set Up Your Profile
               </h2>
               <p className="text-sm text-gray-500 mb-2">
-                We'll personalize your dashboard and link uploads to your
+                We&apos;ll personalize your dashboard and link uploads to your
                 student ID.
               </p>
 

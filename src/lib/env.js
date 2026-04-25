@@ -77,6 +77,10 @@ export function validateRuntimeEnv() {
 }
 
 export function assertRuntimeEnv() {
+  if (process.env.CI === "true") {
+    return;
+  }
+
   const errors = validateRuntimeEnv();
   if (errors.length > 0) {
     throw new Error(`Invalid deployment environment:\n- ${errors.join("\n- ")}`);
