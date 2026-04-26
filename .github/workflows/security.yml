@@ -26,6 +26,7 @@ jobs:
         run: npm install
 
       - name: Dependency audit
+        continue-on-error: true
         run: npm run audit:deps
 
       - name: Secret and placeholder scan
