@@ -337,6 +337,64 @@ export function WalletProvider({ children }) {
     [assertConnected],
   );
 
+  // -------------------------------------------------------------------------
+  // Profile check after connection
+  // -------------------------------------------------------------------------
+
+  useEffect(() => {
+    // Only check profile when transitioning to Connected state
+    if (state.status !== WalletStatus.Connected) return;
+
+    const address = state.session?.address;
+    if (!address) return;
+
+    // Skip check during server-side rendering
+    if (typeof window === 'undefined') return;
+
+    // Check if we're already on the onboarding page
+    const isOnOnboarding = window.location.pathname === '/onboarding' ||
+                           window.location.pathname.startsWith('/onboarding/');
+
+    let cancelled = false;
+
+    (async () => {
+      try {
+        // Check if profile exists and is complete
+        const response = await fetch(
+          `/api/profile/check?publicKey=${encodeURIComponent(address)}`,
+          { method: 'GET', headers: { Accept: 'application/json' } }
+        );
+
+        if (cancelled) return;
+
+        if (!response.ok) {
+          console.error('Profile check failed:', response.status);
+          return;
+        }
+
+        const data = await response.json();
+
+        // Redirect to onboarding if:
+        // 1. Profile doesn't exist (needs creation)
+        // 2. Profile exists but onboardingComplete is false
+        const needsOnboarding = !data.exists || 
+                                (data.exists && !data.profile?.onboardingComplete);
+
+        if (needsOnboarding && !isOnOnboarding) {
+          window.location.href = '/onboarding';
+        }
+      } catch (err) {
+        if (!cancelled) {
+          console.error('Profile check error:', err);
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [state.status, state.session?.address]);
+
   const value = useMemo(() => {
     const isConnected = state.status === WalletStatus.Connected;
     return {

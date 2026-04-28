@@ -43,6 +43,13 @@ export default async function DashboardPage() {
         redirect("/");
     }
 
+    // Check if onboarding is complete - redirect to onboarding if not
+    // This is a fallback to middleware in case of race conditions
+    const onboardingComplete = user.onboardingComplete ?? false;
+    if (!onboardingComplete) {
+        redirect("/onboarding");
+    }
+
     return (
         <div className="space-y-8 max-w-7xl mx-auto pb-10">
             {/* Top Row: Welcome & Call to Action */}
