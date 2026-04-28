@@ -20,12 +20,44 @@
 import { NextResponse } from 'next/server';
 import { verifyEntitlement } from '@/lib/entitlement';
 import { getDb } from '@/lib/mongodb';
+import { auditLog } from "@/lib/api/audit";
+import { checkRateLimit } from "@/lib/api/rateLimit";
+import { captureException } from "@/lib/sentry";
 
 export const dynamic = 'force-dynamic';
+
+const DOWNLOAD_RATE_LIMIT = { limit: 30, windowMs: 60_000 };
+
+function clientKey(request) {
+  const forwardedFor = request.headers.get("x-forwarded-for");
+  return (
+    forwardedFor?.split(",")[0]?.trim() ||
+    request.headers.get("x-real-ip") ||
+    "local"
+  );
+}
 
 const IPFS_GATEWAY = process.env.IPFS_GATEWAY_URL ?? 'https://ipfs.io/ipfs';
 
 export async function GET(request) {
+  // Apply rate limiting
+  const rateLimitKey = `download:GET:${clientKey(request)}`;
+  const rateLimit = checkRateLimit(rateLimitKey, DOWNLOAD_RATE_LIMIT);
+
+  if (!rateLimit.allowed) {
+    auditLog({
+      event: "rate_limit_blocked",
+      route: "download",
+      method: "GET",
+      status: 429,
+      clientKey: clientKey(request),
+    });
+    return NextResponse.json(
+      { error: "Too many requests", retryAfter: rateLimit.retryAfter },
+      { status: 429 }
+    );
+  }
+
   const { searchParams } = new URL(request.url);
   const materialId = searchParams.get('materialId') ?? '';
   const buyerAddress = searchParams.get('buyerAddress') ?? '';
@@ -46,6 +78,7 @@ export async function GET(request) {
     entitlementResult = await verifyEntitlement(materialId, buyerAddress);
   } catch (err) {
     console.error('[download] entitlement check error:', err);
+    captureException(err, { route: "download", method: "GET" });
     return NextResponse.json(
       { error: 'Entitlement verification failed' },
       { status: 503 }
@@ -71,6 +104,7 @@ export async function GET(request) {
     material = await db.collection('materials').findOne({ materialId });
   } catch (err) {
     console.error('[download] DB error fetching material:', err);
+    captureException(err, { route: "download", method: "GET" });
     return NextResponse.json({ error: 'Material lookup failed' }, { status: 503 });
   }
 
