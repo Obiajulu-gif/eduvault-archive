@@ -2,7 +2,12 @@ import { NextResponse } from 'next/server'
 import { auditLog } from '@/lib/api/audit'
 import { withApiHardening } from '@/lib/api/hardening'
 import { sanitizeObject } from '@/lib/api/validation'
-import { pinata } from '@/lib/pinata'
+import {
+  convertCidToGatewayUrl,
+  recordIpfsUpload,
+  uploadFileToIpfs,
+  uploadJsonToIpfs,
+} from '@/lib/ipfsPinning'
 
 export const dynamic = 'force-dynamic'
 
@@ -125,14 +130,24 @@ export async function POST(request) {
         const results = {}
 
         // 4️⃣ Upload the main file
-        const uploadedFile = await pinata.upload.public.file(file)
-        const fileUrl = await pinata.gateways.public.convert(uploadedFile.cid)
+        const uploadedFile = await uploadFileToIpfs(file)
+        await recordIpfsUpload({
+          cid: uploadedFile.cid,
+          kind: 'material_file',
+          metadata: { name: file.name, size: file.size, type: file.type },
+        })
+        const fileUrl = await convertCidToGatewayUrl(uploadedFile.cid)
         results.fileUrl = fileUrl
 
         // 5️⃣ Upload thumbnail (if provided)
         if (image) {
-          const fileThumb = await pinata.upload.public.file(image)
-          const imgUrl = await pinata.gateways.public.convert(fileThumb.cid)
+          const fileThumb = await uploadFileToIpfs(image)
+          await recordIpfsUpload({
+            cid: fileThumb.cid,
+            kind: 'thumbnail',
+            metadata: { name: image.name, size: image.size, type: image.type },
+          })
+          const imgUrl = await convertCidToGatewayUrl(fileThumb.cid)
           results.imgUrl = imgUrl
         }
 
@@ -164,8 +179,13 @@ export async function POST(request) {
         })
 
         // 7️⃣ Upload metadata JSON to Pinata
-        const uploadedJson = await pinata.upload.public.json(metadataJSON)
-        const jsonUrl = await pinata.gateways.public.convert(uploadedJson.cid)
+        const uploadedJson = await uploadJsonToIpfs(metadataJSON)
+        await recordIpfsUpload({
+          cid: uploadedJson.cid,
+          kind: 'metadata',
+          metadata: { storageKey: uploadedFile.cid },
+        })
+        const jsonUrl = await convertCidToGatewayUrl(uploadedJson.cid)
         results.metadataUrl = jsonUrl
 
         auditLog({

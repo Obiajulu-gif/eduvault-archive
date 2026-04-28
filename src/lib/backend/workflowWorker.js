@@ -18,6 +18,7 @@ import {
 } from "./workflowOrchestrator";
 import { getDb } from "@/lib/mongodb";
 import { COLLECTIONS } from "./schemaContracts";
+import { markUploadsRegistered } from "@/lib/ipfsPinning";
 
 // Configuration
 const CONFIG = {
@@ -154,6 +155,22 @@ async function reconcileTransaction(workflow) {
             },
           }
         );
+
+        const material = await materialsCollection.findOne({
+          "metadata.workflowId": workflow._id.toString(),
+        });
+        if (material) {
+          await markUploadsRegistered({
+            cids: [
+              material.storageKey,
+              material.fileUrl,
+              material.metadataUrl,
+              material.thumbnailUrl,
+            ],
+            materialId: material._id,
+            txHash: metadata.txHash,
+          });
+        }
       } else if (workflow.type === WORKFLOW_TYPES.PURCHASE) {
         await confirmWorkflow(workflow._id, {
           txHash: metadata.txHash,

@@ -87,7 +87,8 @@ export function validateMaterialPayload(body) {
     price,
     usageRights: sanitizeString(body?.usageRights, { maxLength: 1000 }),
     visibility,
-    thumbnailUrl: sanitizeString(body?.thumbnailUrl, { maxLength: 2048 }) || null,
+    thumbnailUrl: sanitizeString(body?.thumbnailUrl || body?.thumbnail, { maxLength: 2048 }) || null,
+    metadataUrl: sanitizeString(body?.metadataUrl || body?.metadata, { maxLength: 2048 }) || null,
     storageKey,
   };
 }

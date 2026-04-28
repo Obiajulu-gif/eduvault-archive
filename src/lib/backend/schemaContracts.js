@@ -3,6 +3,7 @@ export const COLLECTIONS = {
   materials: "materials",
   purchases: "purchases",
   entitlementCache: "entitlement_cache",
+  ipfsUploads: "ipfs_uploads",
   syncState: "sync_state",
   syncEvents: "sync_events",
 };
@@ -25,6 +26,11 @@ export const REQUIRED_INDEXES = {
   entitlement_cache: [
     { keys: { buyerAddress: 1, materialId: 1 }, options: { unique: true } },
     { keys: { active: 1, updatedAt: -1 } },
+  ],
+  ipfs_uploads: [
+    { keys: { cid: 1 }, options: { unique: true } },
+    { keys: { status: 1, createdAt: 1 } },
+    { keys: { materialId: 1 }, options: { sparse: true } },
   ],
   sync_state: [{ keys: { source: 1 }, options: { unique: true } }],
   sync_events: [{ keys: { _id: 1 }, options: { unique: true } }],

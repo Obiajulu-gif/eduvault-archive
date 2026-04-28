@@ -3,10 +3,8 @@ import { auditLog } from "@/lib/api/audit";
 import { withApiHardening } from "@/lib/api/hardening";
 import {
   getWorkflowsNeedingReconciliation,
-  updateWorkflowState,
-  WORKFLOW_STATES,
 } from "@/lib/backend/workflowOrchestrator";
-import { runWorker } from "@/lib/backend/workflowWorker";
+import { reconcileIpfsPins } from "@/lib/ipfsPinning";
 
 export const dynamic = "force-dynamic";
 
@@ -25,7 +23,13 @@ export async function POST(request) {
     async () => {
       try {
         const body = await request.json();
-        const { workflowId, runAll = false } = body;
+        const {
+          workflowId,
+          runAll = false,
+          dryRun = false,
+          gcOlderThanHours = 24,
+          limit = 100,
+        } = body;
 
         auditLog({
           event: "reconciliation_triggered",
@@ -49,11 +53,17 @@ export async function POST(request) {
         if (runAll) {
           // Get count of workflows needing reconciliation
           const workflows = await getWorkflowsNeedingReconciliation({ limit: 100 });
+          const ipfs = await reconcileIpfsPins({
+            limit,
+            dryRun,
+            gcOlderThanMs: Number(gcOlderThanHours) * 60 * 60 * 1000,
+          });
           
           return NextResponse.json({
             success: true,
             message: `Found ${workflows.length} workflows needing reconciliation`,
             count: workflows.length,
+            ipfs,
           });
         }
 
