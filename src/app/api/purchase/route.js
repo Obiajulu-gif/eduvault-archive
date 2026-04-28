@@ -23,9 +23,11 @@ async function getHorizonTransaction(txHash) {
     }
   }
 
+  const HORIZON_BASE_URL = process.env.STELLAR_HORIZON_URL ?? 'https://horizon-testnet.stellar.org';
+
   try {
-    // Note: Change to mainnet URL if deployed to mainnet
-    const response = await fetch(`https://horizon-testnet.stellar.org/transactions/${txHash}`);
+    const response = await fetch(`${HORIZON_BASE_URL}/transactions/${txHash}`);
+
     if (!response.ok) return null;
     
     const data = await response.json();
@@ -58,8 +60,10 @@ export async function GET(req) {
     const userAddress = verification.payload.walletAddress;
 
     const url = new URL(req.url);
-    const page = parseInt(url.searchParams.get('page')) || 1;
-    const limit = parseInt(url.searchParams.get('limit')) || 10;
+    const rawPage = Number.parseInt(url.searchParams.get('page') ?? '1', 10);
+    const rawLimit = Number.parseInt(url.searchParams.get('limit') ?? '10', 10);
+    const page = Number.isFinite(rawPage) && rawPage > 0 ? rawPage : 1;
+    const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? Math.min(rawLimit, 50) : 10;
     const skip = (page - 1) * limit;
 
     const pipeline = [
