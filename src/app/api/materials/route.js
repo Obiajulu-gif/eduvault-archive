@@ -67,11 +67,11 @@ export async function POST(request) {
 
     const result = await db.collection("materials").insertOne(doc);
     await markUploadsRegistered({
-      cids: [material.storageKey, material.fileUrl, material.metadataUrl, material.thumbnailUrl]
+      cids: [material.storageKey, material.metadataUrl, material.thumbnailUrl]
         .map(extractCid)
         .filter(Boolean),
       materialId: result.insertedId,
-      txHash: material.mintTxHash || material.chainTxHash || null,
+      txHash: null,
     });
     auditLog({ event: "material_created", route: "materials", method: "POST", status: 201, actor: user.sub });
     return NextResponse.json({ id: result.insertedId, ...sanitizeMaterial(doc) }, { status: 201 });
