@@ -22,7 +22,6 @@ on:
 jobs:
   soroban:
     name: Soroban Contract Checks
-    if: ${{ hashFiles('soroban/**/Cargo.toml') != '' }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -49,7 +48,6 @@ jobs:
 
   solidity:
     name: Archived Solidity Prototype Checks
-    if: ${{ hashFiles('archive/legacy-evm/contracts/**/*.sol') != '' }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
