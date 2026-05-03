@@ -5,7 +5,7 @@ Overview
 - A new logout endpoint exists at `/api/logout` which clears the `auth_token` cookie using the same `httpOnly`, `sameSite`, `secure`, and `path` settings.
 
 Frontend behavior
-- The wallet hook (`src/hooks/useWallet.js`) now calls `/api/logout` when the wallet is disconnected or when the connected account changes. This ensures the server-side session is revoked and dashboard access is removed.
+- The WalletProvider implementation (`src/providers/WalletProvider.jsx`) now calls `/api/logout` when the wallet is disconnected or when the connected account changes. This ensures the server-side session is revoked and dashboard access is removed.
 
 Expected behaviors
 - Wallet disconnect: triggers `/api/logout`, then disconnects the wallet. Dashboard routes should reject/redirect immediately.

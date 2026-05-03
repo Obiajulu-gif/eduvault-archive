@@ -85,15 +85,6 @@ jobs:
             exit 0
           fi
           npx --yes --package solc@0.8.30 solcjs \
-            --bin \
-            --abi \
-            --base-path . \
-            --include-path node_modules \
-            "${files[@]}"
-
-      - name: Setup Foundry
-        if: hashFiles('foundry.toml') != ''
-        uses: foundry-rs/foundry-toolchain@v1
           if [ "${#files[@]}" -eq 0 ]; then
             echo "No Solidity contracts found."
             exit 0

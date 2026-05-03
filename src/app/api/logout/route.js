@@ -15,6 +15,10 @@ export async function POST(request) {
 }
 
 export async function GET(request) {
-  // Allow GET for convenience in debugging/manual checks
-  return POST(request);
+  return new NextResponse(null, {
+    status: 405,
+    headers: {
+      Allow: "POST",
+    },
+  });
 }

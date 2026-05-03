@@ -324,6 +324,11 @@ export function WalletProvider({ children }) {
       // Some modules (e.g. stateless wallets like Albedo) may not implement
       // disconnect. Fine — DISCONNECT event resets state, or we fall through.
     }
+    try {
+      await fetch('/api/logout', { method: 'POST', credentials: 'include' });
+    } catch (e) {
+      console.warn('Logout request failed:', e?.message || e);
+    }
     lastWalletIdRef.current = null;
     clearPersistedSession();
     setState({ status: WalletStatus.Idle });
