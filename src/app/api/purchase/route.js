@@ -1,3 +1,5 @@
+export const dynamic = "force-dynamic";
+
 import { getDb } from '@/lib/mongodb'
 import { NextResponse } from 'next/server'
 import { verifyDashboardToken } from "@/lib/auth/session";
