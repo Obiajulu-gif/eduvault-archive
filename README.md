@@ -189,7 +189,7 @@ This repository standardizes on `pnpm` and the canonical lockfile `pnpm-lock.yam
 ```bash
 git clone https://github.com/Obiajulu-gif/eduvault.git
 cd eduvault
-corepack enable && corepack prepare pnpm@latest --activate
+corepack enable
 pnpm install --frozen-lockfile
 cp .env.example .env.local
 ```
@@ -225,7 +225,7 @@ pnpm run test:backend
 Run the full local test baseline:
 
 ```bash
-npm test
+pnpm test
 ```
 
 Backend schema and route contracts are documented in [`docs/backend-contracts.md`](docs/backend-contracts.md).
@@ -236,7 +236,7 @@ Backend schema and route contracts are documented in [`docs/backend-contracts.md
 2. Copy `.env.example` to `.env.local`.
 3. Configure MongoDB, Pinata, and email credentials.
 4. Run `docker compose up -d mongodb` if you do not already have MongoDB running.
-5. Start the development server with `npm run dev`.
+5. Start the development server with `pnpm run dev`.
 
 ## Environment Variables
 

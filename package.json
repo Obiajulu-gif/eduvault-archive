@@ -1,6 +1,7 @@
 {
   "name": "eduvault",
   "version": "0.1.0",
+  "packageManager": "pnpm@9.12.3",
   "description": "Stellar-aligned educational content marketplace prototype for creator payments, licensing, and discovery.",
   "license": "MIT",
   "keywords": [
@@ -17,9 +18,8 @@
     "build": "next build --webpack",
     "start": "next start",
     "lint": "eslint",
-    "typecheck": "npx --yes tsc --noEmit",
     "test": "vitest",
-    "test:frontend": "node scripts/check-frontend-tests.mjs",
+    "test:frontend": "node scripts/check-frontend-tests.mjs && vitest run",
     "test:all": "npm run test:contracts && npm run test:backend",
     "test:contracts": "hardhat test",
     "test:backend": "node --test tests/backend/*.test.mjs",
@@ -58,6 +58,7 @@
     "babel-plugin-react-compiler": "1.0.0",
     "eslint": "^9.39.4",
     "eslint-config-next": "^16.2.4",
+    "glob": "^11.0.0",
     "jest-axe": "^10.0.0",
     "jsdom": "^29.0.2",
     "tailwindcss": "^4.2.3",

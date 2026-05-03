@@ -75,6 +75,9 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
@@ -83,7 +86,7 @@ jobs:
           cache-dependency-path: pnpm-lock.yaml
 
       - name: Install dependencies
-        run: corepack enable && corepack prepare pnpm@latest --activate && pnpm install --frozen-lockfile
+        run: pnpm install --frozen-lockfile
 
       - name: Check contract formatting
         run: npx --yes prettier@3.6.2 --check "contracts/**/*.sol"

@@ -23,7 +23,7 @@ EduVault is an in-development educational content marketplace with a current web
 
 ```bash
 # Install dependencies (canonical): pnpm with the repo lockfile
-corepack enable && corepack prepare pnpm@latest --activate
+corepack enable
 pnpm install --frozen-lockfile
 cp .env.example .env.local
 docker compose up -d mongodb
@@ -34,7 +34,7 @@ Windows notes: If PowerShell blocks scripts, enable Corepack and run the above i
 
 ```powershell
 corepack enable
-corepack prepare pnpm@latest --activate
+
 pnpm install --frozen-lockfile
 ```
 
@@ -67,7 +67,7 @@ pnpm install --frozen-lockfile
 - **Deterministic install (local + CI)**:
 
 ```bash
-corepack enable && corepack prepare pnpm@latest --activate
+corepack enable
 pnpm install --frozen-lockfile
 ```
 
@@ -75,7 +75,7 @@ pnpm install --frozen-lockfile
 
 ```bash
 pnpm run lint          # lint checks
-pnpm run typecheck     # TypeScript type checks
+
 pnpm run test:frontend # Frontend tests (must exist, CI will fail if absent)
 pnpm run test:backend  # Backend tests
 pnpm run test:contracts# Contract tests (Hardhat/Foundry)

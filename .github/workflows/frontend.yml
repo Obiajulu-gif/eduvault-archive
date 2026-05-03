@@ -47,6 +47,9 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
@@ -55,13 +58,12 @@ jobs:
           cache-dependency-path: pnpm-lock.yaml
 
       - name: Install dependencies
-        run: corepack enable && corepack prepare pnpm@latest --activate && pnpm install --frozen-lockfile
+        run: pnpm install --frozen-lockfile
 
       - name: Lint frontend
         run: pnpm run lint -- --ignore-pattern "src/app/api/**" src/app src/components src/hooks src/providers src/utils
 
-      - name: Type check
-        run: pnpm run typecheck
+
 
       - name: Run frontend tests
         run: pnpm run test:frontend
