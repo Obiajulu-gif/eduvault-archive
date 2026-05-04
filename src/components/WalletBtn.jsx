@@ -110,6 +110,18 @@ export function WalletButton() {
         </button>
       );
 
+    case WalletStatus.Expired:
+      return (
+        <div className={`${CARD} border-amber-200 bg-amber-50/70`}>
+          <p className="text-sm text-amber-800">
+            Wallet session expired. Reconnect to continue using protected actions.
+          </p>
+          <button onClick={connect} className={`${BTN_PRIMARY} self-start`}>
+            Reconnect wallet
+          </button>
+        </div>
+      );
+
     default:
       return null;
   }

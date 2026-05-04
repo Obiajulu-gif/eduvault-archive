@@ -12,6 +12,7 @@ import {
 	FaHeart,
 	FaHistory,
 	FaCog,
+	FaBoxOpen,
 } from "react-icons/fa";
 
 export default function Sidebar() {
@@ -29,6 +30,11 @@ export default function Sidebar() {
 			icon: <FaUser />,
 			label: "My Materials",
 			href: "/dashboard/my-materials",
+		},
+		{
+			icon: <FaBoxOpen />,
+			label: "My Purchases",
+			href: "/dashboard/purchases",
 		},
 		{ icon: <FaDollarSign />, label: "Earnings", href: "/dashboard/earnings" },
 		{ icon: <FaHeart />, label: "Favourites", href: "/dashboard/favourites" },

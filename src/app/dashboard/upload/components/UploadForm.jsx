@@ -3,11 +3,15 @@
 import Image from "next/image";
 import { useState } from "react";
 import { FaCloudUploadAlt } from "react-icons/fa";
-import { useAccount } from "wagmi";
+import Cropper from "react-easy-crop";
+import { useWallet } from "@/hooks/useWallet";
+import { WalletStatus } from "@/providers/WalletProvider";
 import { useUploadFile, useCreateMaterial } from "@/hooks/api/useMaterials";
+import { getCroppedImageBlob } from "./cropImage";
 
 export default function UploadForm() {
-  const { address } = useAccount();
+  const { state } = useWallet();
+  const address = state.status === WalletStatus.Connected ? state.session.address : null;
   const uploadFileMutation = useUploadFile();
   const createMaterialMutation = useCreateMaterial();
 
@@ -21,6 +25,10 @@ export default function UploadForm() {
   const [docFileName, setDocFileName] = useState(null);
   const [thumbFile, setThumbFile] = useState(null);
   const [thumbPreview, setThumbPreview] = useState(null);
+  const [thumbCrop, setThumbCrop] = useState({ x: 0, y: 0 });
+  const [thumbZoom, setThumbZoom] = useState(1);
+  const [croppedPixels, setCroppedPixels] = useState(null);
+  const [showCropper, setShowCropper] = useState(false);
 
   const [error, setError] = useState(null);
   const [success, setSuccess] = useState(null);
@@ -38,6 +46,7 @@ export default function UploadForm() {
     if (file) {
       setThumbFile(file);
       setThumbPreview(URL.createObjectURL(file));
+      setShowCropper(true);
     }
   };
 
@@ -59,7 +68,16 @@ export default function UploadForm() {
     try {
       const formData = new FormData();
       formData.append("file", docFile);
-      if (thumbFile) formData.append("thumbnail", thumbFile);
+      if (thumbFile && thumbPreview && croppedPixels) {
+        const croppedBlob = await getCroppedImageBlob(
+          thumbPreview,
+          croppedPixels,
+          thumbFile.type || "image/jpeg",
+        );
+        formData.append("thumbnail", croppedBlob, `thumb-cropped.${thumbFile.type?.split("/")[1] || "jpg"}`);
+      } else if (thumbFile) {
+        formData.append("thumbnail", thumbFile);
+      }
       formData.append("name", title);
       formData.append("description", description);
       formData.append("price", price);
@@ -98,6 +116,10 @@ export default function UploadForm() {
       setDocFileName(null);
       setThumbFile(null);
       setThumbPreview(null);
+      setShowCropper(false);
+      setThumbCrop({ x: 0, y: 0 });
+      setThumbZoom(1);
+      setCroppedPixels(null);
     } catch (err) {
       console.error("Upload Error:", err);
       setError(err?.message || "Something went wrong. Please try again.");
@@ -141,16 +163,63 @@ export default function UploadForm() {
 
       <div className="mb-5">
         <label className="block text-sm font-medium mb-2">Thumbnail Image</label>
-        <div className="flex items-center gap-4">
+        <div className="flex flex-col gap-4">
           <input type="file" accept="image/*" onChange={handleThumbChange} className="text-sm" />
-          {thumbPreview && (
-            <Image
-              src={thumbPreview}
-              alt="Thumbnail Preview"
-              width={64}
-              height={64}
-              className="rounded object-cover border"
-            />
+          {thumbPreview && showCropper && (
+            <div className="rounded-lg border border-gray-200 bg-gray-50 p-3">
+              <p className="text-xs text-gray-600 mb-2">
+                Crop thumbnail (locked 4:3 ratio for marketplace cards)
+              </p>
+              <div className="relative h-56 w-full overflow-hidden rounded-md bg-gray-900">
+                <Cropper
+                  image={thumbPreview}
+                  crop={thumbCrop}
+                  zoom={thumbZoom}
+                  aspect={4 / 3}
+                  onCropChange={setThumbCrop}
+                  onZoomChange={setThumbZoom}
+                  onCropComplete={(_, croppedAreaPixels) =>
+                    setCroppedPixels(croppedAreaPixels)
+                  }
+                />
+              </div>
+              <div className="mt-3 flex items-center gap-3">
+                <label className="text-xs text-gray-600">Zoom</label>
+                <input
+                  type="range"
+                  min={1}
+                  max={3}
+                  step={0.1}
+                  value={thumbZoom}
+                  onChange={(event) => setThumbZoom(Number(event.target.value))}
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowCropper(false)}
+                  className="ml-auto rounded-md border border-gray-300 px-3 py-1 text-xs hover:bg-white"
+                >
+                  Use Crop
+                </button>
+              </div>
+            </div>
+          )}
+          {thumbPreview && !showCropper && (
+            <div className="flex items-center gap-4">
+              <Image
+                src={thumbPreview}
+                alt="Final Thumbnail Preview"
+                width={128}
+                height={96}
+                className="rounded object-cover border"
+              />
+              <button
+                type="button"
+                onClick={() => setShowCropper(true)}
+                className="rounded-md border border-gray-300 px-3 py-2 text-xs hover:bg-gray-100"
+              >
+                Re-crop thumbnail
+              </button>
+            </div>
           )}
         </div>
       </div>

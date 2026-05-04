@@ -19,6 +19,28 @@ pub enum MaterialStatus {
     Archived = 2,
 }
 
+/// Classification of a Stellar asset supported by the registry.
+///
+/// - `Native`      – XLM (the Stellar native asset, wrapped via its SAC).
+/// - `Token`       – Any SAC-wrapped token such as USDC or EURC.
+/// - `CreatorToken`– A creator-specific SAC token (e.g. a course-access token
+///                   minted by the content creator themselves).
+#[contracttype]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AssetKind {
+    Native = 0,
+    Token = 1,
+    CreatorToken = 2,
+}
+
+/// Metadata stored in the registry allowlist for each approved asset.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AllowedAssetInfo {
+    pub kind: AssetKind,
+    pub enabled: bool,
+}
+
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AssetQuote {
@@ -51,8 +73,10 @@ pub struct MaterialRecord {
 #[contracttype]
 #[derive(Clone)]
 enum DataKey {
+    UpgradeAdmin,
     CreatorNonce(Address),
     Material(BytesN<32>),
+    AllowedAsset(Address),
 }
 
 #[contracterror]
@@ -72,6 +96,9 @@ pub enum RegistryError {
     InvalidPayoutShareSum = 11,
     MaterialAlreadyExists = 12,
     MaterialNotFound = 13,
+    NotAuthorized = 14,
+    /// A quote asset is not in the registry's approved-asset allowlist.
+    UnapprovedAsset = 15,
 }
 
 #[contractevent(topics = ["material", "registered"], data_format = "vec")]
@@ -111,6 +138,16 @@ pub struct MaterialStatusUpdatedEvent {
     pub status: MaterialStatus,
 }
 
+/// Emitted when the upgrade-admin updates the approved-asset allowlist.
+#[contractevent(topics = ["asset", "policy_updated"], data_format = "vec")]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AssetPolicyUpdatedEvent {
+    #[topic]
+    pub asset: Address,
+    pub kind: AssetKind,
+    pub enabled: bool,
+}
+
 #[contract]
 pub struct MaterialRegistry;
 
@@ -129,6 +166,11 @@ impl MaterialRegistry {
         validate_metadata_uri(&metadata_uri)?;
         validate_quotes(&quotes)?;
         validate_payout_shares(&payout_shares)?;
+        // Asset allowlist is enforced once the upgrade-admin has been established
+        // (i.e. after the very first material registration). This allows the
+        // initial deployer to bootstrap assets without a chicken-and-egg problem.
+        validate_quote_assets(&env, &quotes)?;
+        initialize_upgrade_admin_if_missing(&env, &creator);
 
         let next_nonce = get_creator_nonce(&env, &creator);
         let material_id = derive_material_id(&env, &creator, next_nonce);
@@ -175,6 +217,7 @@ impl MaterialRegistry {
     ) -> Result<(), RegistryError> {
         validate_quotes(&quotes)?;
         validate_payout_shares(&payout_shares)?;
+        validate_quote_assets(&env, &quotes)?;
 
         let mut record = get_material_record(&env, &material_id)?;
         record.creator.require_auth();
@@ -242,6 +285,78 @@ impl MaterialRegistry {
         }
 
         Ok(None)
+    }
+
+    // ============== Asset Allowlist (SAC / Multi-Asset Support) ==============
+
+    /// Add or update an asset in the registry's approved-asset allowlist.
+    ///
+    /// Only the upgrade-admin may call this. Assets must be approved before
+    /// creators can include them in material quotes. Supports XLM (Native),
+    /// USDC/other SAC-wrapped tokens (Token), and creator-specific tokens
+    /// (CreatorToken).
+    pub fn set_asset_allowed(
+        env: Env,
+        admin: Address,
+        asset: Address,
+        kind: AssetKind,
+        enabled: bool,
+    ) -> Result<(), RegistryError> {
+        admin.require_auth();
+        require_upgrade_admin(&env, &admin)?;
+
+        let info = AllowedAssetInfo { kind, enabled };
+        env.storage()
+            .persistent()
+            .set(&DataKey::AllowedAsset(asset.clone()), &info);
+
+        AssetPolicyUpdatedEvent { asset, kind, enabled }.publish(&env);
+
+        Ok(())
+    }
+
+    /// Returns `true` when `asset` is in the allowlist and currently enabled.
+    pub fn is_asset_allowed(env: Env, asset: Address) -> bool {
+        get_allowed_asset_info(&env, &asset)
+            .map(|i| i.enabled)
+            .unwrap_or(false)
+    }
+
+    /// Returns the full `AllowedAssetInfo` record for `asset`, if present.
+    pub fn get_asset_info(env: Env, asset: Address) -> Option<AllowedAssetInfo> {
+        get_allowed_asset_info(&env, &asset)
+    }
+
+    // ============== Upgrade / Admin ==============
+
+    /// Transfer upgrade admin role to another address.
+    pub fn set_upgrade_admin(
+        env: Env,
+        current_admin: Address,
+        next_admin: Address,
+    ) -> Result<(), RegistryError> {
+        current_admin.require_auth();
+        require_upgrade_admin(&env, &current_admin)?;
+        env.storage()
+            .persistent()
+            .set(&DataKey::UpgradeAdmin, &next_admin);
+        Ok(())
+    }
+
+    pub fn get_upgrade_admin(env: Env) -> Option<Address> {
+        env.storage().persistent().get(&DataKey::UpgradeAdmin)
+    }
+
+    /// Apply a Soroban WASM upgrade, controlled by an upgrade admin.
+    pub fn upgrade(
+        env: Env,
+        admin: Address,
+        new_wasm_hash: BytesN<32>,
+    ) -> Result<(), RegistryError> {
+        admin.require_auth();
+        require_upgrade_admin(&env, &admin)?;
+        env.deployer().update_current_contract_wasm(new_wasm_hash);
+        Ok(())
     }
 }
 
@@ -359,6 +474,60 @@ fn put_material(env: &Env, record: &MaterialRecord) {
     env.storage()
         .persistent()
         .set(&DataKey::Material(record.material_id.clone()), record);
+}
+
+fn initialize_upgrade_admin_if_missing(env: &Env, admin: &Address) {
+    if !env.storage().persistent().has(&DataKey::UpgradeAdmin) {
+        env.storage()
+            .persistent()
+            .set(&DataKey::UpgradeAdmin, admin);
+    }
+}
+
+fn require_upgrade_admin(env: &Env, candidate: &Address) -> Result<(), RegistryError> {
+    let admin: Address = env
+        .storage()
+        .persistent()
+        .get(&DataKey::UpgradeAdmin)
+        .ok_or(RegistryError::NotAuthorized)?;
+    if admin != *candidate {
+        return Err(RegistryError::NotAuthorized);
+    }
+    Ok(())
+}
+
+// ============== Asset Allowlist Internals ==============
+
+fn get_allowed_asset_info(env: &Env, asset: &Address) -> Option<AllowedAssetInfo> {
+    env.storage()
+        .persistent()
+        .get(&DataKey::AllowedAsset(asset.clone()))
+}
+
+/// Validate that every asset referenced in `quotes` is present in the
+/// allowlist and currently enabled.
+///
+/// Validation is skipped when the upgrade-admin has not yet been set (i.e.
+/// before the very first `register_material` call) to avoid a bootstrap
+/// deadlock where no admin exists to pre-approve assets.
+fn validate_quote_assets(env: &Env, quotes: &Vec<AssetQuote>) -> Result<(), RegistryError> {
+    // No allowlist enforcement until an upgrade-admin is established.
+    if !env.storage().persistent().has(&DataKey::UpgradeAdmin) {
+        return Ok(());
+    }
+
+    let mut index = 0;
+    while index < quotes.len() {
+        let quote = quotes.get_unchecked(index);
+        let approved = get_allowed_asset_info(env, &quote.asset)
+            .map(|i| i.enabled)
+            .unwrap_or(false);
+        if !approved {
+            return Err(RegistryError::UnapprovedAsset);
+        }
+        index += 1;
+    }
+    Ok(())
 }
 
 #[cfg(test)]

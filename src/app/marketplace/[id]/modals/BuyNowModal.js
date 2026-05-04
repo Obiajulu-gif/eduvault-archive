@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { FaTimes, FaCheckCircle } from "react-icons/fa";
+import Web3TransactionFallback from "@/components/web3/Web3TransactionFallback";
 import Image from "next/image";
 import ConnectWalletModal from "./ConnectWalletModal";
 import { useCreatePurchase } from "@/hooks/api/usePurchases";
@@ -14,6 +15,7 @@ export default function BuyNowModal({ isOpen, onClose, price, materialId }) {
     const [showWallet, setShowWallet] = useState(false);
     const [email, setEmail] = useState("");
     const [purchased, setPurchased] = useState(false);
+    const [web3Error, setWeb3Error] = useState(null);
 
     const handlePay = async () => {
         if (!address) {
@@ -22,6 +24,7 @@ export default function BuyNowModal({ isOpen, onClose, price, materialId }) {
         }
 
         try {
+            setWeb3Error(null);
             // In a real flow, you'd trigger a Stellar transaction here.
             // For the prototype, we'll simulate the successful transaction.
             const simulatedHash = "simulated_hash_" + Math.random().toString(36).substring(7);
@@ -40,6 +43,7 @@ export default function BuyNowModal({ isOpen, onClose, price, materialId }) {
             }, 3000);
         } catch (err) {
             console.error("Purchase failed:", err);
+            setWeb3Error(err instanceof Error ? err : new Error("Purchase failed. Please try again."));
         }
     };
 
@@ -115,6 +119,19 @@ export default function BuyNowModal({ isOpen, onClose, price, materialId }) {
                                             {price}
                                         </div>
                                     </div>
+
+
+
+                                    {web3Error && (
+                                        <Web3TransactionFallback
+                                            error={web3Error}
+                                            compact
+                                            onRetry={() => {
+                                                setWeb3Error(null);
+                                                handlePay();
+                                            }}
+                                        />
+                                    )}
 
                                     {/* Pay Button */}
                                     <button

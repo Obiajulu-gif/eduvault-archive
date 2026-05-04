@@ -17,7 +17,8 @@
     "build": "next build --webpack",
     "start": "next start",
     "lint": "eslint",
-    "test": "npm run test:contracts && npm run test:backend",
+    "test": "vitest",
+    "test:all": "npm run test:contracts && npm run test:backend",
     "test:contracts": "hardhat test",
     "test:backend": "node --test tests/backend/*.test.mjs",
     "audit:deps": "npm audit --audit-level=high",
@@ -26,7 +27,7 @@
   },
   "dependencies": {
     "@creit-tech/stellar-wallets-kit": "npm:@jsr/creit-tech__stellar-wallets-kit@^2.1.0",
-    "@react-native-async-storage/async-storage": "^2.2.0",
+    "@react-native-async-storage/async-storage": "^3.0.2",
     "@stellar/stellar-sdk": "^13.3.0",
     "@openzeppelin/contracts": "^5.6.1",
     "@rainbow-me/rainbowkit": "^2.2.10",
@@ -38,9 +39,10 @@
     "jsonwebtoken": "^9.0.3",
     "mongodb": "^6.21.0",
     "next": "^16.2.4",
-    "nodemailer": "^7.0.13",
+    "nodemailer": "^8.0.7",
     "pinata": "^2.5.5",
     "react": "^19.2.5",
+    "react-easy-crop": "^5.5.3",
     "react-dom": "^19.2.5",
     "react-icons": "^5.6.0"
   },
@@ -56,9 +58,21 @@
     "eslint-config-next": "^16.2.4",
     "jest-axe": "^10.0.0",
     "jsdom": "^29.0.2",
-    "ethers": "^6.15.0",
-    "hardhat": "^2.26.3",
     "tailwindcss": "^4.2.3",
-    "vitest": "^4.1.5"
+    "vitest": "^4.1.5",
+    "ethers": "^6.15.0",
+    "hardhat": "^2.26.3"
+  },
+  "overrides": {
+    "undici": "^6.13.0",
+    "uuid": "^14.0.0",
+    "rpc-websockets": "^9.3.8",
+    "jayson": "^4.3.0",
+    "serialize-javascript": "^7.0.5",
+    "tmp": "^0.2.5",
+    "protobufjs": "^8.0.3",
+    "postcss": "^8.5.12",
+    "picomatch": "^4.0.4",
+    "minimatch": "^10.2.5"
   }
 }

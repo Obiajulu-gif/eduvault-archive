@@ -41,7 +41,11 @@ jobs:
 
       - name: Run Soroban tests
         working-directory: soroban
-        run: cargo test
+        run: cargo test --workspace --all-targets
+
+      - name: Check Soroban formatting
+        working-directory: soroban
+        run: cargo fmt --all -- --check
 
       - name: Build Soroban contract WASM
         working-directory: soroban

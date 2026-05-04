@@ -3,15 +3,41 @@
 extern crate std;
 
 use super::*;
+use soroban_sdk::{contract, contractimpl, contracttype};
 use soroban_sdk::testutils::{Address as _, Events as _, Ledger as _};
 use soroban_sdk::{vec, IntoVal, Symbol};
 
-// Helper function to create a mock registry that returns a material
-fn setup_mock_material(env: &Env, creator: &Address, material_id: &BytesN<32>) {
-    // In real tests, we would deploy a mock registry
-    // For unit tests, we'll use a simplified approach where we directly
-    // store material data in a way the purchase manager can access
-    // Note: In production, this would be a cross-contract call
+#[contracttype]
+#[derive(Clone)]
+enum MockRegistryKey {
+    Material(BytesN<32>),
+}
+
+#[contract]
+struct MockRegistry;
+
+#[contractimpl]
+impl MockRegistry {
+    pub fn set_material(env: Env, material_id: BytesN<32>, material: MaterialRecord) {
+        env.storage()
+            .persistent()
+            .set(&MockRegistryKey::Material(material_id), &material);
+    }
+
+    pub fn get_material(env: Env, material_id: BytesN<32>) -> Result<MaterialRecord, PurchaseError> {
+        env.storage()
+            .persistent()
+            .get(&MockRegistryKey::Material(material_id))
+            .ok_or(PurchaseError::MaterialNotFound)
+    }
+}
+
+#[contract]
+struct MockAsset;
+
+#[contractimpl]
+impl MockAsset {
+    pub fn transfer(_env: Env, _from: Address, _to: Address, _amount: i128) {}
 }
 
 fn bytes32(env: &Env, value: u8) -> BytesN<32> {
@@ -143,9 +169,14 @@ fn sets_asset_allowed() {
 
     assert!(!client.is_asset_allowed(&asset));
 
-    client.set_asset_allowed(&admin, &asset, &true);
+    client.set_asset_allowed(&admin, &asset, &AssetKind::Token, &true);
 
     assert!(client.is_asset_allowed(&asset));
+
+    // Verify get_asset_info returns the stored AssetInfo
+    let info = client.get_asset_info(&asset).unwrap();
+    assert_eq!(info.kind, AssetKind::Token);
+    assert!(info.enabled);
 
     // Check event
     let events = env.events().all();
@@ -160,7 +191,7 @@ fn sets_asset_allowed() {
                 asset.clone(),
             )
                 .into_val(&env),
-            vec![&env, true.into_val(&env)].into_val(&env),
+            vec![&env, AssetKind::Token.into_val(&env), true.into_val(&env)].into_val(&env),
         )
     );
 }
@@ -240,6 +271,23 @@ fn fails_set_platform_config_with_contract_as_treasury() {
     assert_eq!(result, Err(Ok(PurchaseError::InvalidTreasury)));
 }
 
+#[test]
+fn rejects_admin_calls_from_non_admin() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let non_admin = Address::generate(&env);
+    let registry = Address::generate(&env);
+    let treasury = Address::generate(&env);
+    let asset = Address::generate(&env);
+
+    let (_, client) = install_and_init_contract(&env, &admin, &registry, &treasury, 500);
+
+    let result = client.try_set_asset_allowed(&non_admin, &asset, &AssetKind::Token, &true);
+    assert_eq!(result, Err(Ok(PurchaseError::NotAuthorized)));
+}
+
 // ============== Purchase Flow Tests ==============
 
 // Note: These tests require mocking the MaterialRegistry
@@ -252,26 +300,38 @@ fn successful_purchase_creates_entitlement() {
 
     // Setup addresses
     let admin = Address::generate(&env);
-    let registry = Address::generate(&env); // Mock registry
+    let registry = env.register(MockRegistry, ());
     let treasury = Address::generate(&env);
     let buyer = Address::generate(&env);
     let creator = Address::generate(&env);
-    let asset = Address::generate(&env);
-    let payout_recipient = Address::generate(&env);
+    let asset = env.register(MockAsset, ());
 
     let material_id = bytes32(&env, 1);
+    let material = MaterialRecord {
+        material_id: material_id.clone(),
+        creator: creator.clone(),
+        status: MaterialStatus::Active,
+        quotes: vec![&env, AssetQuote { asset: asset.clone(), amount: 1_000_000 }],
+        payout_shares: create_test_payout_shares(&env),
+    };
+    let registry_client = MockRegistryClient::new(&env, &registry);
+    registry_client.set_material(&material_id, &material);
 
     // Setup contract
-    let (contract_id, client) = install_and_init_contract(&env, &admin, &registry, &treasury, 500);
+    let (_contract_id, client) = install_and_init_contract(&env, &admin, &registry, &treasury, 500);
 
-    // Enable asset
-    client.set_asset_allowed(&admin, &asset, &true);
+    // Enable asset (USDC-style token)
+    client.set_asset_allowed(&admin, &asset, &AssetKind::Token, &true);
 
-    // For this test, we verify the basic state exists after initialization
-    // Full integration tests would mock the registry properly
-    assert!(client.get_platform_config().is_some());
-    assert!(client.is_asset_allowed(&asset));
-    assert!(!client.has_entitlement(&material_id, &buyer));
+    let purchase_id = client.purchase(&buyer, &material_id, &asset, &1_000_000);
+    assert_eq!(purchase_id, 0);
+    assert!(client.has_entitlement(&material_id, &buyer));
+    let entitlement = client.get_entitlement(&material_id, &buyer).unwrap();
+    assert_eq!(entitlement.purchase_id, purchase_id);
+    assert_eq!(entitlement.amount, 1_000_000);
+
+    let duplicate = client.try_purchase(&buyer, &material_id, &asset, &1_000_000);
+    assert_eq!(duplicate, Err(Ok(PurchaseError::EntitlementAlreadyExists)));
 }
 
 #[test]
@@ -287,7 +347,7 @@ fn rejects_purchase_when_paused() {
     let (contract_id, client) = install_and_init_contract(&env, &admin, &registry, &treasury, 500);
 
     // Enable asset
-    client.set_asset_allowed(&admin, &asset, &true);
+    client.set_asset_allowed(&admin, &asset, &AssetKind::Token, &true);
 
     // Pause the contract
     client.set_platform_config(&admin, &treasury, &500, &true);
@@ -470,11 +530,13 @@ fn asset_can_be_disabled() {
 
     let (_, client) = install_and_init_contract(&env, &admin, &registry, &treasury, 500);
 
-    // Enable then disable
-    client.set_asset_allowed(&admin, &asset, &true);
+    // Enable (as Native/XLM) then disable
+    client.set_asset_allowed(&admin, &asset, &AssetKind::Native, &true);
     assert!(client.is_asset_allowed(&asset));
+    let info = client.get_asset_info(&asset).unwrap();
+    assert_eq!(info.kind, AssetKind::Native);
 
-    client.set_asset_allowed(&admin, &asset, &false);
+    client.set_asset_allowed(&admin, &asset, &AssetKind::Native, &false);
     assert!(!client.is_asset_allowed(&asset));
 }
 
@@ -665,4 +727,39 @@ fn payout_distributed_event_struct_works() {
     assert_eq!(event.purchase_id, 1);
     assert_eq!(event.recipient, recipient);
     assert_eq!(event.amount, 950_000);
+}
+
+#[test]
+fn set_oracle_and_get_asset_info_work() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let registry = Address::generate(&env);
+    let treasury = Address::generate(&env);
+    let asset = Address::generate(&env);
+    let oracle = Address::generate(&env);
+
+    let (_, client) = install_and_init_contract(&env, &admin, &registry, &treasury, 500);
+
+    // Oracle should be None by default
+    let config = client.get_platform_config().unwrap();
+    assert!(config.oracle.is_none());
+
+    // Set oracle
+    client.set_oracle(&admin, &Some(oracle.clone()));
+    let config = client.get_platform_config().unwrap();
+    assert_eq!(config.oracle, Some(oracle.clone()));
+
+    // Clear oracle
+    client.set_oracle(&admin, &None);
+    let config = client.get_platform_config().unwrap();
+    assert!(config.oracle.is_none());
+
+    // Asset info
+    assert!(client.get_asset_info(&asset).is_none());
+    client.set_asset_allowed(&admin, &asset, &AssetKind::Token, &true);
+    let info = client.get_asset_info(&asset).unwrap();
+    assert_eq!(info.kind, AssetKind::Token);
+    assert!(info.enabled);
 }

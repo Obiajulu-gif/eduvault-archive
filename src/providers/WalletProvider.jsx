@@ -21,10 +21,14 @@ export const WalletStatus = Object.freeze({
   Connected: 'connected',
   Locked: 'locked',
   Unsupported: 'unsupported',
+  Expired: 'expired',
   Error: 'error',
 });
 
 export const WalletContext = createContext(null);
+
+const SESSION_STORAGE_KEY = 'eduvault.wallet.session.v1';
+const SESSION_TTL_MS = 1000 * 60 * 60 * 24;
 
 export function WalletProvider({ children }) {
   const [state, setState] = useState({ status: WalletStatus.Initializing });
@@ -39,6 +43,43 @@ export function WalletProvider({ children }) {
   }, [state]);
 
   const lastWalletIdRef = useRef(null);
+
+  const persistSession = useCallback((session) => {
+    if (typeof window === 'undefined') return;
+    window.localStorage.setItem(
+      SESSION_STORAGE_KEY,
+      JSON.stringify({
+        address: session.address,
+        walletId: session.walletId ?? null,
+        passphrase: session.network.passphrase,
+        persistedAt: Date.now(),
+      }),
+    );
+  }, []);
+
+  const clearPersistedSession = useCallback(() => {
+    if (typeof window === 'undefined') return;
+    window.localStorage.removeItem(SESSION_STORAGE_KEY);
+  }, []);
+
+  const loadPersistedSession = useCallback(() => {
+    if (typeof window === 'undefined') return null;
+    const raw = window.localStorage.getItem(SESSION_STORAGE_KEY);
+    if (!raw) return null;
+    try {
+      const parsed = JSON.parse(raw);
+      if (
+        !parsed ||
+        typeof parsed.address !== 'string' ||
+        typeof parsed.persistedAt !== 'number'
+      ) {
+        return null;
+      }
+      return parsed;
+    } catch {
+      return null;
+    }
+  }, []);
 
   // Monotonic token for balance fetches — lets us ignore stale responses
   // when multiple refreshes overlap (e.g. address change while a manual
@@ -110,17 +151,26 @@ export function WalletProvider({ children }) {
 
         if (cancelled) return;
 
+        const persisted = loadPersistedSession();
+        if (persisted && Date.now() - persisted.persistedAt > SESSION_TTL_MS) {
+          clearPersistedSession();
+          setState({ status: WalletStatus.Expired });
+          return;
+        }
+
         if (address) {
+          const session = {
+            address,
+            network: { passphrase: NETWORK_PASSPHRASE },
+            walletId: persisted?.walletId ?? lastWalletIdRef.current,
+          };
           setState({
             status: WalletStatus.Connected,
-            session: {
-              address,
-              network: { passphrase: NETWORK_PASSPHRASE },
-              walletId: lastWalletIdRef.current,
-            },
+            session,
           });
+          persistSession(session);
         } else {
-          setState({ status: WalletStatus.Idle });
+          setState(persisted ? { status: WalletStatus.Expired } : { status: WalletStatus.Idle });
         }
       } catch (err) {
         if (cancelled) return;
@@ -137,7 +187,7 @@ export function WalletProvider({ children }) {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [clearPersistedSession, loadPersistedSession, persistSession]);
 
   useEffect(() => {
     const unsubSelected = StellarWalletsKit.on(
@@ -174,6 +224,11 @@ export function WalletProvider({ children }) {
             walletId: lastWalletIdRef.current,
           },
         });
+        persistSession({
+          address,
+          network: { passphrase: networkPassphrase },
+          walletId: lastWalletIdRef.current,
+        });
       },
     );
 
@@ -181,6 +236,7 @@ export function WalletProvider({ children }) {
       KitEventType.DISCONNECT,
       () => {
         lastWalletIdRef.current = null;
+        clearPersistedSession();
         setState({ status: WalletStatus.Idle });
       },
     );
@@ -190,7 +246,7 @@ export function WalletProvider({ children }) {
       unsubState();
       unsubDisconnect();
     };
-  }, []);
+  }, [clearPersistedSession, persistSession]);
 
   // -------------------------------------------------------------------------
   // Actions
@@ -204,14 +260,16 @@ export function WalletProvider({ children }) {
       const { address } = await StellarWalletsKit.authModal();
 
       if (address) {
+        const session = {
+          address,
+          network: { passphrase: NETWORK_PASSPHRASE },
+          walletId: lastWalletIdRef.current,
+        };
         setState({
           status: WalletStatus.Connected,
-          session: {
-            address,
-            network: { passphrase: NETWORK_PASSPHRASE },
-            walletId: lastWalletIdRef.current,
-          },
+          session,
         });
+        persistSession(session);
       } else {
         setState({ status: WalletStatus.Locked });
       }
@@ -228,7 +286,7 @@ export function WalletProvider({ children }) {
         });
       }
     }
-  }, []);
+  }, [persistSession]);
 
   const disconnect = useCallback(async () => {
     try {
@@ -238,8 +296,9 @@ export function WalletProvider({ children }) {
       // disconnect. Fine — DISCONNECT event resets state, or we fall through.
     }
     lastWalletIdRef.current = null;
+    clearPersistedSession();
     setState({ status: WalletStatus.Idle });
-  }, []);
+  }, [clearPersistedSession]);
 
   const assertConnected = useCallback(() => {
     const current = stateRef.current;

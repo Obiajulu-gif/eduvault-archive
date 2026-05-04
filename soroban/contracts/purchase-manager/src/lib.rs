@@ -17,6 +17,29 @@ pub enum MaterialStatus {
     Archived = 2,
 }
 
+/// Classification of a Stellar asset accepted by the purchase manager.
+///
+/// Must be kept in sync with `AssetKind` in the material-registry contract.
+///
+/// - `Native`      – XLM (Stellar native asset via its SAC).
+/// - `Token`       – SAC-wrapped token (e.g. USDC, EURC).
+/// - `CreatorToken`– Creator-specific SAC token.
+#[contracttype]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AssetKind {
+    Native = 0,
+    Token = 1,
+    CreatorToken = 2,
+}
+
+/// Allowlist record stored for each approved payment asset.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AssetInfo {
+    pub kind: AssetKind,
+    pub enabled: bool,
+}
+
 /// Asset quote structure from registry
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -52,6 +75,10 @@ pub struct PlatformConfig {
     pub treasury: Address,
     pub platform_fee_bps: u32,
     pub paused: bool,
+    /// Optional price-oracle address for future cross-asset conversion support.
+    /// When `None`, no oracle is configured and all prices must be quoted in
+    /// the exact accepted asset (no conversion).
+    pub oracle: Option<Address>,
 }
 
 /// Entitlement record for a successful purchase
@@ -71,6 +98,7 @@ pub struct EntitlementRecord {
 #[contracttype]
 #[derive(Clone)]
 enum DataKey {
+    Admin,
     PlatformConfig,
     AllowedAsset(Address),
     PurchaseNonce,
@@ -105,6 +133,7 @@ pub enum PurchaseError {
     // Admin errors
     NotAuthorized = 40,
     InvalidTreasury = 41,
+    UpgradeFailed = 42,
 }
 
 /// Event: purchase.completed
@@ -146,6 +175,7 @@ pub struct PayoutDistributedEvent {
 pub struct AssetPolicyUpdatedEvent {
     #[topic]
     pub asset: Address,
+    pub kind: AssetKind,
     pub enabled: bool,
 }
 
@@ -162,14 +192,86 @@ pub struct PlatformConfigUpdatedEvent {
 #[contract]
 pub struct PurchaseManager;
 
+// ============== SAC Token Interface (SEP-41) ==============
+
+/// Wrapper around a Stellar Asset Contract (SAC) address that exposes the
+/// SEP-41 token interface methods needed by the purchase flow.
+///
+/// Both XLM (via its native SAC) and any other SAC-wrapped token (USDC, EURC,
+/// creator tokens, …) implement this interface, so the purchase logic is
+/// asset-agnostic.
+pub struct SacToken<'a> {
+    env: &'a Env,
+    address: &'a Address,
+}
+
+impl<'a> SacToken<'a> {
+    pub fn new(env: &'a Env, address: &'a Address) -> Self {
+        SacToken { env, address }
+    }
+
+    /// Transfer `amount` tokens from `from` to `to`.
+    /// Equivalent to calling `transfer(from, to, amount)` on the SAC.
+    pub fn transfer(&self, from: &Address, to: &Address, amount: i128) {
+        let func = Symbol::new(self.env, "transfer");
+        let args = Vec::from_array(
+            self.env,
+            [
+                from.into_val(self.env),
+                to.into_val(self.env),
+                amount.into_val(self.env),
+            ],
+        );
+        self.env.invoke_contract::<()>(self.address, &func, args);
+    }
+
+    /// Query the token balance of `id`.
+    /// Equivalent to calling `balance(id)` on the SAC.
+    pub fn balance(&self, id: &Address) -> i128 {
+        let func = Symbol::new(self.env, "balance");
+        let args = Vec::from_array(self.env, [id.into_val(self.env)]);
+        self.env.invoke_contract::<i128>(self.address, &func, args)
+    }
+}
+
+// ============== Price Oracle Stub ==============
+
+/// Stub for a future price-oracle integration (e.g. Reflector Oracle / SEP-40).
+///
+/// Returns `None` for every query until a concrete oracle is integrated.
+/// The `oracle` field in `PlatformConfig` holds the oracle contract address
+/// once deployed.
+pub struct PriceOracle<'a> {
+    env: &'a Env,
+    address: &'a Address,
+}
+
+impl<'a> PriceOracle<'a> {
+    pub fn new(env: &'a Env, address: &'a Address) -> Self {
+        PriceOracle { env, address }
+    }
+
+    /// Returns the last price of `base` denominated in `quote` as
+    /// `Some((price, decimals))`, or `None` when the oracle is unavailable.
+    ///
+    /// TODO: implement Reflector Oracle or equivalent SEP-40 feed when an
+    ///       on-chain price source is available on the target network.
+    pub fn last_price(&self, _base: &Address, _quote: &Address) -> Option<(i128, u32)> {
+        let _ = (self.env, self.address);
+        None
+    }
+}
+
+// ============== Registry Cross-Contract Interface ==============
+
 /// Interface for calling MaterialRegistry contract
 pub trait MaterialRegistryInterface {
-    fn get_material(env: &Env, material_id: &BytesN<32>) -> Result<MaterialRecord, PurchaseError>;
+    fn get_material(&self, env: &Env, material_id: &BytesN<32>) -> Result<MaterialRecord, PurchaseError>;
 }
 
 /// Interface implementation using cross-contract call
 impl MaterialRegistryInterface for Address {
-    fn get_material(env: &Env, material_id: &BytesN<32>) -> Result<MaterialRecord, PurchaseError> {
+    fn get_material(&self, env: &Env, material_id: &BytesN<32>) -> Result<MaterialRecord, PurchaseError> {
         let func = Symbol::new(env, "get_material");
         let result: Result<MaterialRecord, PurchaseError> = env
             .invoke_contract(self, &func, Vec::from_array(env, [material_id.into_val(env)]));
@@ -210,8 +312,12 @@ impl PurchaseManager {
             treasury,
             platform_fee_bps,
             paused: false,
+            oracle: None,
         };
 
+        env.storage()
+            .persistent()
+            .set(&DataKey::Admin, &admin);
         env.storage()
             .persistent()
             .set(&DataKey::PlatformConfig, &config);
@@ -380,22 +486,29 @@ impl PurchaseManager {
 
     // ============== Admin Functions ==============
 
-    /// Set whether an asset is allowed for purchases (admin only)
+    /// Set whether an asset is allowed for purchases (admin only).
+    ///
+    /// `kind` classifies the asset: `Native` for XLM, `Token` for SAC-wrapped
+    /// fungible tokens such as USDC, and `CreatorToken` for creator-specific
+    /// tokens. The classification is stored for informational purposes and
+    /// future filtering.
     pub fn set_asset_allowed(
         env: Env,
         admin: Address,
         asset: Address,
+        kind: AssetKind,
         enabled: bool,
     ) -> Result<(), PurchaseError> {
         admin.require_auth();
         verify_admin(&env, &admin)?;
 
+        let info = AssetInfo { kind, enabled };
         env.storage()
             .persistent()
-            .set(&DataKey::AllowedAsset(asset.clone()), &enabled);
+            .set(&DataKey::AllowedAsset(asset.clone()), &info);
 
         // Emit policy update event
-        AssetPolicyUpdatedEvent { asset, enabled }.publish(&env);
+        AssetPolicyUpdatedEvent { asset, kind, enabled }.publish(&env);
 
         Ok(())
     }
@@ -428,6 +541,8 @@ impl PurchaseManager {
             treasury,
             platform_fee_bps,
             paused,
+            // Preserve the existing oracle; use set_oracle() to change it.
+            oracle: current_config.oracle,
         };
 
         env.storage()
@@ -441,6 +556,32 @@ impl PurchaseManager {
             paused,
         }
         .publish(&env);
+
+        Ok(())
+    }
+
+    /// Returns the full `AssetInfo` record for `asset`, if present.
+    pub fn get_asset_info(env: Env, asset: Address) -> Option<AssetInfo> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::AllowedAsset(asset))
+    }
+
+    /// Configure the price-oracle address used for future cross-asset
+    /// conversion (admin only). Pass `None` to clear the oracle.
+    pub fn set_oracle(
+        env: Env,
+        admin: Address,
+        oracle: Option<Address>,
+    ) -> Result<(), PurchaseError> {
+        admin.require_auth();
+        verify_admin(&env, &admin)?;
+
+        let mut config = get_platform_config(&env)?;
+        config.oracle = oracle;
+        env.storage()
+            .persistent()
+            .set(&DataKey::PlatformConfig, &config);
 
         Ok(())
     }
@@ -463,6 +604,18 @@ impl PurchaseManager {
 
         Ok(())
     }
+
+    /// Upgrade contract WASM hash (admin only).
+    pub fn upgrade(
+        env: Env,
+        admin: Address,
+        new_wasm_hash: BytesN<32>,
+    ) -> Result<(), PurchaseError> {
+        admin.require_auth();
+        verify_admin(&env, &admin)?;
+        env.deployer().update_current_contract_wasm(new_wasm_hash);
+        Ok(())
+    }
 }
 
 // ============== Internal Functions ==============
@@ -475,16 +628,23 @@ fn get_platform_config(env: &Env) -> Result<PlatformConfig, PurchaseError> {
 }
 
 fn verify_admin(env: &Env, admin: &Address) -> Result<(), PurchaseError> {
-    // In a production contract, you might want stricter admin verification
-    // For now, we assume any authenticated caller can admin if contract is initialized
     let _ = get_platform_config(env)?;
+    let stored_admin: Address = env
+        .storage()
+        .persistent()
+        .get(&DataKey::Admin)
+        .ok_or(PurchaseError::NotAuthorized)?;
+    if &stored_admin != admin {
+        return Err(PurchaseError::NotAuthorized);
+    }
     Ok(())
 }
 
 fn is_asset_allowed(env: &Env, asset: &Address) -> bool {
     env.storage()
         .persistent()
-        .get(&DataKey::AllowedAsset(asset.clone()))
+        .get::<DataKey, AssetInfo>(&DataKey::AllowedAsset(asset.clone()))
+        .map(|info| info.enabled)
         .unwrap_or(false)
 }
 
@@ -519,18 +679,9 @@ fn transfer_asset(
     asset: &Address,
     amount: i128,
 ) -> Result<(), PurchaseError> {
-    // Use Stellar Asset Contract transfer
-    let func = Symbol::new(env, "transfer");
-    let args = Vec::from_array(
-        env,
-        [
-            from.into_val(env),
-            to.into_val(env),
-            amount.into_val(env),
-        ],
-    );
-    
-    env.invoke_contract::<()>(asset, &func, args);
+    // Delegate to the Stellar Asset Contract (SAC) via the SEP-41 interface.
+    // Works for XLM (native SAC), USDC, and any other SAC-wrapped token.
+    SacToken::new(env, asset).transfer(from, to, amount);
     Ok(())
 }
 
