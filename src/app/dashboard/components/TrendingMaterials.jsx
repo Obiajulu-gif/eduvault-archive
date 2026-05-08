@@ -1,8 +1,8 @@
 "use client";
+import Image from "next/image";
 import { FaHeart } from "react-icons/fa";
 import { useTrendingMaterials } from "@/hooks/api/useMaterials";
 import { QueryStateProvider } from "@/components/common/QueryStateProvider";
-import { MaterialCardSkeleton } from "@/components/common/DataSkeleton";
 import Link from "next/link";
 
 export default function TrendingMaterials() {
@@ -42,7 +42,12 @@ export default function TrendingMaterials() {
 							>
 								<div className="w-16 h-20 bg-gradient-to-br from-indigo-100 to-blue-50 rounded-md flex flex-col items-center justify-center border border-indigo-100/50 flex-shrink-0 overflow-hidden relative">
 									{item.image || item.thumbnail ? (
-										<img src={item.image || item.thumbnail} alt={item.title} className="w-full h-full object-cover" />
+										<Image
+											src={item.image || item.thumbnail}
+											alt={item.title}
+											fill
+											className="object-cover"
+										/>
 									) : (
 										<span className="text-[10px] text-indigo-400 font-bold uppercase tracking-wider">Note</span>
 									)}

@@ -2,7 +2,7 @@
 
 import { motion } from "framer-motion";
 import Image from "next/image";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { FaHeart, FaChevronRight } from "react-icons/fa";
 import { FiFilter, FiSearch } from "react-icons/fi";
 
@@ -11,22 +11,22 @@ const imageOptions = [
 	"/images/Generated Image November 07, 2025 - 6_53AM.png",
 ];
 
+// Likes are randomised once at module load — not during render — to satisfy
+// the react-hooks/purity rule (no impure calls inside components or hooks).
+const STATIC_MATERIALS = Array.from({ length: 9 }, (_, index) => ({
+	title: index % 2 === 0 ? "CHM 112 - Lab Report Template" : "GNS 201 - Advanced Grammar Notes",
+	author: index % 3 === 0 ? "Chijioke M." : "Sarah O.",
+	likes: Math.floor(Math.random() * 500) + 100,
+	price: "0.25 XLM",
+	category: index % 3 === 0 ? "Science" : "Arts",
+	image: imageOptions[index % imageOptions.length],
+}));
+
 export default function DiscoverMaterials() {
 	const [loading, setLoading] = useState(true);
 	const [activeCategory, setActiveCategory] = useState("All");
 
-	const materials = useMemo(
-		() =>
-			Array.from({ length: 9 }, (_, index) => ({
-				title: index % 2 === 0 ? "CHM 112 - Lab Report Template" : "GNS 201 - Advanced Grammar Notes",
-				author: index % 3 === 0 ? "Chijioke M." : "Sarah O.",
-				likes: Math.floor(Math.random() * 500) + 100,
-				price: "0.25 XLM",
-				category: index % 3 === 0 ? "Science" : "Arts",
-				image: imageOptions[index % imageOptions.length],
-			})),
-		[]
-	);
+	const materials = STATIC_MATERIALS;
 
 	const categories = ["All", "Science", "Engineering", "Arts", "Medical"];
 

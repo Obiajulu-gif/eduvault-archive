@@ -16,7 +16,6 @@ function getSentry() {
   if (_sentry) return _sentry;
   try {
     // Dynamic require so the module tree-shakes cleanly when SENTRY_DSN is absent.
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
     _sentry = require("@sentry/nextjs");
   } catch {
     // @sentry/nextjs not installed — operate in no-op mode.

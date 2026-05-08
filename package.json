@@ -22,6 +22,7 @@
     "test:contracts": "hardhat test",
     "test:backend": "node --test tests/backend/*.test.mjs",
     "audit:deps": "npm audit --audit-level=high",
+    "audit:deps:critical": "npm audit --audit-level=critical",
     "scan:secrets": "node scripts/scan-secrets.mjs",
     "indexer:stellar": "node scripts/run-stellar-indexer.mjs"
   },
@@ -73,6 +74,10 @@
     "protobufjs": "^8.0.3",
     "postcss": "^8.5.12",
     "picomatch": "^4.0.4",
-    "minimatch": "^10.2.5"
+    "minimatch": "^10.2.5",
+    "flatted": "^3.4.2",
+    "axios": "^1.8.2",
+    "bn.js": "^5.2.3",
+    "cookie": "^0.7.0"
   }
 }
