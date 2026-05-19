@@ -3,20 +3,36 @@ name: Contracts CI
 on:
   pull_request:
     paths:
-      - "archive/legacy-evm/**"
+      - "contracts/**"
       - "soroban/**"
       - "package.json"
-      - "package-lock.json"
+      - "pnpm-lock.yaml"
       - ".github/workflows/contracts.yml"
   push:
     branches:
       - main
       - develop
     paths:
-      - "archive/legacy-evm/**"
+      - "contracts/**"
+name: Contracts CI
+
+on:
+  pull_request:
+    paths:
+      - "contracts/**"
       - "soroban/**"
       - "package.json"
-      - "package-lock.json"
+      - "pnpm-lock.yaml"
+      - ".github/workflows/contracts.yml"
+  push:
+    branches:
+      - main
+      - develop
+    paths:
+      - "contracts/**"
+      - "soroban/**"
+      - "package.json"
+      - "pnpm-lock.yaml"
       - ".github/workflows/contracts.yml"
 
 jobs:
@@ -52,34 +68,37 @@ jobs:
         run: cargo build --target wasm32v1-none --release
 
   solidity:
-    name: Archived Solidity Prototype Checks
-    if: ${{ hashFiles('archive/legacy-evm/contracts/**/*.sol') != '' }}
+    name: Solidity Prototype Checks
+    if: ${{ hashFiles('contracts/**/*.sol') != '' }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 20
-          cache: npm
-          cache-dependency-path: package-lock.json
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
 
       - name: Install dependencies
-        run: npm install
+        run: pnpm install --frozen-lockfile
 
       - name: Check contract formatting
-        run: npx --yes prettier@3.6.2 --check "archive/legacy-evm/contracts/**/*.sol"
+        run: npx --yes prettier@3.6.2 --check "contracts/**/*.sol"
 
       - name: Run Solidity lint
-        run: npx --yes solhint@5.0.3 "archive/legacy-evm/contracts/**/*.sol"
+        run: npx --yes solhint@5.0.3 "contracts/**/*.sol"
 
       - name: Compile Solidity contracts
         shell: bash
         run: |
           shopt -s globstar nullglob
-          files=(archive/legacy-evm/contracts/**/*.sol)
+          files=(contracts/**/*.sol)
           if [ "${#files[@]}" -eq 0 ]; then
             echo "No Solidity contracts found."
             exit 0
@@ -92,18 +111,18 @@ jobs:
             "${files[@]}"
 
       - name: Setup Foundry
-        if: hashFiles('foundry.toml') != ''
+        if: ${{ hashFiles('foundry.toml') != '' }}
         uses: foundry-rs/foundry-toolchain@v1
 
       - name: Run Foundry tests
-        if: hashFiles('foundry.toml') != ''
+        if: ${{ hashFiles('foundry.toml') != '' }}
         run: forge test -vvv
 
       - name: Run Hardhat tests
-        if: hashFiles('hardhat.config.js', 'hardhat.config.cjs', 'hardhat.config.ts') != ''
-        run: npx hardhat test
+        if: ${{ hashFiles('hardhat.config.js', 'hardhat.config.cjs', 'hardhat.config.ts') != '' }}
+        run: pnpm run test:contracts
 
       - name: Note missing Solidity test runner
-        if: hashFiles('foundry.toml', 'hardhat.config.js', 'hardhat.config.cjs', 'hardhat.config.ts') == ''
+        if: ${{ hashFiles('foundry.toml', 'hardhat.config.js', 'hardhat.config.cjs', 'hardhat.config.ts') == '' }}
         shell: bash
         run: echo "No Solidity test runner is configured in this repository yet. Compilation, formatting, and lint checks still ran."
