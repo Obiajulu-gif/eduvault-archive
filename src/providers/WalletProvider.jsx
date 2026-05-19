@@ -134,6 +134,29 @@ export function WalletProvider({ children }) {
     loadBalancesFor(connectedAddress);
   }, [connectedAddress, loadBalancesFor]);
 
+  const [previousAddress, setPreviousAddress] = useState(null);
+
+  // Watch for account changes (switch or disconnect) and ensure server session is cleared
+  useEffect(() => {
+    // Initialize previousAddress on first run
+    if (previousAddress === null && connectedAddress !== undefined) {
+      setPreviousAddress(connectedAddress);
+      return;
+    }
+
+    // If address changed (including to null), clear server-side auth so previous session cannot persist
+    if (connectedAddress !== undefined && connectedAddress !== previousAddress) {
+      (async () => {
+        try {
+          await fetch('/api/logout', { method: 'POST', credentials: 'include' });
+        } catch (e) {
+          console.warn('Logout on account change failed:', e?.message || e);
+        }
+      })();
+      setPreviousAddress(connectedAddress);
+    }
+  }, [connectedAddress, previousAddress]);
+
   useEffect(() => {
     let cancelled = false;
 
@@ -238,6 +261,12 @@ export function WalletProvider({ children }) {
         lastWalletIdRef.current = null;
         clearPersistedSession();
         setState({ status: WalletStatus.Idle });
+        // Call backend logout to clear auth cookie
+        try {
+          fetch('/api/logout', { method: 'POST', credentials: 'include' }).catch(e => {
+            console.warn('Logout request failed:', e?.message || e);
+          });
+        } catch (e) {}
       },
     );
 
@@ -294,6 +323,11 @@ export function WalletProvider({ children }) {
     } catch {
       // Some modules (e.g. stateless wallets like Albedo) may not implement
       // disconnect. Fine — DISCONNECT event resets state, or we fall through.
+    }
+    try {
+      await fetch('/api/logout', { method: 'POST', credentials: 'include' });
+    } catch (e) {
+      console.warn('Logout request failed:', e?.message || e);
     }
     lastWalletIdRef.current = null;
     clearPersistedSession();

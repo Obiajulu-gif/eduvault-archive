@@ -22,10 +22,20 @@ EduVault is an in-development educational content marketplace with a current web
 ## Local Setup
 
 ```bash
-npm install
+# Install dependencies (canonical): pnpm with the repo lockfile
+corepack enable && corepack prepare pnpm@latest --activate
+pnpm install --frozen-lockfile
 cp .env.example .env.local
 docker compose up -d mongodb
-npm run dev
+pnpm run dev
+```
+
+Windows notes: If PowerShell blocks scripts, enable Corepack and run the above install from an elevated PowerShell or use the system-wide installer:
+
+```powershell
+corepack enable
+corepack prepare pnpm@latest --activate
+pnpm install --frozen-lockfile
 ```
 
 ## Branching

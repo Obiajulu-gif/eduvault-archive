@@ -174,12 +174,12 @@ Content files stay off-chain. The chain is used for settlement, rights registrat
 
 ## Installation
 
-Examples below use `npm`, but `pnpm` or `bun` can also be used.
+This repository standardizes on `pnpm` and the canonical lockfile `pnpm-lock.yaml`.
 
 ### Prerequisites
 
 - Node.js 20+
-- npm 10+ or pnpm
+- pnpm (Corepack recommended)
 - MongoDB 7+ or Docker
 - Pinata credentials for file uploads
 - A wallet for testing current prototype flows
@@ -189,7 +189,8 @@ Examples below use `npm`, but `pnpm` or `bun` can also be used.
 ```bash
 git clone https://github.com/Obiajulu-gif/eduvault.git
 cd eduvault
-npm install
+corepack enable && corepack prepare pnpm@latest --activate
+pnpm install --frozen-lockfile
 cp .env.example .env.local
 ```
 
@@ -202,7 +203,7 @@ docker compose up -d mongodb
 Start the app:
 
 ```bash
-npm run dev
+pnpm run dev
 ```
 
 Open `http://localhost:3000`.
@@ -212,19 +213,19 @@ Open `http://localhost:3000`.
 Run the Solidity prototype tests:
 
 ```bash
-npm run test:contracts
+pnpm run test:contracts
 ```
 
 Run backend validation, rate-limit, and indexer tests:
 
 ```bash
-npm run test:backend
+pnpm run test:backend
 ```
 
 Run the full local test baseline:
 
 ```bash
-npm test
+pnpm run test
 ```
 
 Backend schema and route contracts are documented in [`docs/backend-contracts.md`](docs/backend-contracts.md).
@@ -235,7 +236,7 @@ Backend schema and route contracts are documented in [`docs/backend-contracts.md
 2. Copy `.env.example` to `.env.local`.
 3. Configure MongoDB, Pinata, and email credentials.
 4. Run `docker compose up -d mongodb` if you do not already have MongoDB running.
-5. Start the development server with `npm run dev`.
+5. Start the development server with `pnpm run dev`.
 
 ## Environment Variables
 
