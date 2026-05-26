@@ -1,21 +1,19 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import Image from "next/image";
+import { useState } from "react";
 import { FaCloudUploadAlt } from "react-icons/fa";
-import { useAccount, useWriteContract, useWaitForTransactionReceipt } from "wagmi";
-import { abi } from "../../../../../contracts/EduVaultAbi.js";
-import { celoSepolia } from "wagmi/chains";
-
-const contractAddress = "0x3f48520ca0d8d51345b416b5a3e083dac8790f55";
+import Cropper from "react-easy-crop";
+import { useWallet } from "@/hooks/useWallet";
+import { WalletStatus } from "@/providers/WalletProvider";
+import { useUploadFile, useCreateMaterial } from "@/hooks/api/useMaterials";
+import { getCroppedImageBlob } from "./cropImage";
 
 export default function UploadForm() {
-  const { address } = useAccount();
-  const { writeContract, data: txHash, error: writeError, isPending } = useWriteContract();
-  const {
-    isLoading: isWaiting,
-    isSuccess: isConfirmed,
-    isError: isFailed,
-  } = useWaitForTransactionReceipt({ hash: txHash });
+  const { state } = useWallet();
+  const address = state.status === WalletStatus.Connected ? state.session.address : null;
+  const uploadFileMutation = useUploadFile();
+  const createMaterialMutation = useCreateMaterial();
 
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
@@ -27,8 +25,11 @@ export default function UploadForm() {
   const [docFileName, setDocFileName] = useState(null);
   const [thumbFile, setThumbFile] = useState(null);
   const [thumbPreview, setThumbPreview] = useState(null);
+  const [thumbCrop, setThumbCrop] = useState({ x: 0, y: 0 });
+  const [thumbZoom, setThumbZoom] = useState(1);
+  const [croppedPixels, setCroppedPixels] = useState(null);
+  const [showCropper, setShowCropper] = useState(false);
 
-  const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState(null);
   const [success, setSuccess] = useState(null);
 
@@ -45,6 +46,7 @@ export default function UploadForm() {
     if (file) {
       setThumbFile(file);
       setThumbPreview(URL.createObjectURL(file));
+      setShowCropper(true);
     }
   };
 
@@ -59,70 +61,72 @@ export default function UploadForm() {
     }
 
     if (!address) {
-      setError("Please connect your wallet to mint an NFT.");
+      setError("Please connect your wallet to upload a material.");
       return;
     }
 
-    setSubmitting(true);
-
     try {
-      // 1️⃣ Prepare FormData including all metadata
       const formData = new FormData();
       formData.append("file", docFile);
-      if (thumbFile) formData.append("thumbnail", thumbFile);
-      formData.append("name", title); //use the title for name
+      if (thumbFile && thumbPreview && croppedPixels) {
+        const croppedBlob = await getCroppedImageBlob(
+          thumbPreview,
+          croppedPixels,
+          thumbFile.type || "image/jpeg",
+        );
+        formData.append("thumbnail", croppedBlob, `thumb-cropped.${thumbFile.type?.split("/")[1] || "jpg"}`);
+      } else if (thumbFile) {
+        formData.append("thumbnail", thumbFile);
+      }
+      formData.append("name", title);
       formData.append("description", description);
       formData.append("price", price);
       formData.append("usageRights", usageRights);
       formData.append("visibility", visibility);
       formData.append("owner", address);
 
-      // 2️⃣ Upload everything to backend (which uploads to Pinata)
-      const uploadRes = await fetch("/api/upload", {
-        method: "POST",
-        body: formData,
-      });
-      const uploadData = await uploadRes.json();
-      console.log("Pinata Upload Response:", uploadData);
+      // 1. Upload to Pinata
+      const uploadData = await uploadFileMutation.mutateAsync(formData);
 
-      if (!uploadRes.ok || !uploadData?.metadata) {
-        throw new Error(uploadData?.error || "File upload failed");
+      if (!uploadData?.metadata) {
+        throw new Error("File upload failed");
       }
 
-      const tokenURI = uploadData.metadata;
-
-      // 3️⃣ Mint NFT
-      writeContract({
-        address: contractAddress,
-        abi,
-        functionName: "mint",
-        args: [tokenURI],
-        chain: celoSepolia,
+      // 2. Create database record
+      await createMaterialMutation.mutateAsync({
+        title,
+        description,
+        price,
+        usageRights,
+        visibility,
+        storageKey: uploadData.storageKey,
+        thumbnail: uploadData.image,
+        metadataUrl: uploadData.metadata,
+        creator: address,
       });
+
+      setSuccess(
+        "Document uploaded successfully and record created!"
+      );
+      // Reset form
+      setTitle("");
+      setDescription("");
+      setPrice("");
+      setDocFile(null);
+      setDocFileName(null);
+      setThumbFile(null);
+      setThumbPreview(null);
+      setShowCropper(false);
+      setThumbCrop({ x: 0, y: 0 });
+      setThumbZoom(1);
+      setCroppedPixels(null);
     } catch (err) {
-      console.error("Upload or Mint Error:", err);
+      console.error("Upload Error:", err);
       setError(err?.message || "Something went wrong. Please try again.");
-      setSubmitting(false);
     }
   };
 
-  // 4️⃣ React to minting status
-  useEffect(() => {
-    if (writeError) {
-      setError(writeError.message || "Transaction failed. Please try again.");
-      setSubmitting(false);
-    }
-  }, [writeError]);
-
-  useEffect(() => {
-    if (isConfirmed) {
-      setSuccess("🎉 Document uploaded successfully");
-      setSubmitting(false);
-    } else if (isFailed) {
-      setError("Transaction failed. Please try again.");
-      setSubmitting(false);
-    }
-  }, [isConfirmed, isFailed]);
+  const submitting = uploadFileMutation.isPending || createMaterialMutation.isPending;
 
   return (
     <form
@@ -131,10 +135,9 @@ export default function UploadForm() {
     >
       <h2 className="text-xl font-bold mb-6">Create a New Study Resource</h2>
       <p className="text-sm text-gray-600 mb-8">
-        Upload your lecture notes, projects, or past questions — and mint them as NFTs on-chain.
+        Upload lecture notes, projects, or past questions. The active chain layer is moving to Soroban, so this form handles file storage and cataloging.
       </p>
 
-      {/* Document Title */}
       <div className="mb-5">
         <label className="block text-sm font-medium mb-2">Document Title</label>
         <input
@@ -147,7 +150,6 @@ export default function UploadForm() {
         />
       </div>
 
-      {/* Short Description */}
       <div className="mb-5">
         <label className="block text-sm font-medium mb-2">Short Description</label>
         <textarea
@@ -159,22 +161,69 @@ export default function UploadForm() {
         />
       </div>
 
-      {/* Thumbnail */}
       <div className="mb-5">
         <label className="block text-sm font-medium mb-2">Thumbnail Image</label>
-        <div className="flex items-center gap-4">
+        <div className="flex flex-col gap-4">
           <input type="file" accept="image/*" onChange={handleThumbChange} className="text-sm" />
-          {thumbPreview && (
-            <img
-              src={thumbPreview}
-              alt="Thumbnail Preview"
-              className="w-16 h-16 rounded object-cover border"
-            />
+          {thumbPreview && showCropper && (
+            <div className="rounded-lg border border-gray-200 bg-gray-50 p-3">
+              <p className="text-xs text-gray-600 mb-2">
+                Crop thumbnail (locked 4:3 ratio for marketplace cards)
+              </p>
+              <div className="relative h-56 w-full overflow-hidden rounded-md bg-gray-900">
+                <Cropper
+                  image={thumbPreview}
+                  crop={thumbCrop}
+                  zoom={thumbZoom}
+                  aspect={4 / 3}
+                  onCropChange={setThumbCrop}
+                  onZoomChange={setThumbZoom}
+                  onCropComplete={(_, croppedAreaPixels) =>
+                    setCroppedPixels(croppedAreaPixels)
+                  }
+                />
+              </div>
+              <div className="mt-3 flex items-center gap-3">
+                <label className="text-xs text-gray-600">Zoom</label>
+                <input
+                  type="range"
+                  min={1}
+                  max={3}
+                  step={0.1}
+                  value={thumbZoom}
+                  onChange={(event) => setThumbZoom(Number(event.target.value))}
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowCropper(false)}
+                  className="ml-auto rounded-md border border-gray-300 px-3 py-1 text-xs hover:bg-white"
+                >
+                  Use Crop
+                </button>
+              </div>
+            </div>
+          )}
+          {thumbPreview && !showCropper && (
+            <div className="flex items-center gap-4">
+              <Image
+                src={thumbPreview}
+                alt="Final Thumbnail Preview"
+                width={128}
+                height={96}
+                className="rounded object-cover border"
+              />
+              <button
+                type="button"
+                onClick={() => setShowCropper(true)}
+                className="rounded-md border border-gray-300 px-3 py-2 text-xs hover:bg-gray-100"
+              >
+                Re-crop thumbnail
+              </button>
+            </div>
           )}
         </div>
       </div>
 
-      {/* Upload File */}
       <div className="mb-5">
         <label className="block text-sm font-medium mb-2">Upload Your File</label>
         <div className="border-2 border-dashed border-gray-300 rounded-lg p-6 text-center hover:border-blue-400 transition">
@@ -202,17 +251,15 @@ export default function UploadForm() {
                 </>
               )}
             </p>
-            <button
-              type="button"
+            <div
               className="px-4 py-2 text-sm bg-blue-600 text-white rounded-md hover:bg-blue-700"
             >
               Choose File
-            </button>
+            </div>
           </label>
         </div>
       </div>
 
-      {/* Price + Usage Rights */}
       <div className="grid sm:grid-cols-2 gap-4 mb-5">
         <div>
           <label className="block text-sm font-medium mb-2">Set Your Price (optional)</label>
@@ -220,7 +267,7 @@ export default function UploadForm() {
             type="number"
             value={price}
             onChange={(e) => setPrice(e.target.value)}
-            placeholder="celo"
+            placeholder="amount"
             className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:ring-2 focus:ring-blue-100 focus:border-blue-500"
           />
         </div>
@@ -238,7 +285,6 @@ export default function UploadForm() {
         </div>
       </div>
 
-      {/* Visibility */}
       <div className="mb-6">
         <label className="block text-sm font-medium mb-2">Visibility</label>
         <div className="flex flex-col gap-2 text-sm">
@@ -251,7 +297,7 @@ export default function UploadForm() {
               onChange={() => setVisibility("public")}
               className="accent-blue-600"
             />
-            Public (default) — Anyone can view or download.
+            Public (default) - Anyone can view or download.
           </label>
           <label className="flex items-center gap-2">
             <input
@@ -262,27 +308,21 @@ export default function UploadForm() {
               onChange={() => setVisibility("private")}
               className="accent-blue-600"
             />
-            Private — Only you and invited users can access.
+            Private - Only you and invited users can access.
           </label>
         </div>
       </div>
 
-      {/* Feedback */}
       {error && <p className="text-red-600 text-sm mb-4">{error}</p>}
       {success && <p className="text-green-600 text-sm mb-4">{success}</p>}
 
-      {/* Buttons */}
       <div className="flex justify-end gap-4">
         <button
           type="submit"
-          disabled={submitting || isPending || isWaiting}
+          disabled={submitting}
           className="px-5 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition text-sm font-medium disabled:opacity-60"
         >
-          {submitting
-            ? "Uploading..."
-            : isPending || isWaiting
-              ? "Minting NFT..."
-              : "Submit & Mint NFT"}
+          {submitting ? "Processing..." : "Submit Upload"}
         </button>
       </div>
     </form>

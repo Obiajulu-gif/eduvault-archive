@@ -5,7 +5,7 @@ export default function StatsCards() {
 	const stats = [
 		{
 			label: "Earnings",
-			value: "2.00 CELO",
+			value: "2.00 XLM",
 			change: "+12.3%",
 			icon: <FaArrowUp className="text-green-500" />,
 		},

@@ -54,8 +54,6 @@ export function getChainName(chainId) {
     11155111: 'Sepolia',
     137: 'Polygon',
     80002: 'Polygon Amoy',
-    42220: 'Celo',
-    44787: 'Celo Alfajores',
   };
   
   return chains[chainId] || 'Unknown Network';

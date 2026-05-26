@@ -1,0 +1,397 @@
+openapi: "3.1.0"
+
+info:
+  title: EduVault API
+  version: "1.0.0"
+  description: |
+    REST API for the EduVault decentralised learning-material marketplace.
+    All write endpoints require a valid `auth_token` cookie issued by the
+    `/api/auth` login flow (HS256 JWT signed with `JWT_SECRET`).
+
+servers:
+  - url: "http://localhost:3000"
+    description: Local development
+  - url: "https://eduvault.vercel.app"
+    description: Production (Vercel)
+
+components:
+  securitySchemes:
+    cookieAuth:
+      type: apiKey
+      in: cookie
+      name: auth_token
+
+  schemas:
+    Error:
+      type: object
+      properties:
+        error:
+          type: string
+        details:
+          type: object
+      required: [error]
+
+    Material:
+      type: object
+      properties:
+        _id:
+          type: string
+          description: MongoDB ObjectId
+        title:
+          type: string
+        description:
+          type: string
+        price:
+          type: number
+          format: float
+        category:
+          type: string
+        tags:
+          type: array
+          items:
+            type: string
+        fileUrl:
+          type: string
+          format: uri
+        userAddress:
+          type: string
+          description: Stellar public key of the uploader
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+      required: [title, price]
+
+    MaterialInput:
+      type: object
+      properties:
+        title:
+          type: string
+          minLength: 1
+          maxLength: 200
+        description:
+          type: string
+          maxLength: 2000
+        price:
+          type: number
+          format: float
+          minimum: 0
+        category:
+          type: string
+        tags:
+          type: array
+          items:
+            type: string
+        fileUrl:
+          type: string
+          format: uri
+      required: [title, price]
+
+    UserProfile:
+      type: object
+      properties:
+        _id:
+          type: string
+        walletAddress:
+          type: string
+        displayName:
+          type: string
+        bio:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+
+    Purchase:
+      type: object
+      properties:
+        _id:
+          type: string
+        buyerAddress:
+          type: string
+        materialId:
+          type: string
+        amount:
+          type: number
+        txHash:
+          type: string
+          description: Stellar / Soroban transaction hash
+        status:
+          type: string
+          enum: [pending, confirmed, failed]
+        createdAt:
+          type: string
+          format: date-time
+
+    Entitlement:
+      type: object
+      properties:
+        materialId:
+          type: string
+        grantedAt:
+          type: string
+          format: date-time
+
+security:
+  - cookieAuth: []
+
+paths:
+  # ---------------------------------------------------------------------------
+  # Materials
+  # ---------------------------------------------------------------------------
+  /api/materials:
+    get:
+      summary: List the authenticated user's materials
+      operationId: listMyMaterials
+      tags: [Materials]
+      responses:
+        "200":
+          description: Array of material documents
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Material"
+        "401":
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "429":
+          description: Rate limited
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+    post:
+      summary: Create a new material listing
+      operationId: createMaterial
+      tags: [Materials]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MaterialInput"
+      responses:
+        "201":
+          description: Material created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Material"
+        "400":
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  # ---------------------------------------------------------------------------
+  # Market materials (public browse)
+  # ---------------------------------------------------------------------------
+  /api/market-materials:
+    get:
+      summary: Browse publicly listed materials
+      operationId: browseMarketMaterials
+      tags: [Market]
+      security: []
+      parameters:
+        - name: category
+          in: query
+          schema:
+            type: string
+        - name: cursor
+          in: query
+          description: Pagination cursor (MongoDB ObjectId of the last seen item)
+          schema:
+            type: string
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 20
+            minimum: 1
+            maximum: 100
+      responses:
+        "200":
+          description: Paginated list of materials
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Material"
+                  nextCursor:
+                    type: string
+                    nullable: true
+
+  # ---------------------------------------------------------------------------
+  # Upload
+  # ---------------------------------------------------------------------------
+  /api/upload:
+    post:
+      summary: Upload a material file to Pinata / IPFS
+      operationId: uploadMaterialFile
+      tags: [Upload]
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file:
+                  type: string
+                  format: binary
+              required: [file]
+      responses:
+        "200":
+          description: Upload successful — returns the IPFS / gateway URL
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  url:
+                    type: string
+                    format: uri
+                  cid:
+                    type: string
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  # ---------------------------------------------------------------------------
+  # Purchase
+  # ---------------------------------------------------------------------------
+  /api/purchase:
+    post:
+      summary: Record a material purchase after on-chain payment
+      operationId: recordPurchase
+      tags: [Purchase]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                materialId:
+                  type: string
+                txHash:
+                  type: string
+                amount:
+                  type: number
+              required: [materialId, txHash, amount]
+      responses:
+        "201":
+          description: Purchase recorded
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Purchase"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  # ---------------------------------------------------------------------------
+  # Entitlements
+  # ---------------------------------------------------------------------------
+  /api/entitlements:
+    get:
+      summary: List materials the authenticated user is entitled to download
+      operationId: listEntitlements
+      tags: [Entitlements]
+      responses:
+        "200":
+          description: List of entitlements
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Entitlement"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  # ---------------------------------------------------------------------------
+  # User profile
+  # ---------------------------------------------------------------------------
+  /api/profile:
+    get:
+      summary: Get the authenticated user's profile
+      operationId: getProfile
+      tags: [Profile]
+      responses:
+        "200":
+          description: User profile
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserProfile"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+    patch:
+      summary: Update the authenticated user's profile
+      operationId: updateProfile
+      tags: [Profile]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                displayName:
+                  type: string
+                  maxLength: 80
+                bio:
+                  type: string
+                  maxLength: 500
+      responses:
+        "200":
+          description: Updated profile
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserProfile"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  responses:
+    Unauthorized:
+      description: Not authenticated
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    BadRequest:
+      description: Validation error
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    RateLimited:
+      description: Too many requests
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"

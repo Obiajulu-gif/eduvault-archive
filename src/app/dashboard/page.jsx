@@ -44,22 +44,27 @@ export default async function DashboardPage() {
     }
 
     return (
-        <div className="space-y-8">
-            {/* Welcome Banner + Stats */}
-            <div className="grid md:grid-cols-3 gap-6 items-start">
-                <div className="md:col-span-2">
-                    <WelcomeBanner user={user} />
-                </div>
-                <EarningsSection />
-            </div>
+        <div className="space-y-8 max-w-7xl mx-auto pb-10">
+            {/* Top Row: Welcome & Call to Action */}
+            <WelcomeBanner user={user} />
 
-            {/* Trending + Latest Activity + Top Creators */}
-            <div className="grid md:grid-cols-3 gap-8">
-                <div className="md:col-span-2 space-y-8">
-                    <TrendingMaterials />
+            {/* Second Row: Integrated Metrics Spread */}
+            <EarningsSection />
+
+            {/* Main Content Split: Creator Focus vs Discovery */}
+            <div className="grid lg:grid-cols-3 gap-8 items-start">
+                
+                {/* Left Column (Creator Focus - 2/3 width) */}
+                <div className="lg:col-span-2 space-y-8">
                     <LatestActivity />
+                    {/* Placeholder for future performance charts could go here */}
                 </div>
-                <TopCreators />
+
+                {/* Right Column (Discovery Focus - 1/3 width) */}
+                <div className="space-y-8">
+                    <TrendingMaterials />
+                    <TopCreators />
+                </div>
             </div>
         </div>
     );

@@ -1,83 +1,92 @@
 "use client";
 
 import { motion } from "framer-motion";
-import { useState, useEffect, useMemo } from "react";
-import { FaHeart } from "react-icons/fa";
-import { FiFilter } from "react-icons/fi";
+import Image from "next/image";
+import { useEffect, useState } from "react";
+import { FaHeart, FaChevronRight } from "react-icons/fa";
+import { FiFilter, FiSearch } from "react-icons/fi";
+
+const imageOptions = [
+	"/images/Generated Image November 07, 2025 - 6_44AM.png",
+	"/images/Generated Image November 07, 2025 - 6_53AM.png",
+];
+
+// Likes are randomised once at module load — not during render — to satisfy
+// the react-hooks/purity rule (no impure calls inside components or hooks).
+const STATIC_MATERIALS = Array.from({ length: 9 }, (_, index) => ({
+	title: index % 2 === 0 ? "CHM 112 - Lab Report Template" : "GNS 201 - Advanced Grammar Notes",
+	author: index % 3 === 0 ? "Chijioke M." : "Sarah O.",
+	likes: Math.floor(Math.random() * 500) + 100,
+	price: "0.25 XLM",
+	category: index % 3 === 0 ? "Science" : "Arts",
+	image: imageOptions[index % imageOptions.length],
+}));
 
 export default function DiscoverMaterials() {
 	const [loading, setLoading] = useState(true);
-
-    const imageOptions = [
-        "/images/Generated Image November 07, 2025 - 6_44AM.png",
-        "/images/Generated Image November 07, 2025 - 6_53AM.png",
-    ];
-
-    const materials = useMemo(() =>
-        Array.from({ length: 9 }).map(() => ({
-            title: "CHM 112 – Lab Report Template (UNN)",
-            author: "Chijioke M.",
-            likes: "21.5K",
-            bid: "0.25 CELO",
-            time: "01:09:40",
-            image: imageOptions[Math.floor(Math.random() * imageOptions.length)],
-        })),
-        []
-    );
-
-	const categories = ["All", "Social Sciences", "Engineering", "Pharmacy"];
 	const [activeCategory, setActiveCategory] = useState("All");
 
+	const materials = STATIC_MATERIALS;
+
+	const categories = ["All", "Science", "Engineering", "Arts", "Medical"];
+
 	useEffect(() => {
-		const timeout = setTimeout(() => setLoading(false), 1200);
+		const timeout = setTimeout(() => setLoading(false), 1000);
 		return () => clearTimeout(timeout);
 	}, []);
 
 	const fadeUp = {
-		hidden: { opacity: 0, y: 40 },
+		hidden: { opacity: 0, y: 20 },
 		show: { opacity: 1, y: 0, transition: { duration: 0.5, ease: "easeOut" } },
 	};
 
 	return (
-		<section className="relative py-20 px-6 md:px-16 bg-gradient-to-br from-white to-blue-50 overflow-hidden">
-			{/* Decorative Grid Background */}
-			<div
-				className="absolute inset-0 bg-[linear-gradient(to_right,rgba(0,0,0,0.03)_1px,transparent_1px),linear-gradient(to_bottom,rgba(0,0,0,0.03)_1px,transparent_1px)]
-        bg-[size:50px_50px] opacity-30 pointer-events-none"
-			/>
+		<section className="relative overflow-hidden bg-white px-6 py-24 md:px-16">
+			<div className="absolute top-0 right-0 w-[500px] h-[500px] bg-stellar-blue/5 rounded-full blur-[120px] pointer-events-none" />
 
-			{/* Header */}
 			<motion.div
 				initial="hidden"
 				whileInView="show"
 				viewport={{ once: true }}
 				variants={fadeUp}
-				className="relative flex flex-col md:flex-row md:items-center justify-between mb-10 z-10"
+				className="relative z-10 mb-12 flex flex-col md:flex-row md:items-center justify-between gap-6"
 			>
-				<h2 className="text-3xl font-bold text-gray-900 mb-4 md:mb-0">
-					Discover More Study Materials
-				</h2>
-				<button className="flex items-center gap-2 border border-gray-300 text-gray-700 text-sm py-2.5 px-5 rounded-full hover:bg-gray-100 transition-all">
-					<FiFilter /> Filter
-				</button>
+				<div>
+					<h2 className="text-4xl font-bold text-stellar-dark mb-4">
+						Discover the Commons
+					</h2>
+					<p className="text-edu-muted">Explore thousands of certified academic assets.</p>
+				</div>
+				<div className="flex items-center gap-3">
+					<div className="relative group">
+						<FiSearch className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400 group-focus-within:text-stellar-blue transition-colors" />
+						<input 
+							type="text" 
+							placeholder="Search materials..." 
+							className="bg-edu-light border border-gray-100 rounded-2xl py-3 pl-12 pr-6 text-sm focus:outline-none focus:ring-2 focus:ring-stellar-blue/20 focus:border-stellar-blue transition-all w-full md:w-[300px]"
+						/>
+					</div>
+					<button className="flex items-center gap-2 rounded-2xl border border-gray-100 bg-white px-5 py-3 text-sm font-bold text-stellar-dark transition-all hover:bg-gray-50 shadow-sm">
+						<FiFilter /> Filter
+					</button>
+				</div>
 			</motion.div>
 
-			{/* Category Buttons */}
 			<motion.div
 				initial="hidden"
 				whileInView="show"
 				viewport={{ once: true }}
 				variants={fadeUp}
-				className="flex flex-wrap gap-3 mb-12 relative z-10"
+				className="relative z-10 mb-12 flex flex-wrap gap-2"
 			>
-				{categories.map((cat, i) => (
+				{categories.map((cat) => (
 					<button
-						key={i}
+						key={cat}
 						onClick={() => setActiveCategory(cat)}
-						className={`text-sm font-medium px-5 py-2.5 rounded-full border transition-all duration-300 ${
+						className={`rounded-xl px-6 py-2.5 text-xs font-bold transition-all duration-300 ${
 							activeCategory === cat
-								? "bg-blue-600 text-white border-blue-600 shadow-md"
-								: "border-gray-300 text-gray-700 hover:bg-gray-100"
+								? "bg-stellar-dark text-white shadow-lg"
+								: "bg-edu-light text-edu-muted hover:bg-gray-200"
 						}`}
 					>
 						{cat}
@@ -85,88 +94,69 @@ export default function DiscoverMaterials() {
 				))}
 			</motion.div>
 
-			{/* Materials Grid */}
-			<motion.div
-				initial="hidden"
-				whileInView="show"
-				viewport={{ once: true }}
-				className="relative grid sm:grid-cols-2 lg:grid-cols-3 gap-8 z-10"
-			>
+			<div className="relative z-10 grid gap-8 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-3">
 				{loading
 					? Array(6)
 							.fill(0)
 							.map((_, i) => (
 								<div
 									key={i}
-									className="animate-pulse bg-gray-100 border border-gray-200 rounded-2xl p-4 h-[320px]"
-								>
-									<div className="bg-gray-200 h-48 w-full rounded-xl mb-4"></div>
-									<div className="bg-gray-200 h-4 w-3/4 mb-2 rounded"></div>
-									<div className="bg-gray-200 h-3 w-1/2 mb-3 rounded"></div>
-									<div className="bg-gray-200 h-3 w-1/3 rounded"></div>
-								</div>
+									className="h-[400px] animate-pulse rounded-[2.5rem] bg-edu-light"
+								/>
 							))
 					: materials.map((item, i) => (
 							<motion.div
 								key={i}
-								whileHover={{
-									scale: 1.03,
-									boxShadow: "0 10px 25px rgba(0,0,0,0.1)",
-								}}
+								whileHover={{ y: -10 }}
 								variants={fadeUp}
-								className="bg-white border border-gray-200 rounded-2xl p-4 shadow-sm hover:shadow-lg transition-all duration-300"
+								className="group rounded-[2.5rem] border border-gray-100 bg-white p-5 shadow-sm transition-all duration-300 hover:shadow-2xl hover:shadow-stellar-blue/5"
 							>
-                                {/* Thumbnail */}
-                                <div className="bg-gray-100 rounded-xl h-48 mb-4 overflow-hidden">
-                                    <img
-                                        src={item.image}
-                                        alt={item.title}
-                                        className="h-full w-full object-cover"
-                                    />
-                                </div>
-
-								{/* CTA Button */}
-								<button className="bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold py-2 px-5 rounded-full mb-4 transition-all">
-									Get This!
-								</button>
-
-								{/* Text Info */}
-								<h3 className="text-sm font-semibold text-gray-800 mb-1 truncate">
-									{item.title}
-								</h3>
-								<p className="text-xs text-gray-500 mb-3">by {item.author}</p>
-
-								{/* Meta Info */}
-								<div className="flex justify-between items-center text-xs text-gray-500 mb-1">
-									<div className="flex items-center gap-1">
-										<FaHeart className="text-pink-500" />
-										<span>{item.likes} Likes</span>
+								<div className="mb-6 h-56 overflow-hidden rounded-[2rem] relative bg-edu-light">
+									<Image
+										src={item.image}
+										alt={item.title}
+										fill
+										className="object-cover transition-transform duration-500 group-hover:scale-110"
+									/>
+									<div className="absolute top-4 right-4 bg-white/90 backdrop-blur-md px-3 py-1.5 rounded-full flex items-center gap-1.5 shadow-sm">
+										<FaHeart className="text-pink-500 text-[10px]" />
+										<span className="text-[10px] font-bold text-stellar-dark">{item.likes}</span>
 									</div>
-									<span>Current Bid</span>
 								</div>
 
-								{/* Bid + Time */}
-								<div className="flex justify-between items-center mt-1">
-									<span className="text-xs text-gray-500 flex items-center gap-1">
-										⏱ {item.time}
-									</span>
-									<span className="text-sm font-semibold text-gray-800">
-										{item.bid}
-									</span>
+								<div className="flex flex-col flex-grow">
+									<div className="flex items-center gap-2 mb-3">
+										<span className="text-[10px] font-bold text-stellar-blue uppercase tracking-widest">{item.category}</span>
+									</div>
+									<h3 className="mb-2 text-lg font-bold text-stellar-dark line-clamp-1">
+										{item.title}
+									</h3>
+									<p className="mb-6 text-sm text-edu-muted">By {item.author}</p>
+
+									<div className="mt-auto pt-6 border-t border-gray-50 flex items-center justify-between">
+										<div className="flex flex-col">
+											<span className="text-[10px] uppercase tracking-wider text-edu-muted font-bold">Price</span>
+											<span className="text-lg font-black text-stellar-dark">
+												{item.price}
+											</span>
+										</div>
+										<button className="bg-stellar-blue/5 hover:bg-stellar-blue text-stellar-blue hover:text-white p-4 rounded-2xl transition-all duration-300">
+											<FaChevronRight />
+										</button>
+									</div>
 								</div>
 							</motion.div>
 					  ))}
-			</motion.div>
+			</div>
 
-			{/* Load More Button */}
 			<motion.div
 				initial={{ opacity: 0, y: 20 }}
 				whileInView={{ opacity: 1, y: 0 }}
 				transition={{ duration: 0.5 }}
-				className="flex justify-center mt-16 relative z-10"
+				className="relative z-10 mt-20 flex justify-center"
 			>
-				<button className="flex items-center gap-2 border border-gray-300 text-gray-700 text-sm py-2.5 px-6 rounded-full hover:bg-gray-100 transition-all duration-300">
-					Load More
+				<button className="flex items-center gap-3 rounded-2xl bg-stellar-dark text-white px-10 py-4 font-bold transition-all duration-300 hover:scale-105 shadow-xl shadow-stellar-dark/20">
+					Load More Materials
 				</button>
 			</motion.div>
 		</section>

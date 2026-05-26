@@ -1,0 +1,32 @@
+name: Security Guardrails
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - develop
+
+jobs:
+  audit:
+    name: Dependency And Secret Checks
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Dependency audit
+        run: npm run audit:deps
+
+      - name: Secret and placeholder scan
+        run: npm run scan:secrets

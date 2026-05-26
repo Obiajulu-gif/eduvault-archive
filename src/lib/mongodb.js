@@ -2,23 +2,24 @@ import { MongoClient } from "mongodb";
 
 const uri = process.env.MONGODB_URI;
 
-let client;
-let clientPromise;
+const globalForMongo = globalThis;
 
-// Reuse the client across hot reloads in dev
-if (uri && !global._mongoClientPromise) {
-  client = new MongoClient(uri);
-  global._mongoClientPromise = client.connect();
-}
-
-clientPromise = global._mongoClientPromise;
-
-export async function getDb() {
+function getClientPromise() {
   if (!uri) {
     throw new Error("MONGODB_URI is not set in environment variables");
   }
 
-  const client = await clientPromise;
+  // Reuse the client across hot reloads in dev, but only connect on demand.
+  if (!globalForMongo._mongoClientPromise) {
+    const client = new MongoClient(uri);
+    globalForMongo._mongoClientPromise = client.connect();
+  }
+
+  return globalForMongo._mongoClientPromise;
+}
+
+export async function getDb() {
+  const client = await getClientPromise();
   // When DB name is in connection string, driver selects it automatically.
   // Otherwise, fallback to "eduvault".
   const dbName = process.env.MONGODB_DB || "eduvault";

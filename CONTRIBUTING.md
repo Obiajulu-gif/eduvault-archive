@@ -39,6 +39,7 @@ npm run dev
 - Prefer explicit naming over clever abstractions.
 - Preserve the distinction between current prototype behavior and planned Stellar milestones.
 - Do not claim a feature is on Stellar unless it is implemented and testable in this repository.
+- Do not add new product work to the archived EVM prototype unless there is an explicit architecture decision to do so.
 - Update documentation when architecture or environment requirements change.
 
 ## Pull Request Checklist
@@ -72,3 +73,4 @@ When opening an issue, include:
 ## Security
 
 Do not disclose secrets, private keys, or production credentials in issues or pull requests. If you discover a sensitive security issue, contact the maintainer privately before public disclosure.
+🌟 Stellar Contributors: See the [Stellar Integration Guide](docs/STELLAR_GUIDE.md) for setup instructions.

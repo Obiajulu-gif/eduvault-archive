@@ -18,6 +18,8 @@
 # next.js
 /.next/
 /out/
+/soroban/target/
+/soroban/.soroban/
 
 # production
 /build

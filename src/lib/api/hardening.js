@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { auditLog } from "./audit";
 import { checkRateLimit } from "./rateLimit";
 import { ValidationError } from "./validation";
+import { captureException } from "@/lib/sentry";
 
 function clientKey(request) {
   const forwardedFor = request.headers.get("x-forwarded-for");
@@ -29,6 +30,7 @@ export async function withApiHardening(request, options, handler) {
       return NextResponse.json({ error: error.message, details: error.details }, { status: 400 });
     }
 
+    captureException(error, { route, method });
     throw error;
   }
 }

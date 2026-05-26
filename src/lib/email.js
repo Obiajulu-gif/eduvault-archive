@@ -66,7 +66,7 @@ export async function sendWelcomeEmail(to, name) {
               <tr>
                 <td style="padding:0 0 12px 0;" align="center">
                   <a href="${appUrl}" style="text-decoration:none;display:inline-flex;align-items:center;gap:8px;color:#111827;">
-                    <img src="${appUrl}/celo.png" width="36" height="36" alt="EduVault" style="border:0;display:block;" />
+                    <img src="${appUrl}/images/stellar.png" width="36" height="36" alt="EduVault" style="border:0;display:block;" />
                     <span style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,'Apple Color Emoji','Segoe UI Emoji';font-weight:700;font-size:18px;">EduVault</span>
                   </a>
                 </td>

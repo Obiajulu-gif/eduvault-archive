@@ -134,6 +134,11 @@ function normalizeNumericField(value, { field, errors, required = false } = {}) 
   if (value === undefined || value === null || value === "") {
     if (required) addValidationError(errors, field, `${field} is required`, "required");
     return null;
+export function validateMaterialPayload(body) {
+  const title = sanitizeString(body?.title, { maxLength: 160 });
+  const storageKey = sanitizeString(body?.storageKey || body?.fileUrl, { maxLength: 2048 });
+  if (!title || !storageKey) {
+    throw new ValidationError("Missing required material fields (title or storageKey)");
   }
 
   const price = Number(value);
@@ -197,6 +202,13 @@ function normalizeFileMetadata(body, { fieldPrefix, errors }) {
   return {
     [typeField]: typeValue,
     [sizeField]: size,
+    title,
+    description: sanitizeString(body?.description, { maxLength: 5000 }),
+    price,
+    usageRights: sanitizeString(body?.usageRights, { maxLength: 1000 }),
+    visibility,
+    thumbnailUrl: sanitizeString(body?.thumbnailUrl, { maxLength: 2048 }) || null,
+    storageKey,
   };
 }
 

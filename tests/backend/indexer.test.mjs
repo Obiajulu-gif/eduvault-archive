@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { applyIndexedEvent, runIndexerBatch } from "../../src/lib/indexer/stellarIndexer.js";
+import {
+  applyIndexedEvent,
+  createJsonRpcEventSource,
+  runIndexerBatch,
+} from "../../src/lib/indexer/stellarIndexer.js";
 
 function createCollection() {
   const records = new Map();
@@ -70,4 +74,27 @@ test("runIndexerBatch stores cursor progress", async () => {
 
   assert.deepEqual(result, { applied: 0, skipped: 0, nextCursor: "cursor-2" });
   assert.equal((await db.collection("sync_state").findOne({ _id: "stellar:events" })).cursor, "cursor-2");
+});
+
+test("createJsonRpcEventSource supports multiple contract ids", async () => {
+  let rpcBody = null;
+  const eventSource = createJsonRpcEventSource({
+    rpcUrl: "https://rpc.example.test",
+    contractId: ["registry-id", "purchase-manager-id"],
+    fetchImpl: async (_url, init) => {
+      rpcBody = JSON.parse(init.body);
+      return {
+        async json() {
+          return { result: { events: [], cursor: "cursor-3", latestLedger: 456 } };
+        },
+      };
+    },
+  });
+
+  const result = await eventSource.getEvents({ cursor: "cursor-2", limit: 25 });
+
+  assert.deepEqual(rpcBody.params.filters, [
+    { contractIds: ["registry-id", "purchase-manager-id"] },
+  ]);
+  assert.deepEqual(result, { events: [], nextCursor: "cursor-3", lastLedger: 456 });
 });

@@ -12,6 +12,7 @@ import {
 	FaHeart,
 	FaHistory,
 	FaCog,
+	FaBoxOpen,
 } from "react-icons/fa";
 
 export default function Sidebar() {
@@ -29,6 +30,11 @@ export default function Sidebar() {
 			icon: <FaUser />,
 			label: "My Materials",
 			href: "/dashboard/my-materials",
+		},
+		{
+			icon: <FaBoxOpen />,
+			label: "My Purchases",
+			href: "/dashboard/purchases",
 		},
 		{ icon: <FaDollarSign />, label: "Earnings", href: "/dashboard/earnings" },
 		{ icon: <FaHeart />, label: "Favourites", href: "/dashboard/favourites" },
@@ -86,7 +92,7 @@ export default function Sidebar() {
 			{/* Wallet Summary */}
 			<div className="mt-auto p-4 bg-gradient-to-br from-blue-600 to-blue-500 text-white rounded-xl">
 				<div className="text-3xl font-bold mb-1">5,034.02</div>
-				<div className="text-sm opacity-90 mb-4">Celo</div>
+				<div className="text-sm opacity-90 mb-4">Soroban pending</div>
 				<button className="bg-white text-blue-600 font-semibold py-2 px-3 w-full rounded-md hover:bg-gray-100">
 					Top Up Balance
 				</button>

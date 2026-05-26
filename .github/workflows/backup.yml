@@ -1,0 +1,61 @@
+name: MongoDB Backup
+
+on:
+  schedule:
+    # Daily at 02:00 UTC — off-peak to minimise performance impact.
+    - cron: "0 2 * * *"
+  workflow_dispatch:
+    inputs:
+      reason:
+        description: "Reason for manual backup trigger"
+        required: false
+        default: "Manual trigger"
+
+jobs:
+  backup:
+    name: Dump and upload MongoDB
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install dependencies
+        run: npm install --ignore-scripts
+
+      - name: Install MongoDB tools
+        run: |
+          wget -q https://fastdl.mongodb.org/tools/db/mongodb-database-tools-ubuntu2204-x86_64-100.9.4.tgz
+          tar -xzf mongodb-database-tools-ubuntu2204-x86_64-100.9.4.tgz
+          sudo cp mongodb-database-tools-ubuntu2204-x86_64-100.9.4/bin/* /usr/local/bin/
+
+      - name: Run backup script
+        env:
+          MONGODB_URI: ${{ secrets.BACKUP_MONGODB_URI }}
+          MONGODB_DB: ${{ secrets.MONGODB_DB }}
+          BACKUP_S3_BUCKET: ${{ secrets.BACKUP_S3_BUCKET }}
+          BACKUP_S3_REGION: ${{ secrets.BACKUP_S3_REGION }}
+          BACKUP_S3_ENDPOINT: ${{ secrets.BACKUP_S3_ENDPOINT }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.BACKUP_AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.BACKUP_AWS_SECRET_ACCESS_KEY }}
+        run: node scripts/backup-mongodb.mjs
+
+      - name: Notify on failure
+        if: failure()
+        uses: slackapi/slack-github-action@v1.25.0
+        with:
+          payload: |
+            {
+              "text": ":rotating_light: *EduVault MongoDB backup failed* on `${{ github.ref_name }}`\n<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View run>"
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.BACKUP_SLACK_WEBHOOK_URL }}
+          SLACK_WEBHOOK_TYPE: INCOMING_WEBHOOK
+        continue-on-error: true

@@ -11,7 +11,7 @@ The strategic direction for this project is Stellar-native settlement and entitl
 - wallet connection flow in the frontend
 - wallet-linked profile creation
 - upload flow that pins files and metadata to IPFS
-- legacy ERC-721 ownership experiment in `contracts/EduVault.sol`
+- archived ERC-721 ownership experiment in `archive/legacy-evm/contracts/EduVault.sol`
 - marketplace and purchase UI prototypes
 
 ## Why the Current Chain Layer Is Not Final
@@ -62,4 +62,4 @@ When discussing EduVault externally:
 
 - describe the current repository as a working prototype
 - describe Stellar payments and Soroban contracts as the next implementation milestone
-- avoid implying that the current Celo/EVM prototype is already Stellar-native
+- avoid implying that the archived Celo/EVM prototype is already Stellar-native
