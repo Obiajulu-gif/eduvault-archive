@@ -145,7 +145,13 @@ export default function MarketPage() {
 						<div className="relative z-10 w-full md:w-2/3">
 							<h1 className="text-xl md:text-2xl font-bold text-gray-900 mb-2">Academic Marketplace</h1>
 							<p className="text-gray-600 text-sm mb-4">Search by title, description, and author. Then narrow results by subject and price sorting.</p>
-							<button className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-semibold transition-all shadow-sm">Share Your Notes</button>
+							<button
+								type="button"
+								aria-label="Share your notes"
+								className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-semibold transition-all shadow-sm"
+							>
+								Share Your Notes
+							</button>
 						</div>
 					</motion.div>
 
