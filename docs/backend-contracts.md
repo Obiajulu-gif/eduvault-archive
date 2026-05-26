@@ -38,6 +38,7 @@ Required fields:
 Optional fields:
 
 - `description`, `usageRights`, `thumbnailUrl`.
+- `fileType`, `fileSize`, `thumbnailType`, `thumbnailSize`.
 - `materialId`, `chainContractId`, `chainLedger`, `chainTxHash`, `syncStatus`.
 
 Indexes:
@@ -126,15 +127,20 @@ Response:
 
 Request:
 
-- `title`: required string.
-- `fileUrl`: required string.
-- `price`: optional non-negative number.
-- `visibility`: `private`, `public`, or `unlisted`.
-- `description`, `usageRights`, `thumbnailUrl`: optional strings.
+- `title`: required string, trimmed and collapsed to a single-spaced label.
+- `fileUrl`: required HTTP, HTTPS, or IPFS URL.
+- `price`: optional non-negative number; omitted values normalize to `0`.
+- `visibility`: optional `private`, `public`, or `unlisted`; omitted values normalize to `private`.
+- `description`, `usageRights`: optional strings normalized with trimmed outer whitespace.
+- `thumbnailUrl`: optional HTTP, HTTPS, or IPFS URL.
+- `fileType` / `fileSize`: optional upload metadata. Supported file types are PDF, DOC, DOCX, PPT, PPTX, and ZIP. Maximum file size is 10 MB when provided.
+- `thumbnailType` / `thumbnailSize`: optional upload metadata. Supported thumbnail types are JPEG, PNG, WebP, and GIF. Maximum thumbnail size is 5 MB when provided.
+- `materialId`, `chainContractId`, `chainLedger`, `chainTxHash`, `syncStatus`: optional chain linkage fields normalized when present.
 
 Response:
 
 - inserted material record with `id`.
+- validation failures return `400` with `{ error, details: { errors: [{ field, message, code }] } }`.
 
 ### `GET /api/materials`
 
