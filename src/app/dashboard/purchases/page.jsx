@@ -1,5 +1,7 @@
 "use client";
 
+// Purchases library page: shows purchased materials for the authenticated buyer, with empty/loading/error/disconnected states.
+
 import { useEffect, useState, useCallback } from "react";
 import { FaDownload, FaExternalLinkAlt, FaShoppingBag, FaSpinner, FaCheckCircle } from "react-icons/fa";
 import { MdOutlineSchool } from "react-icons/md";
@@ -92,7 +94,7 @@ function PurchasedMaterialCard({ item }) {
   return (
     <div className="bg-white rounded-xl border border-gray-200 shadow-sm hover:shadow-md transition-shadow flex flex-col">
       {/* Thumbnail / placeholder */}
-      <div className="w-full h-36 bg-gradient-to-br from-blue-50 to-purple-50 rounded-t-xl flex items-center justify-center overflow-hidden">
+      <div className="w-full h-36 bg-linear-to-br from-blue-50 to-purple-50 rounded-t-xl flex items-center justify-center overflow-hidden">
         {material?.thumbnailUrl ? (
           // eslint-disable-next-line @next/next/no-img-element
           <img

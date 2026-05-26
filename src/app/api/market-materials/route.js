@@ -52,12 +52,43 @@ export async function GET(request) {
     // 2️⃣ Handle list fetch
     const { page, pageSize } = parsePagination(url.searchParams);
 
+    // Filters
     const query = { visibility: "public" };
+    const search = url.searchParams.get("search");
+    const subject = url.searchParams.get("subject");
+    const minPrice = url.searchParams.get("minPrice");
+    const maxPrice = url.searchParams.get("maxPrice");
+    const creator = url.searchParams.get("creator");
+    const usageRights = url.searchParams.get("usageRights");
+
+    if (search) {
+      const regex = new RegExp(search, "i");
+      query.$or = [
+        { title: regex },
+        { description: regex },
+        { author: regex },
+        { subject: regex },
+      ];
+    }
+    if (subject) query.subject = subject;
+    if (minPrice) query.price = { ...query.price, $gte: Number(minPrice) };
+    if (maxPrice) query.price = { ...query.price, $lte: Number(maxPrice) };
+    if (creator) query["author"] = creator;
+    if (usageRights) query["usageRights"] = usageRights;
+
+    // Sorting
+    let sort = { createdAt: -1 };
+    const sortBy = url.searchParams.get("sortBy");
+    if (sortBy === "price_asc") sort = { price: 1 };
+    else if (sortBy === "price_desc") sort = { price: -1 };
+    else if (sortBy === "popular") sort = { likes: -1 };
+    // Default: newest
+
     const total = await db.collection("materials").countDocuments(query);
     const items = await db
       .collection("materials")
       .find(query)
-      .sort({ createdAt: -1 })
+      .sort(sort)
       .skip((page - 1) * pageSize)
       .limit(pageSize)
       .toArray();
