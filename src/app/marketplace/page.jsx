@@ -2,7 +2,7 @@
 
 "use client";
 
-import { useEffect, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import Image from "next/image";
 import Link from "next/link";
 import { FaHeart, FaSearch, FaFilter, FaStar, FaFilePdf, FaFileWord, FaFilePowerpoint, FaRegClock } from "react-icons/fa";
@@ -13,7 +13,7 @@ import { useMarketplaceMaterials } from "@/hooks/api/useMaterials";
 
 const SUBJECTS = ["Math", "Science", "Law", "Technology", "Business", "Medicine", "Arts"];
 
-export default function MarketPage() {
+function MarketPageContent() {
 	const router = useRouter();
 	const searchParams = useSearchParams();
 	const [searchQuery, setSearchQuery] = useState(searchParams.get("search") || "");
@@ -38,7 +38,7 @@ export default function MarketPage() {
 		if (usageRights) params.set("usageRights", usageRights);
 		if (currentPage > 1) params.set("page", currentPage);
 		router.replace(`/marketplace?${params.toString()}`);
-	}, [searchQuery, activeSubject, sortBy, minPrice, maxPrice, creator, usageRights, currentPage]);
+	}, [router, searchQuery, activeSubject, sortBy, minPrice, maxPrice, creator, usageRights, currentPage]);
 
 	const { data, isLoading, isError, error } = useMarketplaceMaterials({
 		search: searchQuery,
@@ -255,5 +255,13 @@ export default function MarketPage() {
 				</main>
 			</section>
 		</>
+	);
+}
+
+export default function MarketPage() {
+	return (
+		<Suspense fallback={<div className="min-h-screen bg-[#fffaf6]" />}>
+			<MarketPageContent />
+		</Suspense>
 	);
 }
