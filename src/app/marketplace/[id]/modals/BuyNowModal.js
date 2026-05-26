@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useMemo, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { FaTimes, FaCheckCircle } from "react-icons/fa";
 import Web3TransactionFallback from "@/components/web3/Web3TransactionFallback";
@@ -15,23 +15,21 @@ const SUPPORTED_ASSETS = [
 ];
 
 function useQuote(materialId, asset, price) {
-    const [loading, setLoading] = useState(false);
-    const [error, setError] = useState(null);
-    const [quote, setQuote] = useState(null);
+    const quote = useMemo(() => {
+        if (!materialId || !asset) return null;
 
-    useEffect(() => {
-        if (!materialId || !asset) return;
-        setLoading(true);
-        setError(null);
-        setTimeout(() => {
-            if (asset.code === "XLM") setQuote({ amount: price, asset: "XLM", fee: 0.1 });
-            else if (asset.code === "USDC") setQuote({ amount: (parseFloat(price) * 0.5).toFixed(2), asset: "USDC", fee: 0.05 });
-            else setQuote(null);
-            setLoading(false);
-        }, 700);
+        if (asset.code === "XLM") {
+            return { amount: price, asset: "XLM", fee: 0.1 };
+        }
+
+        if (asset.code === "USDC") {
+            return { amount: (parseFloat(price) * 0.5).toFixed(2), asset: "USDC", fee: 0.05 };
+        }
+
+        return null;
     }, [materialId, asset, price]);
 
-    return { loading, error, quote, refresh: () => setQuote(null) };
+    return { loading: false, error: null, quote, refresh: () => {} };
 }
 
 export default function BuyNowModal({ isOpen, onClose, price, materialId }) {

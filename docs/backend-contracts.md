@@ -40,6 +40,7 @@ Required fields:
 Optional fields:
 
 - `description`, `usageRights`, `thumbnailUrl`.
+- `fileType`, `fileSize`, `thumbnailType`, `thumbnailSize`.
 - `materialId`, `chainContractId`, `chainLedger`, `chainTxHash`, `syncStatus`.
 
 Indexes:
@@ -128,21 +129,53 @@ Response:
 
 Request:
 
-- `title`: required string.
-- `fileUrl`: required string.
-- `price`: optional non-negative number.
-- `visibility`: `private`, `public`, or `unlisted`.
-- `description`, `usageRights`, `thumbnailUrl`: optional strings.
+- `title`: required string, trimmed and collapsed to a single-spaced label.
+- `fileUrl`: required HTTP, HTTPS, or IPFS URL.
+- `price`: optional non-negative number; omitted values normalize to `0`.
+- `visibility`: optional `private`, `public`, or `unlisted`; omitted values normalize to `private`.
+- `description`, `usageRights`: optional strings normalized with trimmed outer whitespace.
+- `thumbnailUrl`: optional HTTP, HTTPS, or IPFS URL.
+- `fileType` / `fileSize`: optional upload metadata. Supported file types are PDF, DOC, DOCX, PPT, PPTX, and ZIP. Maximum file size is 10 MB when provided.
+- `thumbnailType` / `thumbnailSize`: optional upload metadata. Supported thumbnail types are JPEG, PNG, WebP, and GIF. Maximum thumbnail size is 5 MB when provided.
+- `materialId`, `chainContractId`, `chainLedger`, `chainTxHash`, `syncStatus`: optional chain linkage fields normalized when present.
 
 Response:
 
 - inserted material record with `id`.
+- validation failures return `400` with `{ error, details: { errors: [{ field, message, code }] } }`.
 
 ### `GET /api/materials`
 
 Response:
 
 - authenticated creator materials sorted newest first.
+
+### `GET /api/materials/download/[id]`
+
+Request:
+
+- `id`: material database `_id` or `materialId`.
+- Requires an authenticated session with a wallet address.
+
+Access rules:
+
+- If the material `price` is `0` or less, the file can be served without a purchase entitlement.
+- If the material is paid, the route checks `entitlement_cache` first.
+- Fresh cache hits allow or deny access immediately.
+- Missing or stale cache entries fall back to a chain-verification adapter when `ENTITLEMENT_VERIFIER_URL` is configured.
+- If the cache is missing or stale and no chain verifier is available, the route returns `503` with `stale_entitlement`.
+- A successful entitlement check returns a short-lived signed `downloadUrl`.
+- Opening the signed `downloadUrl` streams the protected file and keeps the raw storage URL hidden from the client.
+
+Response:
+
+- First response: `{ success, downloadUrl, title }`.
+- Signed access response: streams the protected file with `Content-Disposition: attachment`.
+- `401` for missing session.
+- `403` for an authenticated user without entitlement.
+- `404` for a missing material.
+- `502` for storage or proxy failures.
+- `503` for stale or unverifiable entitlement data.
 
 ### `GET /api/market-materials`
 

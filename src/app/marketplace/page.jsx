@@ -2,7 +2,7 @@
 
 "use client";
 
-import { useEffect, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import Image from "next/image";
 import Link from "next/link";
 import { FaHeart, FaSearch, FaFilter, FaStar, FaFilePdf, FaFileWord, FaFilePowerpoint, FaRegClock } from "react-icons/fa";
@@ -13,7 +13,7 @@ import { useMarketplaceMaterials } from "@/hooks/api/useMaterials";
 
 const SUBJECTS = ["Math", "Science", "Law", "Technology", "Business", "Medicine", "Arts"];
 
-export default function MarketPage() {
+function MarketPageContent() {
 	const router = useRouter();
 	const searchParams = useSearchParams();
 	const [searchQuery, setSearchQuery] = useState(searchParams.get("search") || "");
@@ -38,7 +38,7 @@ export default function MarketPage() {
 		if (usageRights) params.set("usageRights", usageRights);
 		if (currentPage > 1) params.set("page", currentPage);
 		router.replace(`/marketplace?${params.toString()}`);
-	}, [searchQuery, activeSubject, sortBy, minPrice, maxPrice, creator, usageRights, currentPage]);
+	}, [router, searchQuery, activeSubject, sortBy, minPrice, maxPrice, creator, usageRights, currentPage]);
 
 	const { data, isLoading, isError, error } = useMarketplaceMaterials({
 		search: searchQuery,
@@ -121,7 +121,13 @@ export default function MarketPage() {
 						<div className="relative z-10 w-full md:w-2/3">
 							<h1 className="text-xl md:text-2xl font-bold text-gray-900 mb-2">Academic Marketplace</h1>
 							<p className="text-gray-600 text-sm mb-4">Search by title, description, and author. Then narrow results by subject and price sorting.</p>
-							<button className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-semibold transition-all shadow-sm">Share Your Notes</button>
+							<button
+								type="button"
+								aria-label="Share your notes"
+								className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-semibold transition-all shadow-sm"
+							>
+								Share Your Notes
+							</button>
 						</div>
 					</motion.div>
 
@@ -249,5 +255,13 @@ export default function MarketPage() {
 				</main>
 			</section>
 		</>
+	);
+}
+
+export default function MarketPage() {
+	return (
+		<Suspense fallback={<div className="min-h-screen bg-[#fffaf6]" />}>
+			<MarketPageContent />
+		</Suspense>
 	);
 }
