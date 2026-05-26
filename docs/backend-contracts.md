@@ -150,6 +150,33 @@ Response:
 
 - authenticated creator materials sorted newest first.
 
+### `GET /api/materials/download/[id]`
+
+Request:
+
+- `id`: material database `_id` or `materialId`.
+- Requires an authenticated session with a wallet address.
+
+Access rules:
+
+- If the material `price` is `0` or less, the file can be served without a purchase entitlement.
+- If the material is paid, the route checks `entitlement_cache` first.
+- Fresh cache hits allow or deny access immediately.
+- Missing or stale cache entries fall back to a chain-verification adapter when `ENTITLEMENT_VERIFIER_URL` is configured.
+- If the cache is missing or stale and no chain verifier is available, the route returns `503` with `stale_entitlement`.
+- A successful entitlement check returns a short-lived signed `downloadUrl`.
+- Opening the signed `downloadUrl` streams the protected file and keeps the raw storage URL hidden from the client.
+
+Response:
+
+- First response: `{ success, downloadUrl, title }`.
+- Signed access response: streams the protected file with `Content-Disposition: attachment`.
+- `401` for missing session.
+- `403` for an authenticated user without entitlement.
+- `404` for a missing material.
+- `502` for storage or proxy failures.
+- `503` for stale or unverifiable entitlement data.
+
 ### `GET /api/market-materials`
 
 Request:
