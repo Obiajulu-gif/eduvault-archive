@@ -32,24 +32,28 @@ function validationError(errors, message = "Invalid material payload") {
   return new ValidationError(message, { errors });
 }
 
-export function sanitizeString(value, { maxLength = 5000 } = {}) {
+function sanitizeText(value, { maxLength = 5000 } = {}) {
   if (value === undefined || value === null) return "";
   return String(value).replace(CONTROL_CHARS, "").trim().slice(0, maxLength);
+}
+
+export function sanitizeString(value, options) {
+  return sanitizeText(value, options);
 }
 
 export function sanitizeObject(input, fieldLimits = {}) {
   return Object.fromEntries(
     Object.entries(input || {}).map(([key, value]) => [
-      sanitizeString(key, { maxLength: 80 }),
+      sanitizeText(key, { maxLength: 80 }),
       typeof value === "string"
-        ? sanitizeString(value, { maxLength: fieldLimits[key] || 5000 })
+        ? sanitizeText(value, { maxLength: fieldLimits[key] || 5000 })
         : value,
     ])
   );
 }
 
 export function validateEmail(email) {
-  const clean = sanitizeString(email, { maxLength: 254 }).toLowerCase();
+  const clean = sanitizeText(email, { maxLength: 254 }).toLowerCase();
   if (!EMAIL_PATTERN.test(clean)) {
     throw new ValidationError("Invalid email address", { field: "email" });
   }
@@ -57,7 +61,7 @@ export function validateEmail(email) {
 }
 
 export function normalizeWalletAddress(address) {
-  const clean = sanitizeString(address, { maxLength: 80 });
+  const clean = sanitizeText(address, { maxLength: 80 });
   if (!clean) return null;
   if (!EVM_ADDRESS_PATTERN.test(clean) && !STELLAR_ADDRESS_PATTERN.test(clean)) {
     throw new ValidationError("Invalid wallet address", { field: "walletAddress" });
@@ -66,7 +70,7 @@ export function normalizeWalletAddress(address) {
 }
 
 export function validateProfilePayload(body) {
-  const fullName = sanitizeString(body?.fullName, { maxLength: 120 });
+  const fullName = sanitizeText(body?.fullName, { maxLength: 120 });
   if (!fullName) {
     throw new ValidationError("Missing fullName", { field: "fullName" });
   }
@@ -77,9 +81,9 @@ export function validateProfilePayload(body) {
   return {
     fullName,
     email,
-    institution: sanitizeString(body?.institution, { maxLength: 160 }) || null,
-    country: sanitizeString(body?.country, { maxLength: 80 }) || null,
-    bio: sanitizeString(body?.bio, { maxLength: 1000 }) || null,
+    institution: sanitizeText(body?.institution, { maxLength: 160 }) || null,
+    country: sanitizeText(body?.country, { maxLength: 80 }) || null,
+    bio: sanitizeText(body?.bio, { maxLength: 1000 }) || null,
     walletAddress,
     walletAddressLower: walletAddress ? walletAddress.toLowerCase() : null,
   };
@@ -95,16 +99,12 @@ export function parsePagination(searchParams, { defaultPageSize = 12, maxPageSiz
 }
 
 export function escapeRegExp(value) {
-  return sanitizeString(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-function normalizeWhitespace(value) {
-  return sanitizeString(value).replace(/\s+/g, " ");
+  return sanitizeText(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function normalizeMaybeString(value, { maxLength, collapseWhitespace = true, lowerCase = false } = {}) {
   if (value === undefined || value === null) return null;
-  const base = sanitizeString(value, { maxLength });
+  const base = sanitizeText(value, { maxLength });
   if (!base) return null;
   const normalized = collapseWhitespace ? base.replace(/\s+/g, " ") : base;
   return lowerCase ? normalized.toLowerCase() : normalized;
@@ -134,20 +134,15 @@ function normalizeNumericField(value, { field, errors, required = false } = {}) 
   if (value === undefined || value === null || value === "") {
     if (required) addValidationError(errors, field, `${field} is required`, "required");
     return null;
-export function validateMaterialPayload(body) {
-  const title = sanitizeString(body?.title, { maxLength: 160 });
-  const storageKey = sanitizeString(body?.storageKey || body?.fileUrl, { maxLength: 2048 });
-  if (!title || !storageKey) {
-    throw new ValidationError("Missing required material fields (title or storageKey)");
   }
 
-  const price = Number(value);
-  if (!Number.isFinite(price) || price < 0) {
+  const number = Number(value);
+  if (!Number.isFinite(number) || number < 0) {
     addValidationError(errors, field, `${field} must be a non-negative number`, "invalid_number");
     return null;
   }
 
-  return price;
+  return number;
 }
 
 function normalizeFileMetadata(body, { fieldPrefix, errors }) {
@@ -180,35 +175,18 @@ function normalizeFileMetadata(body, { fieldPrefix, errors }) {
   const maxBytes = fieldPrefix === "thumbnail" ? THUMBNAIL_FILE_MAX_BYTES : MATERIAL_FILE_MAX_BYTES;
 
   if (!allowedTypes.has(typeValue)) {
-    addValidationError(
-      errors,
-      typeField,
-      `${fieldPrefix} type is not supported`,
-      "unsupported_file_type"
-    );
+    addValidationError(errors, typeField, `${fieldPrefix} type is not supported`, "unsupported_file_type");
     return {};
   }
 
   if (size > maxBytes) {
-    addValidationError(
-      errors,
-      sizeField,
-      `${fieldPrefix} is too large`,
-      "file_too_large"
-    );
+    addValidationError(errors, sizeField, `${fieldPrefix} is too large`, "file_too_large");
     return {};
   }
 
   return {
     [typeField]: typeValue,
     [sizeField]: size,
-    title,
-    description: sanitizeString(body?.description, { maxLength: 5000 }),
-    price,
-    usageRights: sanitizeString(body?.usageRights, { maxLength: 1000 }),
-    visibility,
-    thumbnailUrl: sanitizeString(body?.thumbnailUrl, { maxLength: 2048 }) || null,
-    storageKey,
   };
 }
 
@@ -263,9 +241,9 @@ function normalizeMaterialPayload(body, { partial = false } = {}) {
   }
 
   const payload = {
-    ...(title ? { title: normalizeWhitespace(title) } : {}),
+    ...(title ? { title: sanitizeText(title, { maxLength: 160 }).replace(/\s+/g, " ") } : {}),
     ...(description !== null ? { description } : {}),
-    ...(usageRights !== null ? { usageRights: normalizeWhitespace(usageRights) } : {}),
+    ...(usageRights !== null ? { usageRights: sanitizeText(usageRights, { maxLength: 1000 }).replace(/\s+/g, " ") } : {}),
     ...(visibility ? { visibility } : {}),
     ...(price !== null ? { price } : {}),
     ...(fileUrl ? { fileUrl } : {}),
