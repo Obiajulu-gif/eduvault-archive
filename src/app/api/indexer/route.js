@@ -21,6 +21,8 @@ import {
   runIndexerBatch,
   createJsonRpcEventSource,
 } from '@/lib/indexer/stellarIndexer';
+import { auditLog } from "@/lib/api/audit";
+import { checkRateLimit } from "@/lib/api/rateLimit";
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60; // seconds — allow up to 60s for a large batch
@@ -34,6 +36,17 @@ const STELLAR_RPC_URL =
 const INDEXER_SECRET = process.env.INDEXER_SECRET ?? '';
 const BATCH_LIMIT = 100;
 
+const INDEXER_RATE_LIMIT = { limit: 10, windowMs: 60_000 };
+
+function clientKey(request) {
+  const forwardedFor = request.headers.get("x-forwarded-for");
+  return (
+    forwardedFor?.split(",")[0]?.trim() ||
+    request.headers.get("x-real-ip") ||
+    "local"
+  );
+}
+
 /**
  * Validate the caller is the authorised scheduler.
  * Accepts the secret via:
@@ -41,6 +54,35 @@ const BATCH_LIMIT = 100;
  *   - `x-indexer-secret: <secret>` header (legacy)
  */
 function isAuthorised(request) {
+  // Apply rate limiting for unauthorised requests to prevent scanning
+  if (INDEXER_SECRET) {
+    const authHeader = request.headers.get('authorization') ?? '';
+    const legacyHeader = request.headers.get('x-indexer-secret') ?? '';
+
+    const isAuth = authHeader === `Bearer ${INDEXER_SECRET}` ||
+                   legacyHeader === INDEXER_SECRET;
+
+    if (!isAuth) {
+      const rateLimitKey = `indexer:unauthorized:${clientKey(request)}`;
+      const rateLimit = checkRateLimit(rateLimitKey, INDEXER_RATE_LIMIT);
+
+      if (!rateLimit.allowed) {
+        auditLog({
+          event: "rate_limit_blocked",
+          route: "indexer",
+          method: "POST",
+          status: 429,
+          clientKey: clientKey(request),
+          reason: "unauthorized_scan",
+        });
+        return NextResponse.json(
+          { error: "Too many requests", retryAfter: rateLimit.retryAfter },
+          { status: 429 }
+        );
+      }
+    }
+  }
+
   if (!INDEXER_SECRET) return true; // secret not configured → open (dev only)
 
   const authHeader = request.headers.get('authorization') ?? '';
@@ -54,6 +96,13 @@ function isAuthorised(request) {
 
 export async function POST(request) {
   if (!isAuthorised(request)) {
+    auditLog({
+      event: "unauthorized_access",
+      route: "indexer",
+      method: "POST",
+      status: 401,
+      clientKey: clientKey(request),
+    });
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 

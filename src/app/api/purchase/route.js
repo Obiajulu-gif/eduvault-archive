@@ -3,6 +3,20 @@ export const dynamic = "force-dynamic";
 import { getDb } from '@/lib/mongodb'
 import { NextResponse } from 'next/server'
 import { verifyDashboardToken } from "@/lib/auth/session";
+import { auditLog } from "@/lib/api/audit";
+import { checkRateLimit } from "@/lib/api/rateLimit";
+import { captureException } from "@/lib/sentry";
+
+const PURCHASE_RATE_LIMIT = { limit: 20, windowMs: 60_000 };
+
+function clientKey(request) {
+  const forwardedFor = request.headers.get("x-forwarded-for");
+  return (
+    forwardedFor?.split(",")[0]?.trim() ||
+    request.headers.get("x-real-ip") ||
+    "local"
+  );
+}
 
 async function getUserFromCookie(request) {
   const cookieHeader = request.headers.get("cookie") || "";
@@ -13,6 +27,24 @@ async function getUserFromCookie(request) {
 }
 
 export async function GET(req) {
+  // Apply rate limiting
+  const rateLimitKey = `purchase:GET:${clientKey(req)}`;
+  const rateLimit = checkRateLimit(rateLimitKey, PURCHASE_RATE_LIMIT);
+
+  if (!rateLimit.allowed) {
+    auditLog({
+      event: "rate_limit_blocked",
+      route: "purchase",
+      method: "GET",
+      status: 429,
+      clientKey: clientKey(req),
+    });
+    return NextResponse.json(
+      { error: "Too many requests", retryAfter: rateLimit.retryAfter },
+      { status: 429 }
+    );
+  }
+
   try {
     const verification = await getUserFromCookie(req);
     if (!verification || !verification.valid) {
@@ -31,11 +63,30 @@ export async function GET(req) {
     return NextResponse.json(purchases);
   } catch (error) {
     console.error('Purchase List Error:', error);
+    captureException(error, { route: "purchase", method: "GET" });
     return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });
   }
 }
 
 export async function POST(req) {
+  // Apply rate limiting
+  const rateLimitKey = `purchase:POST:${clientKey(req)}`;
+  const rateLimit = checkRateLimit(rateLimitKey, PURCHASE_RATE_LIMIT);
+
+  if (!rateLimit.allowed) {
+    auditLog({
+      event: "rate_limit_blocked",
+      route: "purchase",
+      method: "POST",
+      status: 429,
+      clientKey: clientKey(req),
+    });
+    return NextResponse.json(
+      { error: "Too many requests", retryAfter: rateLimit.retryAfter },
+      { status: 429 }
+    );
+  }
+
   try {
     const { buyerAddress, materialId, transactionHash } = await req.json()
 
@@ -83,6 +134,7 @@ export async function POST(req) {
     )
   } catch (error) {
     console.error('Purchase Error:', error)
+    captureException(error, { route: "purchase", method: "POST" });
     return NextResponse.json(
       { error: 'Internal Server Error' },
       { status: 500 }
