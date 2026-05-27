@@ -51,6 +51,18 @@ jobs:
         working-directory: soroban
         run: cargo build --target wasm32v1-none --release
 
+      - name: Deploy Soroban contracts to testnet
+        if: ${{ hashFiles('soroban/**/Cargo.toml') != '' }}
+        run: node scripts/deploy-soroban-contracts.mjs
+
+      - name: Validate deployment
+        run: |
+          if [ -z "$NEXT_PUBLIC_MATERIAL_REGISTRY_CONTRACT_ID" ] || [ -z "$NEXT_PUBLIC_PURCHASE_MANAGER_CONTRACT_ID" ]; then
+            echo "Deployment validation failed: Contract IDs are missing."
+            exit 1
+          fi
+          echo "Deployment validation passed: Contract IDs are set."
+
   solidity:
     name: Archived Solidity Prototype Checks
     if: ${{ hashFiles('archive/legacy-evm/contracts/**/*.sol') != '' }}

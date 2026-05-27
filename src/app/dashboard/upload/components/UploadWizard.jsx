@@ -210,6 +210,24 @@ export default function UploadWizard() {
           throw new Error("Invalid token ID in receipt");
         }
 
+        const materialData = {
+          userAddress: address,
+          tokenId,
+          txHash: receipt.transactionHash,
+          chainId: celoSepolia.id,
+          metadataUrl: uploadData.metadata,
+          fileUrl: uploadData.fileUrl,
+          thumbnailUrl: uploadData.imgUrl,
+          price,
+          visibility,
+        };
+
+        fetch("/api/persist-material", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ workflowId, materialData }),
+        });
+
         setMintResult({
           tokenId,
           txHash: receipt.transactionHash,

@@ -225,3 +225,36 @@ export async function checkIdempotency(type, userAddress, idempotencyKey) {
     },
   });
 }
+
+/**
+ * Persist a canonical material record in MongoDB after a confirmed mint
+ * @param {string} workflowId - Workflow ID
+ * @param {Object} materialData - Material data
+ * @returns {Promise<Object>} Persisted material record
+ */
+export async function persistMaterialRecord(workflowId, materialData) {
+  const db = await getDb();
+  const collection = db.collection(COLLECTIONS.materials);
+
+  const materialRecord = applyTimestamps({
+    userAddress: materialData.userAddress,
+    tokenId: materialData.tokenId,
+    txHash: materialData.txHash,
+    chainId: materialData.chainId,
+    metadataUrl: materialData.metadataUrl,
+    fileUrl: materialData.fileUrl,
+    thumbnailUrl: materialData.thumbnailUrl,
+    price: materialData.price,
+    visibility: materialData.visibility,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  });
+
+  await collection.insertOne(materialRecord);
+  await confirmWorkflow(workflowId, {
+    txHash: materialData.txHash,
+    tokenId: materialData.tokenId,
+  });
+
+  return materialRecord;
+}

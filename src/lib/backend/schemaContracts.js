@@ -16,6 +16,8 @@ export const REQUIRED_INDEXES = {
     { keys: { userAddress: 1, createdAt: -1 } },
     { keys: { visibility: 1, createdAt: -1 } },
     { keys: { materialId: 1 }, options: { sparse: true } },
+    { keys: { tokenId: 1 }, options: { unique: true, sparse: true } },
+    { keys: { txHash: 1 }, options: { unique: true, sparse: true } },
   ],
   purchases: [
     { keys: { buyerAddress: 1, createdAt: -1 } },
