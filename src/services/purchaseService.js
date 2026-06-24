@@ -7,7 +7,11 @@ export const purchaseService = {
 
   checkEntitlement: async (materialId, buyerAddress) => {
     const params = new URLSearchParams({ materialId, buyerAddress });
-    return apiClient(`/api/entitlements?${params.toString()}`);
+    return apiClient(`/api/materials/access?${params.toString()}`);
+  },
+
+  startAccessRequest: async (accessRequest) => {
+    return apiClient('/api/materials/access', { body: accessRequest });
   },
 
   checkBatchEntitlements: async (materialIds) => {

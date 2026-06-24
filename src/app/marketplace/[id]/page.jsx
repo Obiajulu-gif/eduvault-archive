@@ -3,7 +3,7 @@
 import Image from "next/image";
 import Link from "next/link";
 import { useState, useEffect } from "react";
-import { FaHeart, FaCheckCircle } from "react-icons/fa";
+import { FaHeart, FaCheckCircle, FaClock, FaExclamationTriangle } from "react-icons/fa";
 import { motion } from "framer-motion";
 import Navbar from "@/components/Navbar";
 import BuyNowModal from "./modals/BuyNowModal";
@@ -62,6 +62,72 @@ function PreviewStat({ label, value }) {
 	);
 }
 
+function getAccessCopy(status, isLoading) {
+	if (isLoading) {
+		return {
+			label: "Checking access",
+			message: "We are checking your payment and entitlement status.",
+			className: "border-slate-200 bg-slate-50 text-slate-700",
+			icon: FaClock,
+		};
+	}
+
+	switch (status) {
+		case "active":
+			return {
+				label: "Access granted",
+				message: "Payment is complete. This material is unlocked for your wallet.",
+				className: "border-emerald-200 bg-emerald-50 text-emerald-800",
+				icon: FaCheckCircle,
+			};
+		case "pending":
+			return {
+				label: "Payment pending",
+				message: "Your access request started, but payment still needs to be completed.",
+				className: "border-amber-200 bg-amber-50 text-amber-800",
+				icon: FaClock,
+			};
+		case "payment_failed":
+			return {
+				label: "Payment incomplete",
+				message: "The previous payment attempt did not complete, so access is still locked.",
+				className: "border-rose-200 bg-rose-50 text-rose-800",
+				icon: FaExclamationTriangle,
+			};
+		case "wallet_required":
+			return {
+				label: "Wallet required",
+				message: "Connect your wallet to request access and complete payment.",
+				className: "border-blue-200 bg-blue-50 text-blue-800",
+				icon: FaClock,
+			};
+		default:
+			return {
+				label: "Payment required",
+				message: "Start an access request from this page, then complete payment to unlock the file.",
+				className: "border-slate-200 bg-white text-slate-700",
+				icon: FaClock,
+			};
+	}
+}
+
+function AccessStatusPanel({ status, isLoading }) {
+	const copy = getAccessCopy(status, isLoading);
+	const Icon = copy.icon;
+
+	return (
+		<div className={`rounded-2xl border px-4 py-3 text-sm ${copy.className}`}>
+			<div className="flex items-start gap-3">
+				<Icon className="mt-0.5 shrink-0" />
+				<div>
+					<p className="font-semibold">{copy.label}</p>
+					<p className="mt-1 leading-5">{copy.message}</p>
+				</div>
+			</div>
+		</div>
+	);
+}
+
 export default function MaterialDetailsPage() {
 	const params = useParams();
 	const id = String(params.id);
@@ -69,8 +135,41 @@ export default function MaterialDetailsPage() {
 	const materialQuery = useMaterialDetail(id);
 	const entitlementQuery = useEntitlement(id);
 	const { address } = useAccount();
+	const [downloadError, setDownloadError] = useState(null);
+	const [isDownloading, setIsDownloading] = useState(false);
 
-	const isOwned = Boolean(entitlementQuery.data?.owned || entitlementQuery.data?.hasAccess);
+	const accessStatus = !address
+		? "wallet_required"
+		: entitlementQuery.data?.status || (entitlementQuery.isLoading ? "checking" : "not_purchased");
+	const isOwned = accessStatus === "active" || Boolean(entitlementQuery.data?.owned || entitlementQuery.data?.hasAccess);
+
+	const handleDownload = async () => {
+		if (!address) {
+			setShowBuyModal(true);
+			return;
+		}
+
+		setIsDownloading(true);
+		setDownloadError(null);
+
+		try {
+			const params = new URLSearchParams({ materialId: id, buyerAddress: address });
+			const response = await fetch(`/api/download?${params.toString()}`);
+			const payload = await response.json();
+
+			if (!response.ok) {
+				throw new Error(payload?.detail || payload?.error || "Unable to request material access.");
+			}
+
+			if (payload.fileUrl) {
+				window.open(payload.fileUrl, "_blank", "noopener,noreferrer");
+			}
+		} catch (err) {
+			setDownloadError(err instanceof Error ? err.message : "Unable to request material access.");
+		} finally {
+			setIsDownloading(false);
+		}
+	};
 
 	useEffect(() => {
 		if (materialQuery.data) {
@@ -169,15 +268,21 @@ export default function MaterialDetailsPage() {
 										</span>
 									</div>
 
+									<AccessStatusPanel
+										status={accessStatus}
+										isLoading={Boolean(address && entitlementQuery.isLoading)}
+									/>
+
 									{/* Buttons */}
 									<div className="flex flex-wrap items-center gap-3 mt-4">
 										<SaveMaterialButton material={material} variant="detail" />
 										{isOwned ? (
 											<button 
 												className="px-8 py-2.5 bg-green-600 hover:bg-green-700 text-white font-semibold rounded-md transition flex items-center gap-2 shadow-sm focus-visible:ring-2 focus-visible:ring-blue-500"
-												onClick={() => window.open(material.downloadUrl || '#', '_blank')}
+												onClick={handleDownload}
+												disabled={isDownloading}
 											>
-												<FaCheckCircle /> Download Material
+												<FaCheckCircle /> {isDownloading ? "Preparing..." : "Download Material"}
 											</button>
 										) : (
 											<>
@@ -188,11 +293,15 @@ export default function MaterialDetailsPage() {
 													onClick={() => setShowBuyModal(true)}
 													className="px-6 py-2 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-md transition focus-visible:ring-2 focus-visible:ring-blue-500"
 												>
-													Buy Now!
+													{accessStatus === "pending" ? "Complete Payment" : "Request Access"}
 												</button>
 											</>
 										)}
 									</div>
+
+									{downloadError ? (
+										<p className="text-sm text-red-600">{downloadError}</p>
+									) : null}
 
 									{/* Likes */}
 									<div className="flex items-center gap-2 text-sm text-gray-500 mt-3">
@@ -344,6 +453,7 @@ export default function MaterialDetailsPage() {
 						materialId={id}
 						materialTitle={materialQuery.data.title}
 						materialCreator={materialQuery.data.author?.name || materialQuery.data.creator || "Unknown"}
+						onAccessUpdated={() => entitlementQuery.refetch()}
 					/>
 				</Web3ErrorBoundary>
 			)}

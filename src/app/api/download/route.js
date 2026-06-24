@@ -21,6 +21,7 @@ import { NextResponse } from 'next/server';
 import { verifyEntitlement } from '@/lib/entitlement';
 import { getDb } from '@/lib/mongodb';
 import { getIpfsUrl } from '@/lib/config/chain';
+import { ObjectId } from 'mongodb';
 
 export const dynamic = 'force-dynamic';
 
@@ -68,6 +69,9 @@ export async function GET(request) {
   try {
     const db = await getDb();
     material = await db.collection('materials').findOne({ materialId });
+    if (!material && ObjectId.isValid(materialId)) {
+      material = await db.collection('materials').findOne({ _id: new ObjectId(materialId) });
+    }
   } catch (err) {
     console.error('[download] DB error fetching material:', err);
     return NextResponse.json({ error: 'Material lookup failed' }, { status: 503 });
@@ -77,7 +81,7 @@ export async function GET(request) {
     return NextResponse.json({ error: 'Material not found' }, { status: 404 });
   }
 
-  const cid = material.ipfsCid ?? material.cid ?? material.fileHash ?? '';
+  const cid = material.ipfsCid ?? material.cid ?? material.fileHash ?? material.storageKey ?? material.fileUrl ?? '';
 
   if (!cid) {
     return NextResponse.json(

@@ -26,9 +26,32 @@ export function useCreatePurchase() {
       queryClient.invalidateQueries({ queryKey: queryKeys.purchases.all });
       // Invalidate specific entitlement check if materialId is known
       if (variables.materialId) {
-         queryClient.invalidateQueries({ 
-           queryKey: ['purchases', 'entitlement', variables.materialId] 
-         });
+        queryClient.invalidateQueries({
+          predicate: (query) =>
+            Array.isArray(query.queryKey) &&
+            query.queryKey[0] === 'purchases' &&
+            query.queryKey[1] === 'entitlement' &&
+            query.queryKey[2] === variables.materialId,
+        });
+      }
+    },
+  });
+}
+
+export function useStartAccessRequest() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: purchaseService.startAccessRequest,
+    onSuccess: (_data, variables) => {
+      if (variables.materialId) {
+        queryClient.invalidateQueries({
+          predicate: (query) =>
+            Array.isArray(query.queryKey) &&
+            query.queryKey[0] === 'purchases' &&
+            query.queryKey[1] === 'entitlement' &&
+            query.queryKey[2] === variables.materialId,
+        });
       }
     },
   });

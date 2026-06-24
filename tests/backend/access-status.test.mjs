@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { accessStatus } from '../../src/app/api/materials/access/route.js';
+import { createPendingAccessRequest } from '../../src/lib/purchases/access.js';
 
 function createCollection(records = {}) {
   const map = new Map(Object.entries(records));
@@ -16,7 +17,19 @@ function createCollection(records = {}) {
       if (query.materialId) return map.get(query.materialId) || null;
       return null;
     },
-    async updateOne() {},
+    async updateOne(query, update, options = {}) {
+      const key = query.materialId && query.buyerAddress
+        ? `${query.materialId}:${query.buyerAddress}`
+        : query.materialId;
+      const existing = map.get(key);
+      if (!existing && !options.upsert) return { matchedCount: 0, upsertedCount: 0 };
+      map.set(key, {
+        ...(existing || {}),
+        ...(update.$setOnInsert || {}),
+        ...(update.$set || {}),
+      });
+      return { matchedCount: existing ? 1 : 0, upsertedCount: existing ? 0 : 1 };
+    },
   };
 }
 
@@ -54,4 +67,33 @@ test('accessStatus returns active for settled purchase', async () => {
 
   const res = await accessStatus(db, 'material-2', 'GBUYER');
   assert.equal(res.status, 'active');
+});
+
+test('accessStatus returns active for confirmed purchase', async () => {
+  const db = createDb({
+    materials: { 'material-3': { materialId: 'material-3' } },
+    purchases: { 'material-3:gbuyer': { materialId: 'material-3', buyerAddress: 'gbuyer', status: 'confirmed' } },
+  });
+
+  const res = await accessStatus(db, 'material-3', 'GBUYER');
+  assert.equal(res.status, 'active');
+  assert.equal(res.hasAccess, true);
+});
+
+test('createPendingAccessRequest records pending without granting access', async () => {
+  const db = createDb({
+    materials: { 'material-4': { materialId: 'material-4', price: 5, visibility: 'public' } },
+  });
+
+  const res = await createPendingAccessRequest(db, 'material-4', 'GBUYER', {
+    amount: '5.00',
+    asset: 'XLM',
+  });
+
+  assert.equal(res.status, 'pending');
+  assert.equal(res.hasAccess, false);
+
+  const status = await accessStatus(db, 'material-4', 'GBUYER');
+  assert.equal(status.status, 'pending');
+  assert.equal(status.hasAccess, false);
 });

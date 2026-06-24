@@ -1,5 +1,6 @@
 import { getDb } from '@/lib/mongodb';
 import { PURCHASE_MANAGER_CONTRACT_ID, STELLAR_RPC_URL } from '@/lib/config/chain';
+import { isCompletedPurchaseStatus, normalizeBuyerAddress } from '@/lib/purchases/access';
 
 async function getCachedEntitlement(db, materialId, buyerAddress) {
   return db.collection('entitlement_cache').findOne({
@@ -71,7 +72,7 @@ export async function verifyEntitlement(materialId, buyerAddress) {
   }
 
   const db = await getDb();
-  const normalised = buyerAddress.toLowerCase();
+  const normalised = normalizeBuyerAddress(buyerAddress);
 
   const cached = await getCachedEntitlement(db, materialId, normalised);
   if (cached) {
@@ -81,10 +82,9 @@ export async function verifyEntitlement(materialId, buyerAddress) {
   const purchase = await db.collection('purchases').findOne({
     materialId,
     buyerAddress: normalised,
-    status: 'settled',
   });
 
-  if (purchase) {
+  if (purchase && isCompletedPurchaseStatus(purchase.status)) {
     await setCachedEntitlement(db, materialId, normalised, true);
     return { hasAccess: true, source: 'purchases-db' };
   }

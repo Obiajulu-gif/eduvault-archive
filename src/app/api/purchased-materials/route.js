@@ -6,6 +6,7 @@ import { ObjectId } from "mongodb";
 import { withApiHardening } from "@/lib/api/hardening";
 import { auditLog } from "@/lib/api/audit";
 import { getUserFromCookie } from "@/lib/api/auth";
+import { COMPLETED_PURCHASE_STATUSES, normalizeBuyerAddress } from "@/lib/purchases/access";
 
 /**
  * GET /api/purchased-materials
@@ -23,7 +24,7 @@ export async function GET(request) {
         return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
       }
 
-      const buyerAddress = user.walletAddress || user.address || user.id;
+      const buyerAddress = normalizeBuyerAddress(user.walletAddress || user.address || user.id);
       if (!buyerAddress) {
         return NextResponse.json({ error: "No wallet address on account" }, { status: 400 });
       }
@@ -33,7 +34,7 @@ export async function GET(request) {
       // Fetch all confirmed purchases for this buyer
       const purchases = await db
         .collection("purchases")
-        .find({ buyerAddress, status: "confirmed" })
+        .find({ buyerAddress, status: { $in: [...COMPLETED_PURCHASE_STATUSES] } })
         .sort({ purchasedAt: -1 })
         .toArray();
 

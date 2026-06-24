@@ -4,6 +4,8 @@ import { getDb } from "@/lib/mongodb";
 import { NextResponse } from "next/server";
 import { ObjectId } from "mongodb";
 import { getUserFromCookie } from "@/lib/api/auth";
+import { getIpfsUrl } from "@/lib/config/chain";
+import { isCompletedPurchaseStatus, normalizeBuyerAddress } from "@/lib/purchases/access";
 
 export async function GET(req, { params }) {
   try {
@@ -17,7 +19,7 @@ export async function GET(req, { params }) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    const userAddress = user.walletAddress || user.address || user.id;
+    const userAddress = normalizeBuyerAddress(user.walletAddress || user.address || user.id);
     const db = await getDb();
 
     const material = await db
@@ -28,7 +30,9 @@ export async function GET(req, { params }) {
       return NextResponse.json({ error: "Material not found" }, { status: 404 });
     }
 
-    const isOwner = material.userAddress === userAddress || material.ownerAddress === userAddress;
+    const isOwner =
+      normalizeBuyerAddress(material.userAddress) === userAddress ||
+      normalizeBuyerAddress(material.ownerAddress) === userAddress;
 
     let hasAccess = isOwner;
 
@@ -37,9 +41,8 @@ export async function GET(req, { params }) {
         const entitlement = await db.collection("purchases").findOne({
           buyerAddress: userAddress,
           materialId: id,
-          status: "confirmed",
         });
-        if (entitlement) {
+        if (entitlement && isCompletedPurchaseStatus(entitlement.status)) {
           hasAccess = true;
         }
       } else if (material.visibility === "public") {

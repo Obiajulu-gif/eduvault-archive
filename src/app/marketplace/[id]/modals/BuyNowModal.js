@@ -7,9 +7,8 @@ import Image from "next/image";
 import { useAccount } from "wagmi";
 import CheckoutReceiptModal from "../../../../../components/modals/CheckoutReceiptModal";
 import ConnectWalletModal from "./ConnectWalletModal";
-import Web3TransactionFallback from "@/components/web3/Web3TransactionFallback";
 import TransactionStatusPanel from "@/components/transactions/TransactionStatusPanel";
-import { useCreatePurchase } from "@/hooks/api/usePurchases";
+import { useCreatePurchase, useStartAccessRequest } from "@/hooks/api/usePurchases";
 import { ACCEPTED_ASSET, getExplorerTxUrl } from "@/lib/config/chain";
 import { TransactionStatus } from "@/lib/transactions/transaction";
 import { useTransactionCenter } from "@/providers/TransactionProvider";
@@ -38,14 +37,16 @@ function useQuote(materialId, asset, price) {
       if (Number.isNaN(parsedPrice)) {
         setError(new Error("Invalid material price"));
         setQuote(null);
-      } else if (asset.code === "XLM") {
-        setQuote({ amount: parsedPrice.toFixed(2), asset: "XLM", fee: "0.10" });
       } else {
-        setQuote({ amount: parsedPrice.toFixed(2), asset: asset.code, fee: "0.05" });
+        setQuote({
+          amount: parsedPrice.toFixed(2),
+          asset: asset.code,
+          fee: asset.code === "XLM" ? "0.10" : "0.05",
+        });
       }
 
       setLoading(false);
-    }, 450);
+    }, 350);
 
     return () => {
       window.clearTimeout(loadingTimer);
@@ -72,23 +73,21 @@ export default function BuyNowModal({
   materialId,
   materialTitle,
   materialCreator,
+  onAccessUpdated,
 }) {
   const { address } = useAccount();
   const createPurchaseMutation = useCreatePurchase();
+  const startAccessRequestMutation = useStartAccessRequest();
   const [showWallet, setShowWallet] = useState(false);
   const [email, setEmail] = useState("");
-  const [purchaseStatus, setPurchaseStatus] = useState("idle"); // idle | pending | success | failed
-  const [web3Error, setWeb3Error] = useState(null);
-  const [selectedAsset, setSelectedAsset] = useState(SUPPORTED_ASSETS[0]);
-  const [purchaseResult, setPurchaseResult] = useState(null);
-  const { loading: quoteLoading, error: quoteError, quote, refresh } = useQuote(materialId, selectedAsset, price);
   const [selectedAsset, setSelectedAsset] = useState(SUPPORTED_ASSETS[0]);
   const [receiptStatus, setReceiptStatus] = useState("idle");
   const [receipt, setReceipt] = useState(null);
   const [checkoutError, setCheckoutError] = useState(null);
   const [downloadError, setDownloadError] = useState(null);
   const [isDownloading, setIsDownloading] = useState(false);
-
+  const { activeTransaction, beginTransaction, markStatus, confirmTransaction, failTransaction, clearTransaction } =
+    useTransactionCenter();
   const { loading: quoteLoading, error: quoteError, quote, refresh } = useQuote(
     materialId,
     selectedAsset,
@@ -114,7 +113,7 @@ export default function BuyNowModal({
   const handleClose = () => {
     resetCheckout();
     onClose();
-  }
+  };
 
   const handleDownload = async () => {
     if (!materialId || !address) return;
@@ -144,16 +143,18 @@ export default function BuyNowModal({
   const handlePay = async () => {
     if (!address) {
       setShowWallet(true);
+      beginTransaction({
+        scope: "purchase",
+        title: "Wallet required",
+        message: "Connect your wallet to request access and complete payment.",
+      });
       return;
     }
 
-    setPurchaseStatus("pending");
-    setWeb3Error(null);
-
-    try {
-      const simulatedHash = "simulated_hash_" + Math.random().toString(36).substring(7);
     const txHash = createLocalTxHash();
     const purchasedAt = new Date().toISOString();
+    const amount = quote?.amount || price;
+    const asset = quote?.asset || selectedAsset.code;
 
     setCheckoutError(null);
     setDownloadError(null);
@@ -161,14 +162,23 @@ export default function BuyNowModal({
       itemName: materialTitle || `Material #${materialId}`,
       creator: materialCreator,
       transactionHash: txHash,
-      totalAmount: quote?.amount || price,
-      currency: quote?.asset || selectedAsset.code,
+      totalAmount: amount,
+      currency: asset,
       totalFee: quote?.fee || "0.00",
       purchasedAt,
     });
     setReceiptStatus("signing");
 
     try {
+      await startAccessRequestMutation.mutateAsync({
+        materialId,
+        buyerAddress: address,
+        email,
+        amount,
+        asset,
+      });
+      onAccessUpdated?.();
+
       beginTransaction({
         scope: "purchase",
         title: "Signing checkout",
@@ -177,7 +187,7 @@ export default function BuyNowModal({
 
       markStatus(TransactionStatus.Signing, {
         title: "Signing checkout",
-        message: "Waiting for wallet approval before submitting the payment.",
+        message: "Waiting for wallet approval before submitting payment.",
       });
 
       await new Promise((resolve) => window.setTimeout(resolve, 500));
@@ -186,41 +196,24 @@ export default function BuyNowModal({
       markStatus(TransactionStatus.PendingConfirmation, {
         txHash,
         title: "Confirming checkout",
-        message: "The Stellar transaction is being confirmed for receipt delivery.",
+        message: "The payment is being confirmed before access is granted.",
         explorerUrl: getExplorerTxUrl(txHash),
       });
 
       const result = await createPurchaseMutation.mutateAsync({
+        materialId,
         buyerAddress: address,
-        materialId,
-        transactionHash: simulatedHash,
-        email,
-      });
-
-      setPurchaseResult({
-        materialId,
-        transactionHash: simulatedHash,
-        amount: quote?.amount || price,
-        asset: quote?.asset || "XLM",
-        purchasedAt: new Date().toISOString(),
-        title: materialTitle || `Material #${materialId}`,
-        creator: materialCreator || "Unknown",
-      });
-
-      setPurchaseStatus("success");
-    } catch (err) {
-      console.error("Purchase failed:", err);
-      setPurchaseStatus("failed");
-      setWeb3Error(err instanceof Error ? err : new Error("Purchase failed. Please try again."));
         transactionHash: txHash,
         signedXdr: null,
         email,
+        amount,
+        asset,
       });
 
       const confirmedHash = result?.purchase?.transactionHash || result?.transactionHash || txHash;
-      const confirmedAt = result?.purchase?.createdAt || purchasedAt;
+      const confirmedAt = result?.purchase?.confirmedAt || result?.purchase?.createdAt || purchasedAt;
 
-      await new Promise((resolve) => window.setTimeout(resolve, 700));
+      await new Promise((resolve) => window.setTimeout(resolve, 600));
 
       setReceipt((current) => ({
         ...current,
@@ -228,145 +221,28 @@ export default function BuyNowModal({
         purchasedAt: confirmedAt,
       }));
       setReceiptStatus("success");
+      onAccessUpdated?.();
 
       confirmTransaction({
         txHash: confirmedHash,
-        title: "Purchase confirmed",
-        message: "Your receipt is ready and your encrypted material can be downloaded.",
+        title: "Access granted",
+        message: "Payment is complete and this material is now unlocked.",
         explorerUrl: getExplorerTxUrl(confirmedHash),
       });
     } catch (err) {
       const error = err instanceof Error ? err : new Error("Purchase failed. Please try again.");
       setCheckoutError(error);
       setReceiptStatus("error");
+      onAccessUpdated?.();
       failTransaction(error, {
-        title: "Purchase failed",
-        message: error.message || "We could not complete the purchase.",
+        title: "Purchase incomplete",
+        message: error.message || "Payment did not complete, so access was not granted.",
         retryable: true,
       });
     }
-  }
-
-  const handleRetry = () => {
-    setPurchaseStatus("idle");
-    setWeb3Error(null);
-    setPurchaseResult(null);
   };
 
   return (
-    <AnimatePresence>
-      {isOpen && (
-        <>
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 0.5 }}
-            exit={{ opacity: 0 }}
-            className="fixed inset-0 bg-black backdrop-blur-sm z-40"
-            onClick={onClose}
-          />
-
-          <motion.div
-            initial={{ opacity: 0, scale: 0.9, y: 50 }}
-            animate={{ opacity: 1, scale: 1, y: 0 }}
-            exit={{ opacity: 0, scale: 0.9, y: 50 }}
-            className="fixed inset-0 flex items-center justify-center z-50"
-          >
-            <div className="bg-white rounded-2xl shadow-lg w-[90%] max-w-sm p-6 relative">
-              <label className="mb-2 block text-xs font-semibold text-slate-600">
-                PAYMENT ASSET
-              </label>
-              <select
-                value={selectedAsset.code}
-                onChange={(e) =>
-                  setSelectedAsset(
-                    SUPPORTED_ASSETS.find((asset) => asset.code === e.target.value) ||
-                    SUPPORTED_ASSETS[0],
-                  )
-                }
-                className="w-full rounded-xl border border-slate-300 px-3 py-2.5 text-sm focus:outline-none"
-              >
-                {SUPPORTED_ASSETS.map((asset) => (
-                  <option key={asset.code} value={asset.code}>
-                    {asset.label}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <div className="mb-5 flex items-center justify-between gap-3 rounded-2xl border border-slate-100 bg-slate-50 px-4 py-3 text-sm">
-              <span className="text-slate-600">You will pay</span>
-              {quoteLoading ? (
-                <span className="text-slate-400">Loading quote...</span>
-              ) : quoteError ? (
-                <span className="text-rose-500">Error loading quote</span>
-              ) : quote ? (
-                <div className="flex items-center gap-2 font-semibold text-slate-900">
-                  <Image
-                    src={selectedAsset.code === "XLM" ? "/images/stellar.png" : "/images/celo.png"}
-                    alt={selectedAsset.label}
-                    width={20}
-                    height={20}
-                  />
-                  {quote.amount} {quote.asset}
-                  {quote.fee ? (
-                    <span className="text-xs text-slate-400">+{quote.fee} fee</span>
-                  ) : null}
-                </div>
-              ) : (
-                <span className="text-slate-400">No quote available</span>
-              )}
-              <button
-                type="button"
-                onClick={refresh}
-                className="ml-2 text-xs font-medium text-blue-600 underline"
-              >
-                Refresh
-              </button>
-            </div>
-
-            <TransactionStatusPanel
-              transaction={activeTransaction}
-              onRetry={handlePay}
-              onClear={clearTransaction}
-            />
-
-            {web3Error ? (
-              <div className="mt-4 rounded-2xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-800">
-                <p className="font-semibold">Purchase failed</p>
-                <p className="mt-1 leading-6">{web3Error.message}</p>
-                {explorerHint ? (
-                  <a
-                    href={explorerHint}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="mt-3 inline-flex text-sm font-medium text-rose-700 underline"
-                  >
-                    View transaction
-                  </a>
-                ) : null}
-              </div>
-            ) : null}
-
-            <button
-              onClick={handlePay}
-              disabled={createPurchaseMutation.isPending || quoteLoading || !quote}
-              className="mt-5 w-full rounded-2xl bg-blue-600 py-3 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:opacity-60"
-            >
-              {activeTransaction.status === TransactionStatus.PendingConfirmation
-                ? "Waiting for confirmation..."
-                : createPurchaseMutation.isPending
-                  ? "Processing..."
-                  : "Pay with wallet"}
-            </button>
-          </motion.div>
-
-          <ConnectWalletModal
-            isOpen={showWallet}
-            onClose={() => setShowWallet(false)}
-          />
-        </>
-      )}
-    </AnimatePresence>
     <>
       <AnimatePresence>
         {isOpen && !isReceiptVisible ? (
@@ -397,11 +273,11 @@ export default function BuyNowModal({
 
                 <div className="mb-6">
                   <p className="text-xs font-semibold uppercase tracking-[0.24em] text-slate-400">
-                    Checkout
+                    Access request
                   </p>
-                  <h2 className="mt-1 text-2xl font-bold text-slate-900">Buy now</h2>
+                  <h2 className="mt-1 text-2xl font-bold text-slate-900">Complete payment to unlock</h2>
                   <p className="mt-2 text-sm text-slate-600">
-                    Complete a Stellar-backed purchase and receive an itemized receipt with download access.
+                    We will create a pending access request first. The material unlocks only after payment is confirmed.
                   </p>
                 </div>
 
@@ -435,20 +311,21 @@ export default function BuyNowModal({
                     value={selectedAsset.code}
                     onChange={(event) =>
                       setSelectedAsset(
-                        SUPPORTED_ASSETS.find((asset) => asset.code === event.target.value) || SUPPORTED_ASSETS[0],
+                        SUPPORTED_ASSETS.find((assetOption) => assetOption.code === event.target.value) ||
+                          SUPPORTED_ASSETS[0],
                       )
                     }
                     className="w-full rounded-xl border border-slate-300 px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-100"
                   >
-                    {SUPPORTED_ASSETS.map((asset) => (
-                      <option key={asset.code} value={asset.code}>
-                        {asset.label}
+                    {SUPPORTED_ASSETS.map((assetOption) => (
+                      <option key={assetOption.code} value={assetOption.code}>
+                        {assetOption.label}
                       </option>
                     ))}
                   </select>
                 </div>
 
-                <div className="mb-5 flex items-center justify-between gap-3 rounded-2xl border border-slate-100 bg-slate-50 px-4 py-3 text-sm">
+                <div className="mb-5 flex flex-col gap-3 rounded-2xl border border-slate-100 bg-slate-50 px-4 py-3 text-sm sm:flex-row sm:items-center sm:justify-between">
                   <span className="text-slate-600">You will pay</span>
                   {quoteLoading ? (
                     <span className="text-slate-400">Loading quote...</span>
@@ -456,12 +333,7 @@ export default function BuyNowModal({
                     <span className="text-rose-500">Error loading quote</span>
                   ) : quote ? (
                     <div className="flex items-center gap-2 font-semibold text-slate-900">
-                      <Image
-                        src="/images/stellar.png"
-                        alt={selectedAsset.label}
-                        width={20}
-                        height={20}
-                      />
+                      <Image src="/images/stellar.png" alt={selectedAsset.label} width={20} height={20} />
                       {quote.amount} {quote.asset}
                       {quote.fee ? <span className="text-xs text-slate-400">+{quote.fee} fee</span> : null}
                     </div>
@@ -471,7 +343,7 @@ export default function BuyNowModal({
                   <button
                     type="button"
                     onClick={refresh}
-                    className="ml-2 text-xs font-medium text-blue-600 underline"
+                    className="text-left text-xs font-medium text-blue-600 underline sm:text-right"
                   >
                     Refresh
                   </button>
@@ -486,10 +358,17 @@ export default function BuyNowModal({
                 <button
                   type="button"
                   onClick={handlePay}
-                  disabled={createPurchaseMutation.isPending || quoteLoading || !quote}
+                  disabled={
+                    createPurchaseMutation.isPending ||
+                    startAccessRequestMutation.isPending ||
+                    quoteLoading ||
+                    !quote
+                  }
                   className="mt-5 w-full rounded-2xl bg-blue-600 py-3 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:opacity-60"
                 >
-                  {createPurchaseMutation.isPending ? "Processing..." : "Pay with wallet"}
+                  {createPurchaseMutation.isPending || startAccessRequestMutation.isPending
+                    ? "Processing..."
+                    : "Pay and unlock access"}
                 </button>
               </div>
             </motion.div>
