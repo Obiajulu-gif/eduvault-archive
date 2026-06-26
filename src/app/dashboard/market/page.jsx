@@ -25,7 +25,8 @@ export default function MarketPage() {
         const res = await fetch('/api/subjects');
         if (res.ok) {
           const data = await res.json();
-          setCategories(data.subjects || ["All"]);
+          const subjectLabels = (data.subjects || []).map((s) => s.label || s.id);
+          setCategories(["All", ...new Set(subjectLabels)]);
         }
       } catch (err) {
         console.error('Failed to load categories:', err);
