@@ -7,7 +7,7 @@ import { parsePagination } from "@/lib/api/validation";
 import { buildMarketplaceDiscoveryQuery, buildMarketplaceSort } from "@/lib/backend/marketplaceDiscovery";
 import { getDb } from "@/lib/mongodb";
 import { ObjectId } from "mongodb";
-import { cacheGet, cacheSet } from "@/lib/cache/redis";
+import { buildCatalogCacheKey, cacheGet, cacheSet } from "@/lib/cache/redis";
 
 export const runtime = "nodejs";
 
@@ -45,10 +45,10 @@ export async function GET(request) {
       if (!ObjectId.isValid(id)) {
         return NextResponse.json({ error: "Invalid material ID" }, { status: 400 });
       }
-      
-      const item = await db.collection("materials").findOne({ 
-        _id: new ObjectId(id), 
-        visibility: "public" 
+
+      const item = await db.collection("materials").findOne({
+        _id: new ObjectId(id),
+        visibility: "public"
       });
 
       if (!item) {
@@ -58,14 +58,14 @@ export async function GET(request) {
       return NextResponse.json(sanitizeMaterial(item));
     }
 
-    // 2️⃣ Handle list fetch
-    const { page, pageSize } = parsePagination(url.searchParams);
-
-    const cacheKey = `market-materials:${url.searchParams.toString()}`;
+    // 2️⃣ Handle list fetch — check cache first
+    const cacheKey = buildCatalogCacheKey(url.searchParams);
     const cached = await cacheGet(cacheKey);
     if (cached) {
-      return NextResponse.json(cached, { status: 200 });
+      return NextResponse.json(JSON.parse(cached), { status: 200 });
     }
+
+    const { page, pageSize } = parsePagination(url.searchParams);
 
     const query = buildMarketplaceDiscoveryQuery(url.searchParams);
     const sort = buildMarketplaceSort(url.searchParams.get("sortBy"));
@@ -84,7 +84,7 @@ export async function GET(request) {
     const totalPages = Math.max(1, Math.ceil(total / pageSize));
 
     const payload = { items: normalized, page, pageSize, total, totalPages };
-    await cacheSet(cacheKey, payload, 600);
+    await cacheSet(cacheKey, JSON.stringify(payload));
 
     return NextResponse.json(payload, { status: 200 });
   } catch (err) {

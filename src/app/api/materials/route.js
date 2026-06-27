@@ -8,6 +8,7 @@ import { getUserFromCookie } from "@/lib/api/auth";
 import { getDb } from "@/lib/mongodb";
 import { ObjectId } from "mongodb";
 import { buildMaterialHistoryEntry, EDITABLE_MATERIAL_FIELDS } from "@/lib/backend/schemaContracts";
+import { clearCatalogCache } from "@/lib/cache/redis";
 
 export const runtime = "nodejs";
 
@@ -53,6 +54,10 @@ export async function POST(request) {
 
         const result = await db.collection("materials").insertOne(doc);
         auditLog({ event: "material_created", route: "materials", method: "POST", status: 201, actor: user.sub });
+
+        // A new listing may appear in catalog search results; purge stale cache entries.
+        await clearCatalogCache();
+
         return NextResponse.json({ success: true, materialId: result.insertedId, ...sanitizeMaterial(doc) }, { status: 201 });
       } catch (err) {
         if (err.name === "ValidationError") throw err;
