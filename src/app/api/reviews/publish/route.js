@@ -1,63 +1,100 @@
 export const dynamic = "force-dynamic";
 
 import { NextResponse } from "next/server";
+import { ObjectId } from "mongodb";
 import { auditLog } from "@/lib/api/audit";
+import { getUserFromCookie } from "@/lib/api/auth";
 import { withApiHardening } from "@/lib/api/hardening";
 import { getDb } from "@/lib/mongodb";
-import { ObjectId } from "mongodb";
 import { cacheDel } from "@/lib/cache/redis";
+import {
+  FEEDBACK_COLLECTION,
+  sanitizeFeedback,
+  summarizeFeedback,
+  validateFeedbackPayload,
+  isCreatorFeedback,
+  feedbackModerationPlaceholder,
+} from "@/lib/backend/materialFeedback";
 
 export const runtime = "nodejs";
 
-function validateReviewBody(body) {
-  const { materialId, reviewerAddress, rating, comment } = body ?? {};
-
-  if (!materialId || typeof materialId !== "string") {
-    return "materialId is required and must be a string";
+async function getReviewerAddress(db, user) {
+  let address = user?.walletAddress || user?.address || user?.walletAddressLower || user?.id || "";
+  if (!address && user?.sub && ObjectId.isValid(user.sub)) {
+    const dbUser = await db.collection("users").findOne({ _id: new ObjectId(user.sub) });
+    address = dbUser?.walletAddress || dbUser?.address || dbUser?.walletAddressLower || "";
   }
-  if (!ObjectId.isValid(materialId)) {
-    return "materialId must be a valid MongoDB ObjectId";
-  }
-  if (!reviewerAddress || typeof reviewerAddress !== "string") {
-    return "reviewerAddress is required and must be a string";
-  }
-  const r = Number(rating);
-  if (!Number.isFinite(r) || r < 1 || r > 5) {
-    return "rating is required and must be a number between 1 and 5";
-  }
-  if (comment !== undefined && typeof comment !== "string") {
-    return "comment must be a string";
-  }
-  return null;
+  return typeof address === "string" ? address.trim() : "";
 }
 
-// POST /api/reviews/publish
-// Saves a review, updates the material's averageRating / reviewCount,
-// and busts the market-materials cache for catalog listings.
+/**
+ * Recalculates and writes the cached averageRating and reviewCount on the
+ * creator's user document. Called after every review is published so that
+ * creator profile queries never need to aggregate feedback at read time.
+ */
+async function updateCreatorReviewCache(db, creatorAddress) {
+  if (!creatorAddress) return;
+
+  const creatorMaterials = await db
+    .collection("materials")
+    .find({ userAddress: creatorAddress, visibility: "public" }, { projection: { _id: 1 } })
+    .toArray();
+
+  if (!creatorMaterials.length) return;
+
+  const materialIds = creatorMaterials.map((m) => m._id.toString());
+  const objectIds = creatorMaterials.map((m) => m._id);
+
+  const feedbackItems = await db
+    .collection(FEEDBACK_COLLECTION)
+    .find({
+      $or: [
+        { materialId: { $in: materialIds } },
+        { materialObjectId: { $in: objectIds } },
+      ],
+      status: { $ne: "hidden" },
+      moderationStatus: { $ne: "rejected" },
+    })
+    .toArray();
+
+  const { averageScore: averageRating, feedbackCount: reviewCount } = summarizeFeedback(feedbackItems);
+
+  await db.collection("users").updateOne(
+    { $or: [{ walletAddress: creatorAddress }, { walletAddressLower: creatorAddress.toLowerCase() }] },
+    { $set: { averageRating, reviewCount, updatedAt: new Date().toISOString() } }
+  );
+}
+
+/**
+ * POST /api/reviews/publish
+ * Body: { materialId, score, comment? }
+ *
+ * Publishes a review for a public material and synchronously updates the
+ * creator's cached averageRating and reviewCount. Upserts on (materialId,
+ * reviewerAddress) so re-submitting a review replaces the previous one.
+ */
 export async function POST(request) {
   return withApiHardening(
     request,
-    { route: "reviews-publish", rateLimit: { limit: 30, windowMs: 60_000 } },
+    { route: "reviews.publish", rateLimit: { limit: 30, windowMs: 60_000 } },
     async () => {
-      let body;
       try {
-        body = await request.json();
-      } catch {
-        return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
-      }
+        const user = await getUserFromCookie(request);
+        if (!user) {
+          auditLog({ event: "auth_failed", route: "reviews.publish", method: "POST", status: 401 });
+          return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+        }
 
-      const validationError = validateReviewBody(body);
-      if (validationError) {
-        return NextResponse.json({ error: validationError }, { status: 400 });
-      }
+        const body = await request.json();
+        const { materialId } = body;
 
-      const { materialId, reviewerAddress, rating, comment } = body;
-      const ratingNum = Number(rating);
+        if (!materialId || !ObjectId.isValid(materialId)) {
+          return NextResponse.json({ error: "Invalid materialId" }, { status: 400 });
+        }
 
-      try {
+        const payload = validateFeedbackPayload(body);
         const db = await getDb();
 
-        // 1. Verify the material exists and is public
         const material = await db.collection("materials").findOne({
           _id: new ObjectId(materialId),
           visibility: "public",
@@ -67,66 +104,79 @@ export async function POST(request) {
           return NextResponse.json({ error: "Material not found" }, { status: 404 });
         }
 
-        // 2. Save the review
-        const review = {
+        const reviewerAddress = await getReviewerAddress(db, user);
+        if (!reviewerAddress) {
+          return NextResponse.json(
+            { error: "A wallet address is required to publish a review." },
+            { status: 400 }
+          );
+        }
+
+        if (isCreatorFeedback(material, reviewerAddress)) {
+          auditLog({ event: "creator_review_blocked", route: "reviews.publish", method: "POST", status: 403, actor: user.sub, materialId });
+          return NextResponse.json({ error: "Creators cannot review their own material." }, { status: 403 });
+        }
+
+        const now = new Date();
+        const materialObjectId = new ObjectId(materialId);
+        const feedbackDoc = {
           materialId,
+          materialObjectId,
+          score: payload.score,
+          rating: payload.score,
+          comment: payload.comment,
           reviewerAddress,
-          rating: ratingNum,
-          comment: comment ?? "",
-          createdAt: new Date(),
+          reviewerId: user.sub || user.id || null,
+          reviewerName: user.name || "",
+          verifiedBuyer: false,
+          moderationStatus: "pending_review",
+          status: "published",
+          updatedAt: now,
         };
 
-        const insertResult = await db.collection("reviews").insertOne(review);
+        const result = await db.collection(FEEDBACK_COLLECTION).findOneAndUpdate(
+          { materialId, reviewerAddress },
+          { $set: feedbackDoc, $setOnInsert: { createdAt: now } },
+          { upsert: true, returnDocument: "after" }
+        );
 
-        // 3. Recalculate averageRating and reviewCount from all reviews for this material
-        const aggregation = await db
-          .collection("reviews")
-          .aggregate([
-            { $match: { materialId } },
-            {
-              $group: {
-                _id: "$materialId",
-                averageRating: { $avg: "$rating" },
-                reviewCount: { $sum: 1 },
-              },
-            },
-          ])
+        // Update material-level aggregates
+        const allMaterialFeedback = await db
+          .collection(FEEDBACK_COLLECTION)
+          .find({
+            $or: [{ materialId }, { materialObjectId }],
+            status: { $ne: "hidden" },
+            moderationStatus: { $ne: "rejected" },
+          })
           .toArray();
 
-        const stats = aggregation[0] ?? { averageRating: ratingNum, reviewCount: 1 };
-        const averageRating = Math.round(stats.averageRating * 100) / 100;
-        const reviewCount = stats.reviewCount;
-
-        // 4. Update the material document with recalculated stats
+        const { averageScore, feedbackCount } = summarizeFeedback(allMaterialFeedback);
         await db.collection("materials").updateOne(
-          { _id: new ObjectId(materialId) },
-          { $set: { averageRating, reviewCount, updatedAt: new Date() } }
+          { _id: materialObjectId },
+          { $set: { averageScore, rating: averageScore, feedbackCount, reviewsCount: feedbackCount, updatedAt: now } }
         );
 
-        // 5. Bust the market-materials catalog cache (root list key)
+        // Recalculate and cache the creator's aggregate review score
+        const creatorAddress = material.userAddress ?? material.ownerAddress ?? null;
+        await updateCreatorReviewCache(db, creatorAddress);
+
+        // Bust the market-materials catalog cache so updated stats appear immediately
         await cacheDel("market-materials:");
 
-        auditLog({
-          event: "review_published",
-          route: "reviews-publish",
-          method: "POST",
-          status: 201,
-          materialId,
-          actor: reviewerAddress,
-        });
+        const savedFeedback = result || feedbackDoc;
+        auditLog({ event: "review_published", route: "reviews.publish", method: "POST", status: 200, actor: user.sub, materialId });
 
-        return NextResponse.json(
-          { ...review, _id: insertResult.insertedId },
-          { status: 201 }
-        );
-      } catch (err) {
-        auditLog({
-          event: "review_publish_failed",
-          route: "reviews-publish",
-          method: "POST",
-          status: 500,
-          reason: err.message,
+        return NextResponse.json({
+          feedback: sanitizeFeedback(savedFeedback),
+          averageScore,
+          feedbackCount,
+          moderation: feedbackModerationPlaceholder(),
         });
+      } catch (err) {
+        if (err.name === "ValidationError") {
+          return NextResponse.json({ error: err.message, details: err.details }, { status: 400 });
+        }
+        auditLog({ event: "review_publish_failed", route: "reviews.publish", method: "POST", status: 500, reason: err.message });
         return NextResponse.json({ error: "Server error" }, { status: 500 });
       }
     }
