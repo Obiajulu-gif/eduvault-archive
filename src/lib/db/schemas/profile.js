@@ -10,7 +10,7 @@ export const ProfileSchema = {
   validator: {
     $jsonSchema: {
       bsonType: "object",
-      required: ["uuid", "walletAddress", "createdAt"],
+      required: ["uuid", "walletAddress", "email", "createdAt"],
       properties: {
         uuid: {
           bsonType: "string",
@@ -18,15 +18,23 @@ export const ProfileSchema = {
         },
         walletAddress: {
           bsonType: "string",
-          description: "Primary blockchain wallet address used for authentication",
+          description: "Primary Stellar wallet address used for authentication",
+        },
+        walletAddressLower: {
+          bsonType: "string",
+          description: "Lowercase wallet address for case-insensitive lookups",
         },
         displayName: {
           bsonType: "string",
           description: "Optional human-readable name shown on public profile pages",
         },
+        fullName: {
+          bsonType: "string",
+          description: "Display name of the user",
+        },
         email: {
           bsonType: "string",
-          description: "Optional email address for notifications and recovery",
+          description: "Primary contact email address",
         },
         avatarCid: {
           bsonType: "string",
@@ -36,15 +44,25 @@ export const ProfileSchema = {
           bsonType: "string",
           description: "Short creator biography displayed on the marketplace",
         },
+        averageRating: {
+          bsonType: "double",
+          description: "Cached average rating derived from all reviews on creator materials",
+        },
+        reviewCount: {
+          bsonType: "int",
+          description: "Cached count of approved reviews on creator materials",
+        },
         createdAt: {
-          bsonType: "date",
-          description: "Timestamp recording when the profile was first created",
+          bsonType: "string",
+          description: "ISO 8601 timestamp of profile creation",
         },
         updatedAt: {
-          bsonType: "date",
-          description: "Timestamp of the most recent profile update",
+          bsonType: "string",
+          description: "ISO 8601 timestamp of last profile update",
         },
       },
     },
   },
 };
+
+export const PROFILE_COLLECTION = "users";
