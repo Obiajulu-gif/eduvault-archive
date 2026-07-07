@@ -1,3 +1,5 @@
+import { normalizeSubject, normalizeCategory, normalizeLevel } from "./taxonomy.js";
+
 export const LICENSE_OPTIONS = [
   { id: "standard", label: "Standard License (download only)", value: "Standard License (download only)" },
   { id: "creative-commons", label: "Creative Commons", value: "Creative Commons" },
@@ -102,9 +104,18 @@ export function buildMarketplaceDiscoveryQuery(searchParams, { now = new Date() 
     });
   }
 
-  const subject = sanitizeString(searchParams.get("subject"), { maxLength: 80 });
-  const category = sanitizeString(searchParams.get("category"), { maxLength: 80 });
-  const level = sanitizeString(searchParams.get("level"), { maxLength: 80 });
+  const rawSubject = sanitizeString(searchParams.get("subject"), { maxLength: 80 });
+  const rawCategory = sanitizeString(searchParams.get("category"), { maxLength: 80 });
+  const rawLevel = sanitizeString(searchParams.get("level"), { maxLength: 80 });
+
+  const normalizedSubject = rawSubject ? normalizeSubject(rawSubject) : null;
+  const normalizedCategory = rawCategory ? normalizeCategory(rawCategory) : null;
+  const normalizedLevel = rawLevel ? normalizeLevel(rawLevel) : null;
+
+  const subject = normalizedSubject ? normalizedSubject.id : (rawSubject ? rawSubject.toLowerCase() : "");
+  const category = normalizedCategory ? normalizedCategory.id : (rawCategory ? rawCategory.toLowerCase() : "");
+  const level = normalizedLevel ? normalizedLevel.id : (rawLevel ? rawLevel.toLowerCase() : "");
+
   const creator = sanitizeString(searchParams.get("creator"), { maxLength: 120 });
   const licenseType = getLicenseValue(searchParams.get("licenseType") || searchParams.get("usageRights"));
   const contentTypeQuery = buildContentTypeQuery(searchParams.get("contentType"));

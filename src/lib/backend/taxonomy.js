@@ -54,6 +54,9 @@ export function normalizeSubject(input) {
   const cleaned = String(input).trim().toLowerCase();
   if (!cleaned) return null;
 
+  const byId = SUBJECT_BY_ID.get(cleaned);
+  if (byId) return { id: byId.id, label: byId.label, categoryId: byId.categoryId };
+
   const byLabel = SUBJECT_BY_LABEL_LOWER.get(cleaned);
   if (byLabel) return { id: byLabel.id, label: byLabel.label, categoryId: byLabel.categoryId };
 

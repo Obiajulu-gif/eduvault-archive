@@ -157,7 +157,7 @@ export default function MarketPage() {
 	const router = useRouter();
 
 	const [searchQuery, setSearchQuery] = useState("");
-	const [activeSubject, setActiveSubject] = useState("All");
+	const [activeSubject, setActiveSubject] = useState("all");
 	const [activeCategory, setActiveCategory] = useState("All");
 	const [activeLevel, setActiveLevel] = useState("");
 	const [sortBy, setSortBy] = useState("Popular");
@@ -172,7 +172,7 @@ export default function MarketPage() {
 
 	const [hydrated, setHydrated] = useState(false);
 
-	const [subjects, setSubjects] = useState(["All"]);
+	const [subjects, setSubjects] = useState([ALL_SUBJECT]);
 	const [categories, setCategories] = useState([]);
 	const [subjectsLoading, setSubjectsLoading] = useState(true);
 
@@ -183,7 +183,7 @@ export default function MarketPage() {
 		const params = new URLSearchParams(window.location.search);
 
 		setSearchQuery(params.get("search") || "");
-		setActiveSubject(params.get("subject") || "All");
+		setActiveSubject(params.get("subject") || "all");
 		setActiveCategory(params.get("category") || "All");
 		setActiveLevel(params.get("level") || "");
 		setSortBy(params.get("sortBy") || "Popular");
@@ -246,7 +246,7 @@ export default function MarketPage() {
 				if (res.ok) {
 					const data = await res.json();
 					const normalized = normalizeSubjectOptions(data.subjects || data);
-					setSubjects(normalized.map((s) => s.label || s.id || String(s)));
+					setSubjects(normalized);
 					setCategories(data.categories || []);
 				}
 			} catch {
@@ -266,7 +266,7 @@ export default function MarketPage() {
 		const params = new URLSearchParams();
 
 		if (searchQuery) params.set("search", searchQuery);
-		if (activeSubject && activeSubject !== "All") params.set("subject", activeSubject);
+		if (activeSubject && activeSubject !== "all") params.set("subject", activeSubject);
 		if (activeCategory !== "All") params.set("category", activeCategory);
 		if (activeLevel) params.set("level", activeLevel);
 		if (sortBy && sortBy !== "Popular") params.set("sortBy", sortBy);
@@ -300,7 +300,7 @@ export default function MarketPage() {
 			search: searchQuery,
 
 			subject:
-				activeSubject !== "All"
+				activeSubject !== "all"
 					? activeSubject
 					: undefined,
 
@@ -358,7 +358,7 @@ export default function MarketPage() {
 
 	const resetFilters = () => {
 		setSearchQuery("");
-		setActiveSubject("All");
+		setActiveSubject("all");
 		setActiveCategory("All");
 		setActiveLevel("");
 		setSortBy("Popular");
@@ -387,20 +387,20 @@ export default function MarketPage() {
 						) : (
 							subjects.map((subject) => (
 								<button
-									key={subject}
+									key={subject.id}
 									onClick={() => {
-										setActiveSubject(subject);
+										setActiveSubject(subject.id);
 										setCurrentPage(1);
 									}}
 									role="tab"
-									aria-selected={activeSubject === subject}
+									aria-selected={activeSubject === subject.id}
 									className={`whitespace-nowrap px-4 py-1.5 rounded-full text-sm transition-all focus-visible:ring-2 focus-visible:ring-blue-500 ${
-										activeSubject === subject
+										activeSubject === subject.id
 											? "bg-blue-600 text-white font-medium shadow-sm"
 											: "bg-gray-100 text-gray-600 hover:bg-gray-200"
 									}`}
 								>
-									{subject}
+									{subject.label}
 								</button>
 							))
 						)}
@@ -445,21 +445,21 @@ export default function MarketPage() {
 							</li>
 						) : (
 							subjects.map((subject) => (
-								<li key={subject} role="listitem">
+								<li key={subject.id} role="listitem">
 									<button
 										onClick={() => {
-											setActiveSubject(subject);
+											setActiveSubject(subject.id);
 											setCurrentPage(1);
 										}}
 										role="tab"
-										aria-selected={activeSubject === subject}
+										aria-selected={activeSubject === subject.id}
 										className={`w-full text-left px-3 py-2 rounded-lg text-sm transition-all focus-visible:ring-2 focus-visible:ring-blue-500 ${
-											activeSubject === subject
+											activeSubject === subject.id
 												? "bg-blue-50 text-blue-700 font-semibold"
 												: "text-gray-600 hover:bg-gray-50 hover:text-gray-900"
 										}`}
 									>
-										{subject}
+										{subject.label}
 									</button>
 								</li>
 							))
