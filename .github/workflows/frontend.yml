@@ -36,13 +36,12 @@ jobs:
     name: Lint And Build Frontend
     runs-on: ubuntu-latest
     env:
-      MONGODB_URI: mongodb://localhost:27017/eduvault-ci
+      MONGODB_URI: mongodb://ci-user:ci-password@mongodb.invalid:27017/eduvault-ci
       MONGODB_DB: eduvault-ci
-      JWT_SECRET: ci-jwt-secret
+      JWT_SECRET: ci-only-jwt-secret-not-for-production-1234
       NEXT_PUBLIC_APP_URL: http://localhost:3000
       NEXT_PUBLIC_GATEWAY_URL: https://gateway.pinata.cloud
       PINATA_JWT: ci-pinata-token
-      NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID: ci-walletconnect-project-id
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -55,7 +54,7 @@ jobs:
           cache-dependency-path: package-lock.json
 
       - name: Install dependencies
-        run: npm install
+        run: npm ci
 
       - name: Lint frontend
         run: npm run lint --if-present -- --ignore-pattern "src/app/api/**" src/app src/components src/hooks src/providers src/utils
@@ -64,7 +63,7 @@ jobs:
         run: npm run typecheck --if-present
 
       - name: Run tests
-        run: npm test --if-present
+        run: npm run test:frontend
 
       - name: Build frontend
         run: npm run build --if-present

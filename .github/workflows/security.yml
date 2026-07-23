@@ -23,9 +23,11 @@ jobs:
           cache-dependency-path: package-lock.json
 
       - name: Install dependencies
-        run: npm install
+        run: npm ci
 
-      - name: Dependency audit
+      # The current dependency graph has known transitive advisories. Keep the
+      # report visible without making unrelated contributor PRs inherit that debt.
+      - name: Report dependency audit
         continue-on-error: true
         run: npm run audit:deps
 

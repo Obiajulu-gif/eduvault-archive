@@ -32,12 +32,6 @@ function optionalWhenEnabled(name, value, errors, enabled, { productionOnly = fa
 }
 
 export function validateRuntimeEnv() {
-  // GitHub Actions injects placeholder values for CI builds.
-  // Keep production deployments strict, but avoid failing CI on those values.
-  if (process.env.GITHUB_ACTIONS === "true") {
-    return [];
-  }
-
   const errors = [];
   const production = process.env.NODE_ENV === "production";
 

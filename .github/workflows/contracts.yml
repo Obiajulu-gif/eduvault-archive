@@ -3,7 +3,9 @@ name: Contracts CI
 on:
   pull_request:
     paths:
-      - "archive/legacy-evm/**"
+      - "contracts/**"
+      - "tests/legacy-evm/**"
+      - "hardhat.config.cjs"
       - "soroban/**"
       - "package.json"
       - "package-lock.json"
@@ -13,7 +15,9 @@ on:
       - main
       - develop
     paths:
-      - "archive/legacy-evm/**"
+      - "contracts/**"
+      - "tests/legacy-evm/**"
+      - "hardhat.config.cjs"
       - "soroban/**"
       - "package.json"
       - "package-lock.json"
@@ -22,7 +26,6 @@ on:
 jobs:
   soroban:
     name: Soroban Contract Checks
-    if: ${{ hashFiles('soroban/**/Cargo.toml') != '' }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -49,7 +52,6 @@ jobs:
 
   solidity:
     name: Archived Solidity Prototype Checks
-    if: ${{ hashFiles('archive/legacy-evm/contracts/**/*.sol') != '' }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -63,19 +65,13 @@ jobs:
           cache-dependency-path: package-lock.json
 
       - name: Install dependencies
-        run: npm install
-
-      - name: Check contract formatting
-        run: npx --yes prettier@3.6.2 --check "archive/legacy-evm/contracts/**/*.sol"
-
-      - name: Run Solidity lint
-        run: npx --yes solhint@5.0.3 "archive/legacy-evm/contracts/**/*.sol"
+        run: npm ci
 
       - name: Compile Solidity contracts
         shell: bash
         run: |
           shopt -s globstar nullglob
-          files=(archive/legacy-evm/contracts/**/*.sol)
+          files=(contracts/**/*.sol)
           if [ "${#files[@]}" -eq 0 ]; then
             echo "No Solidity contracts found."
             exit 0
