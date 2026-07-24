@@ -7,6 +7,7 @@ import { auditLog } from "../api/audit.js";
 import { runWithContext } from "../telemetry/context.js";
 import { withSpan } from "../telemetry/tracing.js";
 import { decodeContractEvent } from "./eventDecoder.js";
+import { sendReceiptIfEligible } from "../email.js";
 
 function duplicateKey(error) {
   return error?.code === 11000;

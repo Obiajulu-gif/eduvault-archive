@@ -156,6 +156,20 @@ export async function POST(request) {
         })
 
         const metadataJSON = {
+          name: sanitizedScalarFields.title || sanitizedScalarFields.name || "",
+          description: sanitizedScalarFields.description || "",
+          image: results.imgUrl || null,
+          properties: {
+            ...sanitizedScalarFields,
+            coverImageUrl: results.imgUrl || sanitizedScalarFields.coverImageUrl || null,
+            thumbnailUrl: results.imgUrl || sanitizedScalarFields.thumbnailUrl || null,
+            learningOutcomes: normalizeStringList(previewInputs.learningOutcomes, { maxItems: 8, maxLength: 180 }),
+            tableOfContents: normalizeStringList(previewInputs.tableOfContents, { maxItems: 16, maxLength: 180 }),
+            sampleNotes: normalizeStringList(previewInputs.sampleNotes, { maxItems: 6, maxLength: 280 }),
+            storageKey: uploadedFile.cid,
+            fileUrl: results.fileUrl,
+            timestamp: new Date().toISOString(),
+          },
           ...sanitizedScalarFields,
           coverImageUrl: results.imgUrl || normalizeImageField(sanitizedScalarFields.coverImageUrl, 'coverImageUrl'),
           thumbnailUrl: results.imgUrl || normalizeImageField(sanitizedScalarFields.thumbnailUrl, 'thumbnailUrl'),

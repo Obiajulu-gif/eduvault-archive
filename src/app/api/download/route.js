@@ -24,9 +24,11 @@ import { NextResponse } from 'next/server';
 import { verifyEntitlement } from '@/lib/entitlement';
 import { getDb } from '@/lib/mongodb';
 import { ObjectId } from 'mongodb';
+import { getIpfsUrl } from '@/lib/config/chain';
 import { getManifest, getLatestManifest } from '@/lib/provenance/registry';
 import { verifyManifestDigest, verifyFileCid } from '@/lib/provenance/verify';
 import { resolveAuthenticatedWallet } from '@/lib/auth/walletIdentity';
+import { normalizeBuyerAddress } from '@/lib/purchases/access';
 
 export const dynamic = 'force-dynamic';
 
@@ -40,8 +42,6 @@ export async function GET(request) {
   const buyerAddress = identity.walletAddress;
   const requestedVersion = searchParams.get('version');
 
-  const startedAt = Date.now();
-
   // ── 1. Validate params ─────────────────────────────────────────────────────
 
   if (!materialId) {
@@ -51,31 +51,7 @@ export async function GET(request) {
     );
   }
 
-  // ── 2. Verify entitlement ─────────────────────────────────────────────────
-
-  let entitlementResult;
-  try {
-    entitlementResult = await verifyEntitlement(materialId, buyerAddress);
-  } catch (err) {
-    console.error('[download] entitlement check error:', err);
-    return NextResponse.json(
-      { error: 'Entitlement verification failed' },
-      { status: 503 }
-    );
-  }
-
-  if (!entitlementResult.hasAccess) {
-    return NextResponse.json(
-      {
-        error: 'Unlicensed Access',
-        detail:
-          'You do not hold an active entitlement for this material. Purchase it first.',
-      },
-      { status: 403 }
-    );
-  }
-
-  // ── 3. Fetch material record to get the IPFS CID ──────────────────────────
+  // ── 2. Fetch material record to get the IPFS CID ──────────────────────────
 
   let material;
   try {
@@ -96,6 +72,47 @@ export async function GET(request) {
 
   if (!material) {
     return NextResponse.json({ error: 'Material not found' }, { status: 404 });
+  }
+
+  // ── 3. Verify access / entitlement ────────────────────────────────────────
+
+  const userAddress = normalizeBuyerAddress(buyerAddress);
+  const isOwner =
+    normalizeBuyerAddress(material.userAddress) === userAddress ||
+    normalizeBuyerAddress(material.ownerAddress) === userAddress;
+
+  let hasAccess = isOwner;
+  let accessSource = 'owner';
+
+  if (!hasAccess) {
+    const price = Number(material.price || 0);
+    if (price <= 0 && material.visibility === 'public') {
+      hasAccess = true;
+      accessSource = 'free-public';
+    } else {
+      try {
+        const entitlementResult = await verifyEntitlement(materialId, buyerAddress);
+        hasAccess = entitlementResult.hasAccess;
+        accessSource = entitlementResult.source;
+      } catch (err) {
+        console.error('[download] entitlement check error:', err);
+        return NextResponse.json(
+          { error: 'Entitlement verification failed' },
+          { status: 503 }
+        );
+      }
+    }
+  }
+
+  if (!hasAccess) {
+    return NextResponse.json(
+      {
+        error: 'Unlicensed Access',
+        detail:
+          'You do not hold an active entitlement for this material. Please purchase it first.',
+      },
+      { status: 403 }
+    );
   }
 
   const cid =
@@ -168,17 +185,18 @@ export async function GET(request) {
       ok: true,
       materialId,
       cid: cid,
+      fileUrl: getIpfsUrl(cid),
       manifestVersion,
       manifestDigestVerified,
       fileName: material.fileName ?? material.title ?? materialId,
       contentType: material.contentType ?? 'application/octet-stream',
       fileSize: material.fileSize || 0,
-      source: entitlementResult.source,
+      source: accessSource,
     },
     {
       headers: {
         'Cache-Control': 'private, max-age=60',
-        'X-Entitlement-Source': entitlementResult.source,
+        'X-Entitlement-Source': accessSource,
         'X-Manifest-Version': manifestVersion ? String(manifestVersion) : '',
         'X-Manifest-Verified': manifestDigestVerified ? 'true' : 'false',
       },

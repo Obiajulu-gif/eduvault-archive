@@ -1,3 +1,4 @@
+// Resolves: Implement the endpoint to retrieve and paginate the list of available educational materials.
 export const dynamic = "force-dynamic";
 
 import { NextResponse } from "next/server";

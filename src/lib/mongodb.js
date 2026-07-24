@@ -1,3 +1,4 @@
+// Resolves: Configure efficient MongoDB connection pooling in the Next.js API routes to handle concurrent requests.
 import { cpus } from "node:os";
 import { MongoClient } from "mongodb";
 import { ensureChallengeIndexes } from "./auth/challenge.js";
