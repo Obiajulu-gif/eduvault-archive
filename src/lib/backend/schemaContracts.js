@@ -31,6 +31,9 @@ export const COLLECTIONS = Object.freeze({
   // Escrow / Trustless Work.
   escrows: "escrows",
   milestones: "milestones",
+  milestoneEvidence: "milestone_evidence",
+  milestoneTransitions: "milestone_transitions",
+  milestoneMigrationExceptions: "milestone_migration_exceptions",
   payouts: "payouts",
 });
 
@@ -500,6 +503,65 @@ export const REQUIRED_INDEXES = Object.freeze({
       keys: { escrowId: 1 },
       options: {},
     },
+    {
+      name: "milestones_payout_position_unique",
+      keys: { payoutId: 1, position: 1 },
+      options: {
+        unique: true,
+        partialFilterExpression: {
+          payoutId: { $type: "string" },
+          position: { $type: "int" },
+        },
+      },
+    },
+    {
+      name: "milestones_payout_status",
+      keys: { payoutId: 1, status: 1 },
+      options: {
+        partialFilterExpression: {
+          payoutId: { $type: "string" },
+        },
+      },
+    },
+  ],
+
+  milestone_evidence: [
+    {
+      name: "milestone_evidence_evidence_id_unique",
+      keys: { evidenceId: 1 },
+      options: { unique: true },
+    },
+    {
+      name: "milestone_evidence_milestone_created_at",
+      keys: { milestoneId: 1, createdAt: -1 },
+      options: {},
+    },
+  ],
+
+  milestone_transitions: [
+    {
+      name: "milestone_transitions_transition_id_unique",
+      keys: { transitionId: 1 },
+      options: { unique: true },
+    },
+    {
+      name: "milestone_transitions_milestone_created_at",
+      keys: { milestoneId: 1, createdAt: -1 },
+      options: {},
+    },
+  ],
+
+  milestone_migration_exceptions: [
+    {
+      name: "milestone_migration_exception_id_unique",
+      keys: { exceptionId: 1 },
+      options: { unique: true },
+    },
+    {
+      name: "milestone_migration_source",
+      keys: { migrationVersion: 1, payoutId: 1, createdAt: -1 },
+      options: {},
+    },
   ],
 
   payouts: [
@@ -940,12 +1002,72 @@ export const COLLECTION_VALIDATORS = Object.freeze({
       properties: {
         milestoneId: { bsonType: "string", minLength: 1 },
         escrowId: { bsonType: "string", minLength: 1 },
-        status: { enum: ["pending", "approved", "rejected", "completed"] },
+        payoutId: { bsonType: ["string", "null"] },
+        position: { bsonType: ["int", "long", "null"], minimum: 0 },
+        status: { enum: ["pending", "submitted", "approved", "rejected", "completed", "paid"] },
+        title: { bsonType: ["string", "null"] },
         description: { bsonType: ["string", "null"] },
         amount: { bsonType: ["string", "null"] },
+        currency: { bsonType: ["string", "null"] },
+        dueAt: { bsonType: ["date", "null"] },
+        feedback: { bsonType: ["string", "null"] },
+        onChainMilestoneId: { bsonType: ["string", "null"] },
         chainTxHash: { bsonType: ["string", "null"] },
+        version: { bsonType: ["int", "long"] },
         createdAt: { bsonType: "date" },
         updatedAt: { bsonType: "date" },
+      },
+    },
+  },
+
+  milestone_evidence: {
+    $jsonSchema: {
+      bsonType: "object",
+      required: ["evidenceId", "milestoneId", "payoutId", "createdAt", "updatedAt"],
+      properties: {
+        evidenceId: { bsonType: "string", minLength: 1 },
+        milestoneId: { bsonType: "string", minLength: 1 },
+        payoutId: { bsonType: "string", minLength: 1 },
+        type: { bsonType: ["string", "null"] },
+        uri: { bsonType: ["string", "null"] },
+        label: { bsonType: ["string", "null"] },
+        metadata: { bsonType: ["object", "null"] },
+        createdAt: { bsonType: "date" },
+        updatedAt: { bsonType: "date" },
+      },
+    },
+  },
+
+  milestone_transitions: {
+    $jsonSchema: {
+      bsonType: "object",
+      required: ["transitionId", "milestoneId", "payoutId", "toStatus", "createdAt"],
+      properties: {
+        transitionId: { bsonType: "string", minLength: 1 },
+        milestoneId: { bsonType: "string", minLength: 1 },
+        payoutId: { bsonType: "string", minLength: 1 },
+        fromStatus: { bsonType: ["string", "null"] },
+        toStatus: { bsonType: "string", minLength: 1 },
+        actorId: { bsonType: ["string", "null"] },
+        reason: { bsonType: ["string", "null"] },
+        source: { bsonType: "string" },
+        createdAt: { bsonType: "date" },
+      },
+    },
+  },
+
+  milestone_migration_exceptions: {
+    $jsonSchema: {
+      bsonType: "object",
+      required: ["exceptionId", "migrationVersion", "payoutId", "reason", "createdAt"],
+      properties: {
+        exceptionId: { bsonType: "string", minLength: 1 },
+        migrationVersion: { bsonType: "int" },
+        payoutId: { bsonType: "string", minLength: 1 },
+        milestoneIndex: { bsonType: ["int", "long", "null"] },
+        reason: { bsonType: "string", minLength: 1 },
+        rawValue: {},
+        createdAt: { bsonType: "date" },
       },
     },
   },

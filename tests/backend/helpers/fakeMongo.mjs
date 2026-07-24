@@ -47,6 +47,9 @@ function matchesCondition(value, condition) {
         case "$ne":
           if (value === operand) return false;
           break;
+        case "$gt":
+          if (!(value > operand)) return false;
+          break;
         case "$type": {
           const check = TYPE_CHECKS[operand];
           if (!check) throw new Error(`fakeMongo: unsupported $type "${operand}"`);
@@ -162,6 +165,9 @@ class FakeCollection {
         ...(update.$setOnInsert || {}),
         ...(update.$set || {}),
       };
+      for (const [field, value] of Object.entries(update.$inc || {})) {
+        candidate[field] = (candidate[field] || 0) + value;
+      }
       this.#assertUnique(candidate, null);
       this.docs.push(candidate);
       return { matchedCount: 0, modifiedCount: 0, upsertedCount: 1 };
@@ -170,8 +176,14 @@ class FakeCollection {
     // $setOnInsert is deliberately ignored on an existing document, which is
     // where the previous double diverged from Mongo most visibly.
     const candidate = { ...existing, ...(update.$set || {}) };
+    for (const [field, value] of Object.entries(update.$inc || {})) {
+      candidate[field] = (candidate[field] || 0) + value;
+    }
     this.#assertUnique(candidate, existing);
     Object.assign(existing, update.$set || {});
+    for (const [field, value] of Object.entries(update.$inc || {})) {
+      existing[field] = (existing[field] || 0) + value;
+    }
     return { matchedCount: 1, modifiedCount: 1 };
   }
 
@@ -183,13 +195,67 @@ class FakeCollection {
     return { deletedCount: 1 };
   }
 
+  async deleteMany(filter) {
+    this.#maybeFail("deleteMany");
+    const before = this.docs.length;
+    this.docs = this.docs.filter((doc) => !matchesFilter(doc, filter));
+    return { deletedCount: before - this.docs.length };
+  }
+
+  async updateMany(filter, update) {
+    this.#maybeFail("updateMany");
+    let matchedCount = 0;
+    let modifiedCount = 0;
+    for (const existing of this.docs) {
+      if (!matchesFilter(existing, filter)) continue;
+      matchedCount += 1;
+      Object.assign(existing, update.$set || {});
+      for (const field of Object.keys(update.$unset || {})) {
+        delete existing[field];
+      }
+      modifiedCount += 1;
+    }
+    return { matchedCount, modifiedCount };
+  }
+
   async countDocuments(filter = {}) {
     return this.docs.filter((doc) => matchesFilter(doc, filter)).length;
+  }
+
+  async createIndexes(models) {
+    for (const model of models) {
+      if (this.indexes.some((index) => index.name === model.name)) continue;
+      this.indexes.push({
+        name: model.name,
+        keys: model.key,
+        options: {
+          unique: model.unique,
+          partialFilterExpression: model.partialFilterExpression,
+        },
+      });
+    }
+    return models.map((model) => model.name);
+  }
+
+  async createIndex(keys, options = {}) {
+    await this.createIndexes([{ key: keys, ...options }]);
+    return options.name;
   }
 
   find(filter = {}) {
     let results = this.docs.filter((doc) => matchesFilter(doc, filter));
     const cursor = {
+      sort(spec) {
+        const entries = Object.entries(spec);
+        results = [...results].sort((left, right) => {
+          for (const [field, direction] of entries) {
+            if (left[field] === right[field]) continue;
+            return left[field] > right[field] ? direction : -direction;
+          }
+          return 0;
+        });
+        return cursor;
+      },
       limit(count) {
         results = results.slice(0, count);
         return cursor;
@@ -223,6 +289,21 @@ export function createFakeDb({ faults = [], transactions = false } = {}) {
         collections.set(name, new FakeCollection(name, REQUIRED_INDEXES[name] ?? [], faults));
       }
       return collections.get(name);
+    },
+    async createCollection(name) {
+      this.collection(name);
+      return { collectionName: name };
+    },
+    listCollections(filter = {}) {
+      const names = [...collections.keys()].filter((name) => !filter.name || filter.name === name);
+      return {
+        async toArray() {
+          return names.map((name) => ({ name }));
+        },
+      };
+    },
+    async command() {
+      return { ok: 1 };
     },
     /** Test-only: raw documents for assertions. */
     dump(name) {
