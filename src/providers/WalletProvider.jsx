@@ -12,6 +12,11 @@ import { KitEventType, StellarWalletsKit } from '@creit-tech/stellar-wallets-kit
 
 import { ensureKitInitialized, NETWORK_PASSPHRASE } from '@/lib/wallet/kit';
 import { fetchBalances, BalancesStatus } from '@/lib/wallet/balance';
+import {
+  formatWalletIntent,
+  verifyWalletTransactionIntent,
+  WalletIntentError,
+} from '@/lib/wallet/intent';
 
 export const WalletStatus = Object.freeze({
   Initializing: 'initializing',
@@ -138,7 +143,7 @@ export function WalletProvider({ children }) {
 
     (async () => {
       try {
-        ensureKitInitialized();
+        await ensureKitInitialized();
 
         let address;
         try {
@@ -311,7 +316,20 @@ export function WalletProvider({ children }) {
 
   const signTransaction = useCallback(
     async (xdr, opts) => {
-      const address = opts?.address ?? assertConnected();
+      const connectedAddress = assertConnected();
+      const address = opts?.address ?? connectedAddress;
+      if (address !== connectedAddress) {
+        throw new WalletIntentError('wallet_intent_mismatch', 'Signing address does not match the connected wallet');
+      }
+      verifyWalletTransactionIntent({
+        xdr,
+        address,
+        networkPassphrase: NETWORK_PASSPHRASE,
+        intent: opts?.intent,
+      });
+      if (!window.confirm(`Review transaction before signing:\n\n${formatWalletIntent(opts.intent)}`)) {
+        throw new WalletIntentError('wallet_intent_rejected', 'Transaction cancelled before wallet signing');
+      }
       const { signedTxXdr } = await StellarWalletsKit.signTransaction(xdr, {
         address,
         networkPassphrase: NETWORK_PASSPHRASE,

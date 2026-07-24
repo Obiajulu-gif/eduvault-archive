@@ -11,6 +11,7 @@ import {
   FaSpinner,
   FaTimes,
 } from "react-icons/fa";
+import useFocusTrap from "@/hooks/useFocusTrap";
 
 const STATE_COPY = {
   signing: {
@@ -93,6 +94,8 @@ export default function CheckoutReceiptModal({
   itemName,
   transactionHash,
   explorerUrl,
+  checkoutTerms,
+  checkoutIntentHash,
   totalFee,
   totalAmount,
   currency = "XLM",
@@ -116,6 +119,12 @@ export default function CheckoutReceiptModal({
         timeStyle: "short",
       }).format(new Date(purchasedAt))
     : "Just now";
+  const formattedIntentExpiry = checkoutTerms?.expiry
+    ? new Intl.DateTimeFormat("en", {
+        dateStyle: "medium",
+        timeStyle: "short",
+      }).format(new Date(checkoutTerms.expiry))
+    : null;
 
   return (
     <AnimatePresence>
@@ -215,8 +224,32 @@ export default function CheckoutReceiptModal({
                     <ReceiptRow label="Total paid">
                       {totalAmount || "—"} {currency}
                     </ReceiptRow>
-                    <ReceiptRow label="Network fee">
-                      {totalFee ?? "Calculating"} {currency}
+                    {checkoutTerms ? (
+                      <>
+                        <ReceiptRow label="Locked amount">
+                          <span className="font-mono">{checkoutTerms.amount.units}</span> atomic units
+                        </ReceiptRow>
+                        <ReceiptRow label="Policy">
+                          {checkoutTerms.policyVersion}
+                        </ReceiptRow>
+                        <ReceiptRow label="Intent hash">
+                          <span className="font-mono">{shortenHash(checkoutIntentHash)}</span>
+                        </ReceiptRow>
+                        <ReceiptRow label="Bound buyer">
+                          <span className="font-mono">{shortenHash(checkoutTerms.buyer)}</span>
+                        </ReceiptRow>
+                        <ReceiptRow label="Material version">
+                          {checkoutTerms.material.version || "Current listing"}
+                        </ReceiptRow>
+                        <ReceiptRow label="Intent expires">
+                          {formattedIntentExpiry}
+                        </ReceiptRow>
+                      </>
+                    ) : null}
+                    <ReceiptRow label={checkoutTerms ? "Platform fee" : "Network fee"}>
+                      {checkoutTerms
+                        ? `${checkoutTerms.feeBreakdown?.platformFeeUnits ?? "0"} atomic units`
+                        : `${totalFee ?? "Calculating"} ${currency}`}
                     </ReceiptRow>
                     <ReceiptRow label="Completed">{formattedDate}</ReceiptRow>
                   </div>

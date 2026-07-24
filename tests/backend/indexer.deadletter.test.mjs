@@ -100,6 +100,11 @@ test('runIndexerBatch records transient failures to dead-letter and supports ret
   assert(dl, 'dead-letter entry created');
   assert.equal(dl.retryCount, 1);
   assert.equal(dl.status, 'retryable');
+  assert.equal(
+    (await db.collection(COLLECTIONS.syncEvents).findOne({ _id: 'ledger:tx:1' })).status,
+    'failed',
+    'a partial receipt is never reported as successfully projected',
+  );
 
   // set retries threshold to 1 so second attempt marks failed
   process.env.INDEXER_MAX_RETRIES = '1';
@@ -110,5 +115,15 @@ test('runIndexerBatch records transient failures to dead-letter and supports ret
   assert.equal(dl2.retryCount, 2);
   assert.equal(dl2.status, 'failed');
 
-  // reprocessing is handled by maintainers via `scripts/reprocess-deadletter.mjs`
+  const result3 = await runIndexerBatch({ db, eventSource: { async getEvents() { return { events: [event], nextCursor: null }; } } });
+  assert.equal(result3.applied, 1, 'the recoverable receipt replays its projections');
+  assert.equal(
+    (await db.collection(COLLECTIONS.syncEvents).findOne({ _id: 'ledger:tx:1' })).status,
+    'applied',
+  );
+  assert.equal(
+    await db.collection(COLLECTIONS.deadLetterEvents).findOne({ _id: 'ledger:tx:1' }),
+    null,
+    'successful replay clears dead-letter state',
+  );
 });

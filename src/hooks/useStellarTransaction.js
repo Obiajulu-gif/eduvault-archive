@@ -107,7 +107,7 @@ export function useStellarTransaction() {
   }, [clearTransaction]);
 
   const execute = useCallback(
-    async (unsignedXdr, { description = "Transaction", explorerBaseUrl } = {}) => {
+    async (unsignedXdr, { description = "Transaction", explorerBaseUrl, intent } = {}) => {
       if (!isConnected) {
         const error = new Error(
           "Wallet not connected. Please connect your Stellar wallet first.",
@@ -142,7 +142,7 @@ export function useStellarTransaction() {
 
         let signedXdr;
         try {
-          signedXdr = await signTransaction(unsignedXdr);
+          signedXdr = await signTransaction(unsignedXdr, { intent });
         } catch (err) {
           const msg = err?.message ?? String(err);
           const isDismissal = /clos|cancel|reject|dismiss/i.test(msg);

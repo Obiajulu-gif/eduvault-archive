@@ -1,0 +1,60 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    name: Lint, build, and test
+    runs-on: ubuntu-latest
+    env:
+      # These are deliberately non-production values. CI validates the same
+      # required settings as a deployment without exposing repository secrets
+      # to pull-request workflows.
+      CI: "true"
+      NODE_ENV: production
+      NEXT_PUBLIC_APP_URL: https://ci.eduvault.invalid
+      MONGODB_URI: mongodb+srv://ci-user:ci-password@ci.example.invalid/eduvault-ci
+      MONGODB_DB: eduvault-ci
+      JWT_SECRET: ci-only-jwt-secret-with-at-least-32-characters
+      PINATA_JWT: ci-only-pinata-token
+      NEXT_PUBLIC_GATEWAY_URL: https://gateway.pinata.cloud
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install dependencies
+        env:
+          NODE_ENV: development
+        run: npm install
+
+      - name: Validate CI environment configuration
+        run: npm run check:ci-env
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Validate Next.js configuration and production build
+        run: npm run build
+
+      - name: Run smart contract tests
+        run: npm run test:contracts
+
+      - name: Run backend tests
+        run: npm run test:backend

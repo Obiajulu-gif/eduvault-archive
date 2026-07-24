@@ -1,6 +1,7 @@
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
+import crypto from "crypto";
 import { NextResponse } from "next/server";
 import {
   rotateRefreshToken,
@@ -34,25 +35,23 @@ export async function POST(request) {
 
       if (!rotation) {
         auditLog({ event: "token_refresh_invalid", route: "auth/refresh", method: "POST", status: 401 });
-        // Clear any stale cookies on the client
         const response = NextResponse.json({ error: "Invalid or expired refresh token" }, { status: 401 });
         response.cookies.set("auth_token", "", { maxAge: 0, path: "/" });
-        response.cookies.set("refresh_token", "", { maxAge: 0, path: "/" });
+        response.cookies.set("refresh_token", "", { maxAge: 0, path: "/api/auth/refresh" });
         return response;
       }
 
-      // Fetch user for the token payload
       const db = await getDb();
       let user = null;
       try {
         user = await db.collection("users").findOne({ _id: new ObjectId(rotation.userId) });
       } catch {
-        // userId may not be an ObjectId if originally set to walletAddress
         user = await db.collection("users").findOne({ walletAddress: rotation.userId });
       }
 
       const tokenPayload = {
         sub: rotation.userId,
+        jti: crypto.randomUUID(),
         email: user?.email ?? "",
         name: user?.fullName ?? "",
         walletAddress: user?.walletAddress ?? "",
@@ -68,7 +67,7 @@ export async function POST(request) {
         secure: isProduction,
         sameSite: "strict",
         path: "/",
-        maxAge: 15 * 60, // 15 minutes
+        maxAge: 15 * 60,
       });
 
       response.cookies.set("refresh_token", rotation.refreshToken, {
@@ -76,12 +75,11 @@ export async function POST(request) {
         secure: isProduction,
         sameSite: "strict",
         path: "/api/auth/refresh",
-        maxAge: 7 * 24 * 60 * 60, // 7 days
+        maxAge: 7 * 24 * 60 * 60,
       });
 
-      auditLog({ event: "token_refresh_success", route: "auth/refresh", method: "POST", status: 200, actor: rotation.userId });
+      auditLog({ event: "token_refresh_success", route: "auth/refresh", method: "POST", status: 200, actor: rotation.userId, familyId: rotation.familyId });
 
-      // Opportunistically clean up expired tokens
       cleanupExpiredRefreshTokens().catch(() => {});
 
       return response;

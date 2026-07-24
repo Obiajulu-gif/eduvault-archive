@@ -141,13 +141,14 @@ export default function CheckoutInvoice({
 
       {/* Action Button */}
       <button 
-        className={`w-full mt-4 py-2.5 rounded-lg font-bold text-white transition-colors ${
+        className={`w-full mt-4 py-2.5 rounded-lg font-bold text-white transition-colors focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:outline-none ${
           isButtonDisabled 
             ? 'bg-slate-400 dark:bg-slate-700 cursor-not-allowed' 
             : 'bg-blue-600 hover:bg-blue-700 dark:bg-blue-500 dark:hover:bg-blue-600'
         }`}
         disabled={isButtonDisabled}
         onClick={onConfirm}
+        aria-busy={loading}
       >
         {loading ? 'Checking Balance...' : 'Initiate Checkout'}
       </button>

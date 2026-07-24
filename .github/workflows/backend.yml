@@ -61,5 +61,8 @@ jobs:
       - name: Run tests
         run: npm test --if-present
 
+      - name: Run backend telemetry contract tests
+        run: npm run test:backend --if-present
+
       - name: Build application
         run: npm run build --if-present

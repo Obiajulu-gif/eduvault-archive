@@ -47,7 +47,7 @@ export default function LearningProgress() {
       {progress.length === 0 ? (
         <div className="text-center py-6">
           <FiBook className="w-10 h-10 text-gray-300 mx-auto mb-2" />
-          <p className="text-gray-500 text-sm">You haven't completed any resources yet.</p>
+          <p className="text-gray-500 text-sm">You haven&#39;t completed any resources yet.</p>
           <Link href="/marketplace" className="text-blue-500 text-sm hover:underline mt-2 inline-block">
             Explore marketplace
           </Link>

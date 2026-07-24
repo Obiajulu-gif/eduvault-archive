@@ -6,6 +6,7 @@ import { withApiHardening } from "@/lib/api/hardening";
 import { getDb } from "@/lib/mongodb";
 import { ObjectId } from "mongodb";
 import { cacheDel } from "@/lib/cache/redis";
+import { getLatestManifest } from "@/lib/provenance/registry";
 
 export const runtime = "nodejs";
 
@@ -67,12 +68,28 @@ export async function POST(request) {
           return NextResponse.json({ error: "Material not found" }, { status: 404 });
         }
 
-        // 2. Save the review
+        // 2. Resolve manifest version for the review
+        let reviewVersionBinding = null;
+        try {
+          const latestManifest = await getLatestManifest(materialId);
+          if (latestManifest) {
+            reviewVersionBinding = {
+              version: latestManifest.version,
+              manifestDigest: latestManifest.digest,
+            };
+          }
+        } catch (manifestErr) {
+          console.warn("[reviews-publish] Failed to resolve manifest version:", manifestErr?.message);
+        }
+
+        // 3. Save the review
         const review = {
           materialId,
           reviewerAddress,
           rating: ratingNum,
           comment: comment ?? "",
+          reviewVersion: reviewVersionBinding?.version || null,
+          versionBinding: reviewVersionBinding,
           createdAt: new Date(),
         };
 

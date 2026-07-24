@@ -1,3 +1,5 @@
+import { normalizeExternalUrl, REMOTE_IMAGE_HOSTS } from "../security/input.js";
+
 export class StorageError extends Error {
   constructor(message, details = {}) {
     super(message);
@@ -35,13 +37,19 @@ export function validatePinataResponse(response, type = "file") {
  * @returns {string} The verified URL
  */
 export function validateGatewayUrl(url, type = "file") {
-  if (!url || typeof url !== "string" || !url.startsWith("http")) {
+  try {
+    const gatewayHost = process.env.NEXT_PUBLIC_GATEWAY_URL
+      ? new URL(process.env.NEXT_PUBLIC_GATEWAY_URL).hostname
+      : null;
+    return normalizeExternalUrl(url, {
+      allowedHosts: [...REMOTE_IMAGE_HOSTS, gatewayHost].filter(Boolean),
+    });
+  } catch {
     throw new StorageError(`Invalid gateway URL returned for ${type}: "${url || ""}"`, {
       type,
       url,
     });
   }
-  return url;
 }
 
 /**

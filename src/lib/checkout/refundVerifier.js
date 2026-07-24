@@ -1,9 +1,9 @@
-import clientPromise from '@/lib/mongodb';
+import { getMongoClientPromise } from '@/lib/mongodb';
 import logger from '@/lib/logger';
 import { auditLog } from '@/lib/api/audit';
 
 export async function verifyRefundLimit(transactionId, refundAmount) {
-  const dbClient = await clientPromise;
+  const dbClient = await getMongoClientPromise();
   const db = dbClient.db();
   const purchases = db.collection('purchases');
 

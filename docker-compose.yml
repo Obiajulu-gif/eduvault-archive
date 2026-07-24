@@ -3,12 +3,34 @@ services:
     image: mongo:7
     container_name: eduvault-mongodb
     restart: unless-stopped
+    # The indexer applies each event inside a Mongo transaction so the
+    # sync_events receipt and the purchase/entitlement projections commit
+    # together. Transactions require a replica set, so run a single-node one
+    # locally; a standalone mongod rejects them outright.
+    command: ["mongod", "--replSet", "rs0", "--bind_ip_all"]
     ports:
       - "27017:27017"
     environment:
       MONGO_INITDB_DATABASE: eduvault
     volumes:
       - mongodb-data:/data/db
+    healthcheck:
+      # Initiate the replica set on first boot, then report healthy once the
+      # node has actually been elected primary. `rs.initiate` is idempotent in
+      # the sense that it errors harmlessly once configured, so the ping in the
+      # catch branch is what keeps this green on subsequent restarts.
+      test: >
+        mongosh --quiet --eval "
+          try {
+            rs.status().ok ? 0 : rs.initiate({_id:'rs0',members:[{_id:0,host:'localhost:27017'}]})
+          } catch (e) {
+            rs.initiate({_id:'rs0',members:[{_id:0,host:'localhost:27017'}]})
+          }
+        "
+      interval: 5s
+      timeout: 10s
+      retries: 12
+      start_period: 10s
 
 volumes:
   mongodb-data:

@@ -1,31 +1,18 @@
-# Wallet and Blockchain Integration Status
+# Wallet and Blockchain Integration
 
 ## Summary
 
-EduVault currently includes an EVM-based wallet and contract prototype. That implementation was useful for validating user flows, but it is not the intended long-term blockchain direction for the Drip Wave submission.
-
-The strategic direction for this project is Stellar-native settlement and entitlement logic built on Soroban.
+EduVault uses Stellar-native settlement and entitlement logic built on Soroban. The platform utilizes low-cost transactions and supports asset flexibility for stable payments and creator-issued credits.
 
 ## What Exists Today
 
-- wallet connection flow in the frontend
+- Stellar wallet connection flow in the frontend
 - wallet-linked profile creation
 - upload flow that pins files and metadata to IPFS
-- archived ERC-721 ownership experiment in `archive/legacy-evm/contracts/EduVault.sol`
-- marketplace and purchase UI prototypes
+- Soroban contracts for Material Registry and Purchase Manager
+- marketplace and purchase UI
 
-## Why the Current Chain Layer Is Not Final
-
-The product need is payment and access control for educational materials. That requires:
-
-- low-cost transactions
-- support for small purchase sizes
-- strong cross-border usability
-- asset flexibility for stable payments and later institutional credits
-
-Those requirements map better to Stellar than to an NFT-first implementation.
-
-## Planned Stellar Integration
+## Stellar Integration
 
 ### Wallet and auth
 
@@ -35,8 +22,8 @@ Those requirements map better to Stellar than to an NFT-first implementation.
 
 ### Contracts
 
-- register materials and rights terms on Soroban
-- accept payment in XLM or approved Stellar assets
+- register materials and rights terms on Soroban (`MaterialRegistry`)
+- accept payment in XLM or approved Stellar assets (`PurchaseManager`)
 - record entitlements so access can be verified by the application
 
 ### Assets
@@ -45,21 +32,9 @@ Those requirements map better to Stellar than to an NFT-first implementation.
 - accept USDC on Stellar for stable pricing
 - optionally support creator-issued or institution-issued access credits
 
-## Migration Principle
-
-The existing web application remains useful. The migration mostly affects the chain layer:
-
-- wallet provider changes
-- transaction construction and signing
-- entitlement verification
-- payout handling
-
-File storage, metadata flow, dashboard UX, and catalog search can be retained with limited changes.
-
 ## Documentation Rule
 
 When discussing EduVault externally:
 
-- describe the current repository as a working prototype
-- describe Stellar payments and Soroban contracts as the next implementation milestone
-- avoid implying that the archived Celo/EVM prototype is already Stellar-native
+- describe the repository as using Stellar payments and Soroban contracts as the core blockchain implementation
+- refer to the legacy EVM architecture only in the context of the migration history (see `migration-erc721-to-soroban.md`)

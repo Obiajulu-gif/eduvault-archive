@@ -4,6 +4,7 @@ import { test } from "node:test";
 import {
   applyIndexedEvent,
   createJsonRpcEventSource,
+  eventId,
   runIndexerBatch,
 } from "../../src/lib/indexer/stellarIndexer.js";
 
@@ -61,6 +62,19 @@ test("applyIndexedEvent writes purchases and entitlement cache idempotently", as
   assert.equal((await applyIndexedEvent(db, event)).skipped, true);
 });
 
+test("event identity includes network, contract, ledger, transaction, and zero position", () => {
+  assert.equal(
+    eventId({
+      network: "testnet",
+      contractId: "CABC",
+      ledger: 123,
+      transactionHash: "tx-hash",
+      index: 0,
+    }),
+    "testnet:CABC:123:tx-hash:0",
+  );
+});
+
 test("runIndexerBatch stores cursor progress", async () => {
   const db = createDb();
   const result = await runIndexerBatch({
@@ -72,7 +86,15 @@ test("runIndexerBatch stores cursor progress", async () => {
     },
   });
 
-  assert.deepEqual(result, { applied: 0, skipped: 0, nextCursor: "cursor-2" });
+  // An empty page is a short page, so the indexer reports itself drained and
+  // caught up rather than lagging by the full height of the chain.
+  assert.deepEqual(result, {
+    applied: 0,
+    skipped: 0,
+    nextCursor: "cursor-2",
+    ledgerLag: 0,
+    drained: true,
+  });
   assert.equal((await db.collection("sync_state").findOne({ _id: "stellar:events" })).cursor, "cursor-2");
 });
 

@@ -85,17 +85,23 @@ function PurchasedMaterialCard({ item }) {
     setDownloadError(null);
     setProgress({ percent: 0, speed: 0, eta: null });
     try {
-      const res = await fetch(`/api/materials/download/${item.materialId}`);
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
+      // Step 1: Get a delivery token (no CID/gateway URL exposed)
+      const tokenRes = await fetch(`/api/materials/download/${item.materialId}`);
+      if (!tokenRes.ok) {
+        const body = await tokenRes.json().catch(() => ({}));
         throw new Error(body.error || "Download failed");
       }
-      const { downloadUrl, title: originalTitle } = await res.json();
+      const { deliveryToken, expiresAt, streamEndpoint, fileName: originalTitle, contentType: fileContentType } = await tokenRes.json();
       const title = originalTitle || "material";
 
-      const response = await fetch(downloadUrl);
+      // Step 2: Stream through the authenticated proxy
+      const streamUrl = `${streamEndpoint}?token=${encodeURIComponent(deliveryToken)}&materialId=${encodeURIComponent(item.materialId)}`;
+      const response = await fetch(streamUrl);
       if (!response.ok) {
-        throw new Error("Failed to connect to storage gateway");
+        if (response.status === 410) {
+          throw new Error("Download token expired. Please try again.");
+        }
+        throw new Error("Failed to connect to delivery service");
       }
 
       const contentLength = response.headers.get("Content-Length");
@@ -147,7 +153,7 @@ function PurchasedMaterialCard({ item }) {
       setProgress({ percent: 100, speed: 0, eta: 0 });
 
       const blob = new Blob(chunks, {
-        type: response.headers.get("Content-Type") || "application/octet-stream",
+        type: response.headers.get("Content-Type") || fileContentType || "application/octet-stream",
       });
       const objectUrl = URL.createObjectURL(blob);
 

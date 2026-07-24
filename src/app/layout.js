@@ -1,4 +1,5 @@
 import { Geist, Geist_Mono } from "next/font/google";
+import { headers } from "next/headers";
 import "./globals.css";
 import Web3Provider from "@/providers/Web3Provider";
 import { ToastProvider } from "@/providers/ToastProvider";
@@ -21,9 +22,9 @@ export const metadata = {
   title: "EduVault - Decentralized Educational Materials Sharing",
   description: "Share and monetize your educational materials on the blockchain with EduVault",
   icons: {
-    icon: "/logo.png",              // general favicon
-    shortcut: "/logo.png",          // legacy shortcut icon
-    apple: "/logo.png"     // optional iOS icon (place in public/ if used)
+    icon: "/logo.png",
+    shortcut: "/logo.png",
+    apple: "/logo.png"
   },
 };
 
@@ -43,18 +44,28 @@ const themeInitScript = `
 })();
 `;
 
-export default function RootLayout({ children }) {
+export default async function RootLayout({ children }) {
+  const nonce = (await headers()).get("x-nonce") || undefined;
+
   return (
     <html lang="en" suppressHydrationWarning>
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased bg-background text-foreground`}
       >
-        <script dangerouslySetInnerHTML={{ __html: themeInitScript }} />
+        <script nonce={nonce} dangerouslySetInnerHTML={{ __html: themeInitScript }} />
+        <a
+          href="#main-content"
+          className="sr-only focus:not-sr-only focus:fixed focus:top-4 focus:left-4 focus:z-[9999] focus:px-4 focus:py-2 focus:bg-blue-600 focus:text-white focus:rounded-lg focus:shadow-lg focus:text-sm focus:font-bold"
+        >
+          Skip to main content
+        </a>
         <Web3Provider>
           <ToastProvider>
             <CartProvider>
               <ComparisonProvider>
-                {children}
+                <div id="main-content" role="main" tabIndex={-1}>
+                  {children}
+                </div>
                 <CartDrawer />
                 <ComparisonMatrix />
               </ComparisonProvider>

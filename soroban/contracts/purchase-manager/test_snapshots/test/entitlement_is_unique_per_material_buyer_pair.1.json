@@ -553,7 +553,7 @@
                           "symbol": "to"
                         },
                         "val": {
-                          "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAARQG5"
+                          "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAVAX5"
                         }
                       }
                     ]
@@ -609,7 +609,7 @@
                           "symbol": "to"
                         },
                         "val": {
-                          "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAATYON"
+                          "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAVAX5"
                         }
                       }
                     ]
@@ -655,13 +655,16 @@
               "key": {
                 "vec": [
                   {
-                    "symbol": "Admin"
+                    "symbol": "AdminRole"
+                  },
+                  {
+                    "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM"
                   }
                 ]
               },
               "durability": "persistent",
               "val": {
-                "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM"
+                "bool": true
               }
             }
           },
@@ -1007,6 +1010,14 @@
                     "val": {
                       "i128": "100000"
                     }
+                  },
+                  {
+                    "key": {
+                      "symbol": "transaction_id"
+                    },
+                    "val": {
+                      "bytes": "35353065383430302d653239622d343164342d613731362d343436363535343430303030"
+                    }
                   }
                 ]
               }
@@ -1128,6 +1139,14 @@
                     "val": {
                       "i128": "100000"
                     }
+                  },
+                  {
+                    "key": {
+                      "symbol": "transaction_id"
+                    },
+                    "val": {
+                      "bytes": "35353065383430302d653239622d343164342d613731362d343436363535343430303030"
+                    }
                   }
                 ]
               }
@@ -1154,12 +1173,6 @@
               "durability": "persistent",
               "val": {
                 "map": [
-                  {
-                    "key": {
-                      "symbol": "oracle"
-                    },
-                    "val": "void"
-                  },
                   {
                     "key": {
                       "symbol": "paused"

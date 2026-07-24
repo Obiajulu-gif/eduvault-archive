@@ -217,4 +217,3 @@ export async function sendReceiptIfEligible(db, purchaseId) {
     console.error('Failed to send receipt email:', err);
   }
 }
-

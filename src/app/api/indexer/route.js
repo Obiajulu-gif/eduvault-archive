@@ -11,6 +11,7 @@ import {
   PURCHASE_MANAGER_CONTRACT_ID,
   MATERIAL_REGISTRY_CONTRACT_ID,
   STELLAR_RPC_URL,
+  NETWORK_PASSPHRASE,
 } from "@/lib/config/chain";
 
 const INDEXER_SECRET = process.env.INDEXER_SECRET ?? "";
@@ -41,6 +42,7 @@ export async function POST(request) {
   const eventSource = createJsonRpcEventSource({
     rpcUrl: STELLAR_RPC_URL,
     contractId: contractIds,
+    networkPassphrase: NETWORK_PASSPHRASE,
   });
 
   let db;

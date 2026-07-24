@@ -7,11 +7,15 @@ import { auditLog } from "@/lib/api/audit";
 import { withApiHardening } from "@/lib/api/hardening";
 import {
   escapeRegExp,
+  normalizeImageField,
+  normalizeUrlField,
   normalizeWalletAddress,
+  PROFILE_LINK_RULES,
+  sanitizeString,
   validateProfilePayload,
   validatePayoutSettingsPayload,
 } from "@/lib/api/validation";
-import { getUserFromCookie, sanitizeString } from "@/lib/api/auth";
+import { getUserFromCookie } from "@/lib/api/auth";
 import { verifySessionWalletAddress } from "@/lib/auth/sessionVerification";
 import { sendWelcomeEmail } from "@/lib/email";
 import { getDb } from "@/lib/mongodb";
@@ -28,14 +32,34 @@ export async function POST(request) {
     const db = await getDb();
     const users = db.collection("users");
 
-    const duplicateQuery = walletAddress
-      ? { $or: [
+    const escapedEmail = escapeRegExp(email);
+    const emailCondition = {
+      $or: [
+        { email },
+        { email: { $regex: `^${escapedEmail}$`, $options: "i" } },
+      ],
+    };
+
+    let duplicateQuery;
+    if (walletAddress) {
+      const escapedWallet = escapeRegExp(walletAddress);
+      const escapedWalletLower = escapeRegExp(walletAddressLower || walletAddress);
+      duplicateQuery = {
+        $or: [
           { email },
+          { email: { $regex: `^${escapedEmail}$`, $options: "i" } },
           { walletAddress },
           { walletAddress: walletAddressLower },
-          { walletAddressLower }
-        ] }
-      : { email };
+          { walletAddress: { $regex: `^${escapedWallet}$`, $options: "i" } },
+          { walletAddressLower: walletAddress },
+          { walletAddressLower: walletAddressLower },
+          { walletAddressLower: { $regex: `^${escapedWalletLower}$`, $options: "i" } },
+        ],
+      };
+    } else {
+      duplicateQuery = emailCondition;
+    }
+
     const existing = await users.findOne(duplicateQuery);
     if (existing) {
       return NextResponse.json({ error: "Profile already exists" }, { status: 409 });
@@ -134,7 +158,7 @@ export async function PATCH(request) {
         }
 
         if (profileData.avatarUrl && typeof profileData.avatarUrl === 'string') {
-          updateFields.avatarUrl = sanitizeString(profileData.avatarUrl, { maxLength: 2048 });
+          updateFields.avatarUrl = normalizeImageField(profileData.avatarUrl, "avatarUrl");
         }
 
         if (profileData.institution && typeof profileData.institution === 'string') {
@@ -145,16 +169,10 @@ export async function PATCH(request) {
           updateFields.country = sanitizeString(profileData.country, { maxLength: 80 });
         }
 
-        if (profileData.twitterUrl && typeof profileData.twitterUrl === 'string') {
-          updateFields.twitterUrl = sanitizeString(profileData.twitterUrl, { maxLength: 256 });
-        }
-
-        if (profileData.githubUrl && typeof profileData.githubUrl === 'string') {
-          updateFields.githubUrl = sanitizeString(profileData.githubUrl, { maxLength: 256 });
-        }
-
-        if (profileData.websiteUrl && typeof profileData.websiteUrl === 'string') {
-          updateFields.websiteUrl = sanitizeString(profileData.websiteUrl, { maxLength: 256 });
+        for (const [field, options] of Object.entries(PROFILE_LINK_RULES)) {
+          if (typeof profileData[field] === "string" && profileData[field]) {
+            updateFields[field] = normalizeUrlField(profileData[field], field, options);
+          }
         }
 
         if (

@@ -180,6 +180,14 @@ Run archived Solidity prototype tests:
 npm run test:contracts
 ```
 
+## Continuous Integration
+
+The [CI workflow](.github/workflows/ci.yml) runs on every push and pull request. It installs dependencies with `npm install`, validates the CI environment against `.env.example`, lints the repository, builds the Next.js app, and runs the smart contract and backend test suites.
+
+The workflow uses intentionally non-production values for the configuration that would normally be supplied as secrets (`JWT_SECRET`, `PINATA_JWT`, and database settings). This checks that required settings are present and not placeholders without exposing deployment credentials to pull-request workflows. Production and deployment workflows must continue to provide real repository or environment secrets.
+
+To add a new required check, first add an npm script, then add a clearly named step to `.github/workflows/ci.yml` after environment validation. If the check needs configuration, document its variable in `.env.example` and add it to `scripts/validate-ci-env.mjs` when it is required for CI.
+
 ## Documentation
 
 - [Architecture](docs/architecture.md)

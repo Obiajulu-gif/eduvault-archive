@@ -80,7 +80,7 @@ async function resolveGeolocation(ipAddress) {
  * @param {string} countryCode - ISO 3166-1 alpha-2 country code
  * @returns {number} Tax rate in basis points (10000 = 100%)
  */
-function getTaxRateForCountry(countryCode) {
+export function getTaxRateForCountry(countryCode) {
   const upperCode = countryCode?.toUpperCase() || 'DEFAULT';
   return DEFAULT_TAX_RATES[upperCode] || DEFAULT_TAX_RATES.DEFAULT;
 }

@@ -1,8 +1,8 @@
 #![no_std]
 
 use soroban_sdk::{
-    contract, contracterror, contractevent, contractimpl, contracttype, Address, Bytes, BytesN, Env,
-    IntoVal, Symbol, Vec,
+    contract, contracterror, contractevent, contractimpl, contracttype, Address, Bytes, BytesN,
+    Env, IntoVal, Symbol, Vec,
 };
 
 pub mod auth;
@@ -89,6 +89,17 @@ pub struct MaterialRecord {
     pub payout_shares: Vec<PayoutShare>,
 }
 
+/// Legacy platform configuration stored in PurchaseManager (v1)
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PlatformConfigV1 {
+    pub registry: Address,
+    pub treasury: Address,
+    pub platform_fee_bps: u32,
+    pub paused: bool,
+    pub oracle: Option<Address>,
+}
+
 /// Platform configuration stored in PurchaseManager
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -97,10 +108,6 @@ pub struct PlatformConfig {
     pub treasury: Address,
     pub platform_fee_bps: u32,
     pub paused: bool,
-    /// Optional price-oracle address for future cross-asset conversion support.
-    /// When `None`, no oracle is configured and all prices must be quoted in
-    /// the exact accepted asset (no conversion).
-    pub oracle: Option<Address>,
 }
 
 /// Entitlement record for a successful purchase
@@ -128,7 +135,16 @@ pub struct EscrowRecord {
     pub seller_net: i128,
     pub payout_shares: Vec<PayoutShare>,
     pub purchase_ledger: u32,
+    pub transaction_id: Bytes,
     pub claimed: bool,
+}
+
+/// Pending admin transfer record for two-step admin ownership handoff
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PendingAdminTransfer {
+    pub from: Address,
+    pub to: Address,
 }
 
 /// Data keys for contract storage
@@ -138,6 +154,7 @@ enum DataKey {
     PlatformConfig,
     AllowedAsset(Address),
     PurchaseNonce,
+    ConsumedIntent(BytesN<32>),
     Entitlement((BytesN<32>, Address)),
     Escrow(u64),
     PendingAdmin,
@@ -179,6 +196,10 @@ pub enum PurchaseError {
 
     // Admin transfer errors
     NoPendingAdminTransfer = 60,
+
+    // Checkout intent errors
+    IntentExpired = 70,
+    IntentConsumed = 71,
 }
 
 /// Event: purchase.completed
@@ -285,6 +306,18 @@ pub struct CreatorTierUpdatedEvent {
     pub tier: CreatorTier,
 }
 
+/// Event: checkout_intent.consumed
+#[contractevent(topics = ["checkout_intent", "consumed"], data_format = "vec")]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CheckoutIntentConsumedEvent {
+    #[topic]
+    pub intent_hash: BytesN<32>,
+    #[topic]
+    pub purchase_id: u64,
+    pub policy_version: Bytes,
+    pub expires_ledger: u32,
+}
+
 /// The PurchaseManager contract
 #[contract]
 pub struct PurchaseManager;
@@ -330,35 +363,6 @@ impl<'a> SacToken<'a> {
         self.env.invoke_contract::<i128>(self.address, &func, args)
     }
 }
-
-// ============== Price Oracle Stub ==============
-
-/// Stub for a future price-oracle integration (e.g. Reflector Oracle / SEP-40).
-///
-/// Returns `None` for every query until a concrete oracle is integrated.
-/// The `oracle` field in `PlatformConfig` holds the oracle contract address
-/// once deployed.
-pub struct PriceOracle<'a> {
-    env: &'a Env,
-    address: &'a Address,
-}
-
-impl<'a> PriceOracle<'a> {
-    pub fn new(env: &'a Env, address: &'a Address) -> Self {
-        PriceOracle { env, address }
-    }
-
-    /// Returns the last price of `base` denominated in `quote` as
-    /// `Some((price, decimals))`, or `None` when the oracle is unavailable.
-    ///
-    /// TODO: implement Reflector Oracle or equivalent SEP-40 feed when an
-    ///       on-chain price source is available on the target network.
-    pub fn last_price(&self, _base: &Address, _quote: &Address) -> Option<(i128, u32)> {
-        let _ = (self.env, self.address);
-        None
-    }
-}
-
 // ============== Registry Cross-Contract Interface ==============
 
 /// Interface for calling MaterialRegistry contract
@@ -420,7 +424,6 @@ impl PurchaseManager {
             treasury: treasury.clone(),
             platform_fee_bps,
             paused: false,
-            oracle: None,
         };
 
         auth::set_admin_role(&env, &admin);
@@ -455,128 +458,65 @@ impl PurchaseManager {
         expected_amount: i128,
         transaction_id: Bytes,
     ) -> Result<u64, PurchaseError> {
-        buyer.require_auth();
-
-        let config = get_platform_config(&env)?;
-
-        if config.paused {
-            return Err(PurchaseError::ContractPaused);
-        }
-
-        if !is_asset_allowed(&env, &asset) {
-            return Err(PurchaseError::AssetNotAllowed);
-        }
-
-        if has_entitlement_internal(&env, &material_id, &buyer) {
-            return Err(PurchaseError::EntitlementAlreadyExists);
-        }
-
-        let material: MaterialRecord = config
-            .registry
-            .get_material(&env, &material_id)
-            .map_err(|_| PurchaseError::MaterialNotFound)?;
-
-        if material.status != MaterialStatus::Active || material.paused {
-            return Err(PurchaseError::MaterialNotActive);
-        }
-
-        let quote = find_quote(&material.quotes, &asset)
-            .ok_or(PurchaseError::AssetNotAcceptedForMaterial)?;
-
-        if quote.amount != expected_amount {
-            return Err(PurchaseError::InvalidQuoteAmount);
-        }
-        if quote.amount <= 0 {
-            return Err(PurchaseError::InvalidQuoteAmount);
-        }
-
-        validate_payout_shares(&material.payout_shares)?;
-
-        let gross = quote.amount;
-        let effective_fee_bps =
-            get_effective_fee_bps(&env, &material.creator, config.platform_fee_bps);
-        let platform_fee = (gross * effective_fee_bps as i128) / BASIS_POINTS as i128;
-        let seller_net = gross - platform_fee;
-
-        let purchase_id = get_and_increment_purchase_nonce(&env)?;
-        let current_ledger = env.ledger().sequence();
-
-        if platform_fee > 0 {
-            transfer_asset(&env, &buyer, &config.treasury, &asset, platform_fee)?;
-
-            PayoutDistributedEvent {
-                purchase_id,
-                material_id: material_id.clone(),
-                recipient: config.treasury.clone(),
-                role: Symbol::new(&env, "platform_fee"),
-                asset: asset.clone(),
-                amount: platform_fee,
-                transaction_id: transaction_id.clone(),
-            }
-            .publish(&env);
-        }
-
-        if seller_net > 0 {
-            transfer_asset(
-                &env,
-                &buyer,
-                &env.current_contract_address(),
-                &asset,
-                seller_net,
-            )?;
-        }
-
-        let escrow_record = EscrowRecord {
-            purchase_id,
-            material_id: material_id.clone(),
-            asset: asset.clone(),
-            total_amount: gross,
-            platform_fee,
-            seller_net,
-            &transaction_id,
-        )?;
-            payout_shares: material.payout_shares.clone(),
-            purchase_ledger: current_ledger,
-            claimed: false,
-        };
-        set_escrow_record(&env, purchase_id, &escrow_record);
-
-        EscrowCreatedEvent {
-            purchase_id,
-            material_id: material_id.clone(),
-            asset: asset.clone(),
-            amount: seller_net,
-            lock_until_ledger: current_ledger + ESCROW_LOCK_PERIOD_LEDGERS,
-        }
-        .publish(&env);
-
-        let entitlement = EntitlementRecord {
-            material_id: material_id.clone(),
-            buyer: buyer.clone(),
-            active: true,
-            purchase_id,
-            asset: asset.clone(),
-            amount: gross,
-            granted_ledger: current_ledger,
-        };
-
-        set_entitlement(&env, &entitlement);
-
-        PurchaseCompletedEvent {
-            purchase_id,
-            material_id: material_id.clone(),
-            buyer: buyer.clone(),
-            seller: material.creator.clone(),
-            asset: asset.clone(),
-            amount: gross,
-            platform_fee,
-            seller_net_amount: seller_net,
-            entitlement_active: true,
+        execute_purchase(
+            env,
+            buyer,
+            material_id,
+            asset,
+            expected_amount,
             transaction_id,
-        }
-        .publish(&env);
+            None,
+        )
+    }
 
-        Ok(purchase_id)
+    /// Execute a purchase bound to a server-authenticated checkout intent.
+    ///
+    /// The backend signs the full intent terms off-chain. The contract stores
+    /// the intent hash as single-use state, rejects expired intents, and emits
+    /// a link between the finalized purchase and the exact intent policy.
+    pub fn purchase_with_intent(
+        env: Env,
+        buyer: Address,
+        material_id: BytesN<32>,
+        asset: Address,
+        expected_amount: i128,
+        transaction_id: Bytes,
+        intent_hash: BytesN<32>,
+        expires_ledger: u32,
+        policy_version: Bytes,
+    ) -> Result<u64, PurchaseError> {
+        if env.ledger().sequence() > expires_ledger {
+            return Err(PurchaseError::IntentExpired);
+        }
+
+        if env
+            .storage()
+            .persistent()
+            .has(&DataKey::ConsumedIntent(intent_hash.clone()))
+        {
+            return Err(PurchaseError::IntentConsumed);
+        }
+
+        env.storage()
+            .persistent()
+            .set(&DataKey::ConsumedIntent(intent_hash.clone()), &true);
+
+        execute_purchase(
+            env,
+            buyer,
+            material_id,
+            asset,
+            expected_amount,
+            transaction_id,
+            Some((intent_hash, policy_version, expires_ledger)),
+        )
+    }
+
+    /// Check whether a checkout intent hash has already been consumed.
+    pub fn is_intent_consumed(env: Env, intent_hash: BytesN<32>) -> bool {
+        env.storage()
+            .persistent()
+            .has(&DataKey::ConsumedIntent(intent_hash))
     }
 
     /// Check if a buyer has an active entitlement for a material
@@ -741,8 +681,6 @@ impl PurchaseManager {
             treasury: treasury.clone(),
             platform_fee_bps,
             paused,
-            // Preserve the existing oracle; use set_oracle() to change it.
-            oracle: current_config.oracle,
         };
 
         env.storage()
@@ -767,20 +705,28 @@ impl PurchaseManager {
             .get(&DataKey::AllowedAsset(asset))
     }
 
-    /// Configure the price-oracle address used for future cross-asset
-    /// conversion (admin only). Pass `None` to clear the oracle.
-    pub fn set_oracle(
-        env: Env,
-        admin: Address,
-        oracle: Option<Address>,
-    ) -> Result<(), PurchaseError> {
+    /// Migrate PlatformConfig from V1 (with oracle) to V2 (without oracle).
+    /// This should be called once by the admin after upgrading the contract
+    /// from a version that used `PlatformConfigV1` schema.
+    pub fn migrate_config_v1_to_v2(env: Env, admin: Address) -> Result<(), PurchaseError> {
         auth::require_admin(&env, &admin)?;
 
-        let mut config = get_platform_config(&env)?;
-        config.oracle = oracle;
+        let old_config: PlatformConfigV1 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::PlatformConfig)
+            .ok_or(PurchaseError::NotAuthorized)?;
+
+        let new_config = PlatformConfig {
+            registry: old_config.registry,
+            treasury: old_config.treasury,
+            platform_fee_bps: old_config.platform_fee_bps,
+            paused: old_config.paused,
+        };
+
         env.storage()
             .persistent()
-            .set(&DataKey::PlatformConfig, &config);
+            .set(&DataKey::PlatformConfig, &new_config);
 
         Ok(())
     }
@@ -809,8 +755,7 @@ impl PurchaseManager {
         admin: Address,
         new_platform_fee_bps: u32,
     ) -> Result<(), PurchaseError> {
-        admin.require_auth();
-        verify_admin(&env, &admin)?;
+        auth::require_admin(&env, &admin)?;
 
         if new_platform_fee_bps > MAX_PLATFORM_FEE_BPS {
             return Err(PurchaseError::InvalidPlatformFee);
@@ -901,12 +846,15 @@ impl PurchaseManager {
         admin: Address,
         new_admin: Address,
     ) -> Result<(), PurchaseError> {
-        admin.require_auth();
-        verify_admin(&env, &admin)?;
+        auth::require_admin(&env, &admin)?;
 
+        let transfer = PendingAdminTransfer {
+            from: admin.clone(),
+            to: new_admin.clone(),
+        };
         env.storage()
             .persistent()
-            .set(&DataKey::PendingAdmin, &new_admin);
+            .set(&DataKey::PendingAdmin, &transfer);
 
         AdminTransferInitiatedEvent {
             from: admin,
@@ -924,22 +872,20 @@ impl PurchaseManager {
     pub fn accept_admin(env: Env, new_admin: Address) -> Result<(), PurchaseError> {
         new_admin.require_auth();
 
-        let pending: Address = env
+        let transfer: PendingAdminTransfer = env
             .storage()
             .persistent()
             .get(&DataKey::PendingAdmin)
             .ok_or(PurchaseError::NoPendingAdminTransfer)?;
 
-        if pending != new_admin {
+        if transfer.to != new_admin {
             return Err(PurchaseError::NotAuthorized);
         }
 
-        env.storage()
-            .persistent()
-            .set(&DataKey::Admin, &new_admin);
-        env.storage()
-            .persistent()
-            .remove(&DataKey::PendingAdmin);
+        auth::remove_admin_role(&env, &transfer.from);
+        auth::set_admin_role(&env, &new_admin);
+
+        env.storage().persistent().remove(&DataKey::PendingAdmin);
 
         AdminTransferAcceptedEvent {
             new_admin: new_admin.clone(),
@@ -951,7 +897,10 @@ impl PurchaseManager {
 
     /// Return the pending admin address, if a transfer is in progress.
     pub fn get_pending_admin(env: Env) -> Option<Address> {
-        env.storage().persistent().get(&DataKey::PendingAdmin)
+        env.storage()
+            .persistent()
+            .get::<DataKey, PendingAdminTransfer>(&DataKey::PendingAdmin)
+            .map(|t| t.to)
     }
 
     // ============== Creator Volume Tiers (#381) ==============
@@ -967,18 +916,13 @@ impl PurchaseManager {
         creator: Address,
         tier: CreatorTier,
     ) -> Result<(), PurchaseError> {
-        admin.require_auth();
-        verify_admin(&env, &admin)?;
+        auth::require_admin(&env, &admin)?;
 
         env.storage()
             .persistent()
             .set(&DataKey::CreatorTier(creator.clone()), &tier);
 
-        CreatorTierUpdatedEvent {
-            creator,
-            tier,
-        }
-        .publish(&env);
+        CreatorTierUpdatedEvent { creator, tier }.publish(&env);
 
         Ok(())
     }
@@ -994,6 +938,147 @@ impl PurchaseManager {
 }
 
 // ============== Internal Functions ==============
+
+fn execute_purchase(
+    env: Env,
+    buyer: Address,
+    material_id: BytesN<32>,
+    asset: Address,
+    expected_amount: i128,
+    transaction_id: Bytes,
+    intent_meta: Option<(BytesN<32>, Bytes, u32)>,
+) -> Result<u64, PurchaseError> {
+    buyer.require_auth();
+
+    let config = get_platform_config(&env)?;
+
+    if config.paused {
+        return Err(PurchaseError::ContractPaused);
+    }
+
+    if !is_asset_allowed(&env, &asset) {
+        return Err(PurchaseError::AssetNotAllowed);
+    }
+
+    if has_entitlement_internal(&env, &material_id, &buyer) {
+        return Err(PurchaseError::EntitlementAlreadyExists);
+    }
+
+    let material: MaterialRecord = config
+        .registry
+        .get_material(&env, &material_id)
+        .map_err(|_| PurchaseError::MaterialNotFound)?;
+
+    if material.status != MaterialStatus::Active || material.paused {
+        return Err(PurchaseError::MaterialNotActive);
+    }
+
+    let quote =
+        find_quote(&material.quotes, &asset).ok_or(PurchaseError::AssetNotAcceptedForMaterial)?;
+
+    if quote.amount != expected_amount {
+        return Err(PurchaseError::InvalidQuoteAmount);
+    }
+    if quote.amount <= 0 {
+        return Err(PurchaseError::InvalidQuoteAmount);
+    }
+
+    validate_payout_shares(&material.payout_shares)?;
+
+    let gross = quote.amount;
+    let effective_fee_bps = get_effective_fee_bps(&env, &material.creator, config.platform_fee_bps);
+    let platform_fee = (gross * effective_fee_bps as i128) / BASIS_POINTS as i128;
+    let seller_net = gross - platform_fee;
+
+    let purchase_id = get_and_increment_purchase_nonce(&env)?;
+    let current_ledger = env.ledger().sequence();
+
+    if platform_fee > 0 {
+        transfer_asset(&env, &buyer, &config.treasury, &asset, platform_fee)?;
+
+        PayoutDistributedEvent {
+            purchase_id,
+            material_id: material_id.clone(),
+            recipient: config.treasury.clone(),
+            role: Symbol::new(&env, "platform_fee"),
+            asset: asset.clone(),
+            amount: platform_fee,
+            transaction_id: transaction_id.clone(),
+        }
+        .publish(&env);
+    }
+
+    if seller_net > 0 {
+        transfer_asset(
+            &env,
+            &buyer,
+            &env.current_contract_address(),
+            &asset,
+            seller_net,
+        )?;
+    }
+
+    let escrow_record = EscrowRecord {
+        purchase_id,
+        material_id: material_id.clone(),
+        asset: asset.clone(),
+        total_amount: gross,
+        platform_fee,
+        seller_net,
+        payout_shares: material.payout_shares.clone(),
+        purchase_ledger: current_ledger,
+        transaction_id: transaction_id.clone(),
+        claimed: false,
+    };
+    set_escrow_record(&env, purchase_id, &escrow_record);
+
+    EscrowCreatedEvent {
+        purchase_id,
+        material_id: material_id.clone(),
+        asset: asset.clone(),
+        amount: seller_net,
+        lock_until_ledger: current_ledger + ESCROW_LOCK_PERIOD_LEDGERS,
+    }
+    .publish(&env);
+
+    let entitlement = EntitlementRecord {
+        material_id: material_id.clone(),
+        buyer: buyer.clone(),
+        active: true,
+        purchase_id,
+        asset: asset.clone(),
+        amount: gross,
+        granted_ledger: current_ledger,
+    };
+
+    set_entitlement(&env, &entitlement);
+
+    PurchaseCompletedEvent {
+        purchase_id,
+        material_id: material_id.clone(),
+        buyer,
+        seller: material.creator,
+        asset,
+        amount: gross,
+        platform_fee,
+        seller_net_amount: seller_net,
+        entitlement_active: true,
+        transaction_id,
+    }
+    .publish(&env);
+
+    if let Some((intent_hash, policy_version, expires_ledger)) = intent_meta {
+        CheckoutIntentConsumedEvent {
+            intent_hash,
+            purchase_id,
+            policy_version,
+            expires_ledger,
+        }
+        .publish(&env);
+    }
+
+    Ok(purchase_id)
+}
 
 /// Return the effective platform fee rate for `creator`.
 ///
@@ -1019,7 +1104,6 @@ fn get_platform_config(env: &Env) -> Result<PlatformConfig, PurchaseError> {
         .get(&DataKey::PlatformConfig)
         .ok_or(PurchaseError::NotAuthorized)
 }
-
 
 fn is_asset_allowed(env: &Env, asset: &Address) -> bool {
     env.storage()
@@ -1112,10 +1196,6 @@ fn get_entitlement_internal(
     env: &Env,
     material_id: &BytesN<32>,
     buyer: &Address,
-    payout_shares: &Vec<PayoutShare>,
-    asset: &Address,
-    seller_net: i128,
-    transaction_id: &Bytes,
 ) -> Option<EntitlementRecord> {
     env.storage()
         .persistent()
@@ -1178,7 +1258,7 @@ fn distribute_payout_shares_from_contract(
                 role: Symbol::new(env, "creator_share"),
                 asset: escrow.asset.clone(),
                 amount: share_amount,
-                transaction_id: transaction_id.clone(),
+                transaction_id: escrow.transaction_id.clone(),
             }
             .publish(env);
         }

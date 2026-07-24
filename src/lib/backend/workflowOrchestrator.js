@@ -7,6 +7,8 @@
 
 import { getDb } from "@/lib/mongodb";
 import { COLLECTIONS, applyTimestamps } from "./schemaContracts";
+import { currentCorrelationId, currentTraceparent } from "../telemetry/context.js";
+import { incrementCounter, recordHistogram } from "../telemetry/metrics.js";
 
 // Workflow states
 export const WORKFLOW_STATES = {
@@ -35,11 +37,19 @@ export async function createWorkflow({ type, userAddress, metadata = {} }) {
   const db = await getDb();
   const collection = db.collection(COLLECTIONS.syncState);
 
+  // Stamp the current HTTP request's trace context onto the workflow so
+  // the background worker can resume the *same* trace later instead of
+  // starting a new one (correlation model, #20).
+  const telemetry = {
+    correlationId: currentCorrelationId(),
+    traceparent: currentTraceparent(),
+  };
+
   const workflow = applyTimestamps({
     type,
     userAddress: userAddress.toLowerCase(),
     state: WORKFLOW_STATES.PENDING,
-    metadata,
+    metadata: { ...metadata, telemetry },
     retries: 0,
     maxRetries: metadata.maxRetries || 5,
     lastRetryAt: null,
@@ -48,6 +58,7 @@ export async function createWorkflow({ type, userAddress, metadata = {} }) {
   });
 
   const result = await collection.insertOne(workflow);
+  incrementCounter("workflow_created_total", { type });
   return { ...workflow, _id: result.insertedId };
 }
 
@@ -177,12 +188,23 @@ export async function confirmWorkflow(workflowId, txDetails) {
   const db = await getDb();
   const collection = db.collection(COLLECTIONS.syncState);
 
-  return updateWorkflowState(workflowId, WORKFLOW_STATES.CONFIRMED, {
+  const existing = await collection.findOne({ _id: workflowId });
+
+  const result = await updateWorkflowState(workflowId, WORKFLOW_STATES.CONFIRMED, {
     txHash: txDetails.txHash,
     blockNumber: txDetails.blockNumber,
     tokenId: txDetails.tokenId,
     confirmedAt: new Date(),
   });
+
+  if (existing?.type === WORKFLOW_TYPES.PURCHASE) {
+    incrementCounter("purchase_total", { outcome: "success" });
+    if (existing.createdAt) {
+      recordHistogram("purchase_latency_ms", {}, Date.now() - new Date(existing.createdAt).getTime());
+    }
+  }
+
+  return result;
 }
 
 /**
@@ -194,6 +216,12 @@ export async function confirmWorkflow(workflowId, txDetails) {
 export async function failWorkflow(workflowId, errorReason) {
   const db = await getDb();
   const collection = db.collection(COLLECTIONS.syncState);
+
+  const existing = await collection.findOne({ _id: workflowId });
+
+  if (existing?.type === WORKFLOW_TYPES.PURCHASE) {
+    incrementCounter("purchase_total", { outcome: "failed" });
+  }
 
   return updateWorkflowState(workflowId, WORKFLOW_STATES.FAILED, {
     errorReason,

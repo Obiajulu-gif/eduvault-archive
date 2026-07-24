@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import connectToDatabase from "@/lib/mongodb";
+import { getDb } from "@/lib/mongodb";
 import { validateAuth } from "@/lib/auth/session";
 
 /**
@@ -74,7 +74,7 @@ export async function POST(request) {
       );
     }
 
-    const { db } = await connectToDatabase();
+    const db = await getDb();
 
     // Check for existing pending or approved verification
     const existingVerification = await db
@@ -168,7 +168,7 @@ export async function GET(request) {
     }
 
     const { address } = authResult;
-    const { db } = await connectToDatabase();
+    const db = await getDb();
 
     const verification = await db.collection("student_verifications").findOne(
       { walletAddress: address.toLowerCase() },

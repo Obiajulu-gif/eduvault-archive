@@ -12,13 +12,11 @@
   --muted-foreground: #64748b;
   --shadow-elevated: 0 24px 80px rgba(15, 23, 42, 0.08);
 
-  /* Stellar Brand Colors & Accents */
   --stellar-blue: #3e7bff;
   --stellar-dark: #0a0b10;
   --accent-purple: #7c3aed;
   --accent-teal: #14b8a6;
 
-  /* Educational Palette */
   --edu-light: #f8fafc;
   --edu-border: #e2e8f0;
   --edu-muted: #64748b;
@@ -62,6 +60,28 @@
 
 html {
   background: var(--background);
+  scroll-behavior: smooth;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+*:focus-visible {
+  outline: 2px solid var(--stellar-blue);
+  outline-offset: 2px;
+  border-radius: 4px;
 }
 
 body {
@@ -87,3 +107,8 @@ h1, h2, h3, h4, h5, h6 {
   color: var(--foreground);
 }
 
+@media (forced-colors: active) {
+  *:focus-visible {
+    outline: 3px solid CanvasText;
+  }
+}

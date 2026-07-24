@@ -3,7 +3,7 @@ export const dynamic = "force-dynamic";
 import { NextResponse } from "next/server";
 import { auditLog } from "@/lib/api/audit";
 import { withApiHardening } from "@/lib/api/hardening";
-import { validateMaterialPayload, validateMaterialUpdatePayload, validateChangeReason } from "@/lib/api/validation";
+import { validateMaterialPayload, validateMaterialUpdatePayload, validateChangeReason, normalizeWalletAddress } from "@/lib/api/validation";
 import { getUserFromCookie } from "@/lib/api/auth";
 import { getDb } from "@/lib/mongodb";
 import { ObjectId } from "mongodb";
@@ -33,18 +33,36 @@ export async function POST(request) {
 
         const db = await getDb();
 
-        let userAddress = user.walletAddress || user.address || null;
-        if (!userAddress && user.sub) {
+        let rawUserAddress = user.walletAddress || user.address || user.activeWalletAddress || null;
+        if (!rawUserAddress && user.sub) {
           try {
             const dbUser = await db.collection("users").findOne({ _id: new ObjectId(user.sub) });
-            userAddress = dbUser?.walletAddress || dbUser?.walletAddressLower || null;
+            rawUserAddress = dbUser?.walletAddress || dbUser?.walletAddressLower || null;
           } catch (e) {
             console.warn("User lookup failed while creating material:", e?.message || e);
           }
         }
 
+        let userAddress = null;
+        if (rawUserAddress) {
+          try {
+            userAddress = normalizeWalletAddress(rawUserAddress);
+          } catch {
+            userAddress = null;
+          }
+        }
+
+        if (!userAddress) {
+          auditLog({ event: "material_create_unauthorized_wallet", route: "materials", method: "POST", status: 400, actor: user.sub });
+          return NextResponse.json(
+            { error: "Uploader wallet address is required and must be verified" },
+            { status: 400 }
+          );
+        }
+
         const doc = {
           userAddress,
+          userAddressLower: userAddress.toLowerCase(),
           ...material,
           version: 1,
           createdAt: new Date(),

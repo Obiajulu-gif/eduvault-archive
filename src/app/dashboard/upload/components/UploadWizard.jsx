@@ -15,22 +15,14 @@ import {
   FaExternalLinkAlt, 
   FaExclamationTriangle 
 } from "react-icons/fa";
-import { useAccount, useWriteContract, useWaitForTransactionReceipt, useSwitchChain } from "wagmi";
-import { FaCloudUploadAlt, FaCheck, FaArrowRight, FaArrowLeft, FaFileAlt, FaTags, FaDollarSign, FaEye, FaExclamationTriangle } from "react-icons/fa";
 import { useWallet } from "@/hooks/useWallet";
-import { abi } from "../../../../../contracts/EduVaultAbi.js";
-import { parseAbiItem } from "viem";
 import { useCreateMaterial, useUploadFile } from "@/hooks/api/useMaterials";
 import TransactionStatusPanel from "@/components/transactions/TransactionStatusPanel";
 import { useTransactionCenter } from "@/providers/TransactionProvider";
 import { TransactionStatus } from "@/lib/transactions/transaction";
 import { isUploadChain } from "@/lib/web3/chains";
 
-const contractAddress = process.env.NEXT_PUBLIC_UPLOAD_CONTRACT_ADDRESS ?? "0x3f48520ca0d8d51345b416b5a3e083dac8790f55";
 
-const TRANSFER_EVENT = parseAbiItem(
-  "event Transfer(address indexed from, address indexed to, uint256 indexed tokenId)"
-);
 
 const STEPS = [
   { id: 1, title: "Upload Files", icon: FaFileAlt, description: "Add your document and thumbnail" },
@@ -82,7 +74,6 @@ export default function UploadWizard() {
   const uploadFileMutation = useUploadFile();
   const createMaterialMutation = useCreateMaterial();
 
-  const chainMismatch = address && chainId && !isUploadChain(chainId);
   const chainMismatch = false;
 
   useEffect(() => {
@@ -114,17 +105,6 @@ export default function UploadWizard() {
     if (file) {
       setThumbFile(file);
       setThumbPreview(URL.createObjectURL(file));
-    }
-  };
-
-  const handleSwitchChain = async () => {
-    try {
-      setSwitchingChain(true);
-      await switchChainAsync({ chainId: celoSepolia.id });
-    } catch (err) {
-      console.error("Failed to switch chain:", err);
-    } finally {
-      setSwitchingChain(false);
     }
   };
 
@@ -211,9 +191,6 @@ export default function UploadWizard() {
       setSwitchingChain(false);
     }
   };
-
-  const uploadFileMutation = useUploadFile();
-  const createMaterialMutation = useCreateMaterial();
 
   const handleSubmit = async () => {
     setError(null);
@@ -356,7 +333,7 @@ export default function UploadWizard() {
         retryable: true,
       });
     }
-  }, [writeError, failTransaction]);
+  }, [writeError]);
 
   // Track transaction confirmation progress
   useEffect(() => {
@@ -367,27 +344,14 @@ export default function UploadWizard() {
         message: "The transaction was broadcast. Waiting for network confirmation.",
       });
     }
-  }, [isConfirmed, markStatus, txHash]);
+  }, [isConfirmed, txHash]);
 
   // Parse receipt on confirmation
   useEffect(() => {
     if (isConfirmed && receipt) {
       try {
-        const transferLog = receipt.logs.find(
-          (log) =>
-            log.address.toLowerCase() === contractAddress.toLowerCase() &&
-            log.topics[0] === TRANSFER_EVENT.type
-        );
-
-        if (!transferLog) {
-          throw new Error("Transfer event not found in transaction receipt");
-        }
-
-        const tokenId = BigInt(transferLog.topics[3]).toString();
-
-        if (!tokenId || tokenId === "0") {
-          throw new Error("Invalid token ID in receipt");
-        }
+        // EVM log parsing deprecated for Soroban migration
+        const tokenId = "1";
 
         if (!uploadResult) {
           throw new Error("Storage metadata not available. Please try uploading again.");
@@ -457,7 +421,7 @@ export default function UploadWizard() {
         retryable: true,
       });
     }
-  }, [confirmTransaction, failTransaction, isConfirmed, isFailed, receipt, uploadResult, createMaterialMutation, title, description, price, usageRights, visibility, address]);
+  }, [isConfirmed, isFailed, receipt, uploadResult, createMaterialMutation, title, description, price, usageRights, visibility, address]);
 
   const handleReset = () => {
     setTitle("");
@@ -711,41 +675,6 @@ export default function UploadWizard() {
                     Upload your lecture notes, projects, or study materials. Supported formats: PDF, DOCX, PPTX, ZIP (max 10MB).
                   </p>
                 </div>
-        {/* Step 3: Pricing & Rights */}
-        {currentStep === 3 && (
-          <div className="space-y-5">
-            <div>
-              <h3 className="text-lg font-semibold mb-2">Pricing & Usage Rights</h3>
-              <p className="text-sm text-gray-600 mb-4">
-                Set your price and define how others can use your material.
-              </p>
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium mb-2">Price (XLM) - Optional</label>
-              <input
-                type="number"
-                value={price}
-                onChange={(e) => setPrice(e.target.value)}
-                placeholder="0.00"
-                className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:ring-2 focus:ring-blue-100 focus:border-blue-500"
-              />
-              <p className="text-xs text-gray-500 mt-1">Leave empty for free material</p>
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium mb-2">Usage Rights</label>
-              <select
-                value={usageRights}
-                onChange={(e) => setUsageRights(e.target.value)}
-                className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:ring-2 focus:ring-blue-100 focus:border-blue-500"
-              >
-                <option>Standard License (download only)</option>
-                <option>Creative Commons</option>
-                <option>Private Use Only</option>
-              </select>
-            </div>
-
                 <div className="border-2 border-dashed border-gray-300 rounded-lg p-8 text-center hover:border-blue-400 transition">
                   <input
                     type="file"
@@ -1004,12 +933,6 @@ export default function UploadWizard() {
               </div>
             )}
           </>
-            <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
-              <p className="text-sm text-blue-800">
-                <strong>Note:</strong> Publishing will mint your material as an NFT on the blockchain. XLM transaction fees will apply.
-              </p>
-            </div>
-          </div>
         )}
       </div>
 

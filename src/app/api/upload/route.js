@@ -2,12 +2,24 @@
 import { NextResponse } from 'next/server'
 import { auditLog } from '@/lib/api/audit'
 import { withApiHardening } from '@/lib/api/hardening'
-import { normalizeStringList, sanitizeObject, validateUploadPayload, validateUploadFileMetadata } from '@/lib/api/validation'
-import { pinata } from '@/lib/pinata'
-import { validatePinataResponse, validateGatewayUrl, retryWithBackoff } from '@/lib/api/storage'
+import {
+  normalizeStringList,
+  normalizeImageField,
+  sanitizeObject,
+  validateUploadFileMetadata,
+  validateUploadPayload,
+} from '@/lib/api/validation'
+import {
+  retryWithBackoff,
+  validateGatewayUrl,
+  validatePinataResponse,
+} from '@/lib/api/storage'
 import { getDb } from '@/lib/mongodb'
-
-export const dynamic = 'force-dynamic'
+import { pinata } from '@/lib/pinata'
+import { storeManifest } from '@/lib/provenance/registry'
+import { hashFileBytes } from '@/lib/provenance/manifest'
+import { validateUploadedFile } from '@/lib/ipfs/uploadValidator'
+import { quarantineUpload } from '@/lib/uploads/quarantine'
 
 // --- Validation Constants ---
 const MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024 // 10MB
@@ -29,6 +41,8 @@ const ALLOWED_FILE_TYPES = [
 
 // Allowed thumbnail image types
 const ALLOWED_IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/webp']
+
+export const dynamic = 'force-dynamic'
 
 export async function POST(request) {
   return withApiHardening(
@@ -55,41 +69,7 @@ export async function POST(request) {
           )
         }
 
-        // 2️⃣ Validate Main File (Size & Type)
-        if (file.size > MAX_FILE_SIZE_BYTES) {
-          const sizeMB = (file.size / (1024 * 1024)).toFixed(2)
-          auditLog({
-            event: 'upload_failed',
-            route: 'upload',
-            method: 'POST',
-            status: 413,
-            reason: 'file_too_large',
-          })
-          return NextResponse.json(
-            {
-              error: `File size (${sizeMB}MB) exceeds the 10MB limit.`,
-            },
-            { status: 413 }
-          )
-        }
-
-        if (!ALLOWED_FILE_TYPES.includes(file.type)) {
-          auditLog({
-            event: 'upload_failed',
-            route: 'upload',
-            method: 'POST',
-            status: 415,
-            reason: 'unsupported_file_type',
-          })
-          return NextResponse.json(
-            {
-              error: `Unsupported file type: ${file.type || 'unknown'}. Allowed types include PDF, Word, Excel, PPT, TXT, and ZIP.`,
-            },
-            { status: 415 }
-          )
-        }
-
-        // 3️⃣ Validate Thumbnail (Size & Type) - If provided
+        // 2️⃣ Validate Thumbnail (Size & Type) - If provided
         if (image) {
           if (image.size > MAX_THUMBNAIL_SIZE_BYTES) {
             const sizeMB = (image.size / (1024 * 1024)).toFixed(2)
@@ -167,6 +147,71 @@ export async function POST(request) {
           )
         }
 
+        // 3.6️⃣ Byte-level validation
+        const byteValidation = await validateUploadedFile(file, ALLOWED_FILE_TYPES);
+        if (!byteValidation.valid) {
+          return NextResponse.json(
+            { error: byteValidation.reason, status: 415, reason: "content_type_mismatch" }
+          )
+        }
+
+        // 2️⃣ Validate Main File (Size & Type)
+        if (file.size > MAX_FILE_SIZE_BYTES) {
+          const sizeMB = (file.size / (1024 * 1024)).toFixed(2)
+          auditLog({
+            event: 'upload_failed',
+            route: 'upload',
+            method: 'POST',
+            status: 413,
+            reason: 'file_too_large',
+          })
+          return NextResponse.json(
+            {
+              error: `File size (${sizeMB}MB) exceeds the 10MB limit.`,
+            },
+            { status: 413 }
+          )
+        }
+
+        if (!ALLOWED_FILE_TYPES.includes(file.type)) {
+          auditLog({
+            event: 'upload_failed',
+            route: 'upload',
+            method: 'POST',
+            status: 415,
+            reason: 'unsupported_file_type',
+          })
+          return NextResponse.json(
+            {
+              error: `Unsupported file type: ${file.type || 'unknown'}. Allowed types include PDF, Word, Excel, PPT, TXT, and ZIP.`,
+            },
+            { status: 415 }
+          )
+        }
+
+        const fileBuffer = Buffer.from(await file.arrayBuffer());
+        const db = await getDb();
+        const quarantined = await quarantineUpload(db, {
+          bytes: fileBuffer, fileName: file.name, mimeType: file.type,
+          metadata: { title: form.get("title") || form.get("name") },
+        });
+        if (quarantined.status !== "approved") {
+          auditLog({
+            event: "upload_quarantined",
+            action: "scan",
+            resource: "upload",
+            route: "upload",
+            method: "POST",
+            status: 202,
+            outcome: quarantined.status,
+            uploadId: String(quarantined._id),
+          });
+          return NextResponse.json(
+            { success: true, uploadId: String(quarantined._id), status: quarantined.status },
+            { status: 202, headers: { "Cache-Control": "no-store" } },
+          );
+        }
+
         const results = {}
 
         // 4️⃣ Upload the main file
@@ -242,15 +287,6 @@ export async function POST(request) {
               { status: 500 }
             )
           }
-        const uploadedFile = await pinata.upload.public.file(file)
-        const fileUrl = await pinata.gateways.public.convert(uploadedFile.cid)
-        results.fileUrl = fileUrl
-
-        // 5️⃣ Upload thumbnail (if provided)
-        if (image) {
-          const fileThumb = await pinata.upload.public.file(image)
-          const imgUrl = await pinata.gateways.public.convert(fileThumb.cid)
-          results.imgUrl = imgUrl
         }
 
         // 6️⃣ Prepare the rest of the form data as JSON
@@ -304,8 +340,8 @@ export async function POST(request) {
             timestamp: new Date().toISOString(),
           },
           ...sanitizedScalarFields,
-          coverImageUrl: results.imgUrl || sanitizedScalarFields.coverImageUrl || null,
-          thumbnailUrl: results.imgUrl || sanitizedScalarFields.thumbnailUrl || null,
+          coverImageUrl: results.imgUrl || normalizeImageField(sanitizedScalarFields.coverImageUrl, "coverImageUrl"),
+          thumbnailUrl: results.imgUrl || normalizeImageField(sanitizedScalarFields.thumbnailUrl, "thumbnailUrl"),
           learningOutcomes: normalizeStringList(previewInputs.learningOutcomes, {
             maxItems: 8,
             maxLength: 180,
@@ -365,9 +401,6 @@ export async function POST(request) {
             { status: 500 }
           )
         }
-        const uploadedJson = await pinata.upload.public.json(metadataJSON)
-        const jsonUrl = await pinata.gateways.public.convert(uploadedJson.cid)
-        results.metadataUrl = jsonUrl
 
         auditLog({
           event: 'upload_complete',
@@ -376,17 +409,46 @@ export async function POST(request) {
           status: 200,
         })
 
-        // 8️⃣ Return the CID as storageKey and also include URLs for backwards-compatibility
+        // 8️⃣ Generate manifest for provenance tracking
+        const fileHash = hashFileBytes(fileBuffer);
+        let manifestDigest = null;
+        try {
+          const { digest } = await storeManifest({
+            materialId: results.storageKey,
+            version: 1,
+            previousVersionDigest: null,
+            creator: otherFields.userAddress || otherFields.creatorAddress || null,
+            file: {
+              cid: results.storageKey,
+              hash: fileHash,
+              size: file.size,
+              type: file.type || "application/octet-stream",
+            },
+            preview: results.imgUrl ? {
+              thumbnailCid: results.imgUrl,
+            } : null,
+            metadata: {
+              title: metadataPayload.title,
+              description: metadataPayload.description,
+            },
+            rights: metadataPayload.usageRights ? {
+              usageRights: metadataPayload.usageRights,
+            } : null,
+          });
+          manifestDigest = digest;
+        } catch (manifestErr) {
+          console.warn("[Upload] Manifest generation failed:", manifestErr?.message);
+        }
+
+        // 9️⃣ Return the CID as storageKey and also include URLs for backwards-compatibility
         return NextResponse.json({
           success: true,
           storageKey: results.storageKey,
           fileUrl: results.fileUrl,
-        // 8️⃣ Return the CID as storageKey
-        return NextResponse.json({
-          success: true,
-          storageKey: uploadedFile.cid,
           image: results.imgUrl || '',
           metadata: results.metadataUrl,
+          manifestDigest,
+          fileHash,
         })
       } catch (err) {
         auditLog({
@@ -396,11 +458,7 @@ export async function POST(request) {
           status: 500,
           reason: err.message,
         })
-        return NextResponse.json(
-          { error: err.message || 'Upload failed' },
-          { status: 500 }
-        )
-        
+
         // Fallback: save to MongoDB pending_pins
         try {
           const db = await getDb()
@@ -448,6 +506,6 @@ export async function POST(request) {
           )
         }
       }
-    }
+    },
   )
 }

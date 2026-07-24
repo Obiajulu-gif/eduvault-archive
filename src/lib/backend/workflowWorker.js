@@ -18,6 +18,11 @@ import {
 } from "./workflowOrchestrator";
 import { getDb } from "@/lib/mongodb";
 import { COLLECTIONS } from "./schemaContracts";
+import { processOutboxEvents } from "./outboxWorker";
+import { runWithContext } from "../telemetry/context.js";
+import { withSpan } from "../telemetry/tracing.js";
+import { incrementCounter } from "../telemetry/metrics.js";
+import { logger } from "../logger.js";
 
 // Configuration
 const CONFIG = {
@@ -175,11 +180,12 @@ async function reconcileTransaction(workflow) {
       console.log(`[Worker] Reconciled workflow ${workflow._id} successfully`);
     } else {
       // Transaction not yet indexed, will retry later
-      console.log(`[Worker] Transaction ${metadata.txHash} not yet indexed, will retry`);
+      logger.info({ txHash: metadata.txHash }, "[Worker] Transaction not yet indexed, will retry");
       await addRetryAttempt(workflow._id, "Transaction not yet indexed");
     }
   } catch (error) {
-    console.error(`[Worker] Error reconciling transaction ${metadata.txHash}:`, error);
+    incrementCounter("rpc_errors_total", { operation: "reconcile_transaction" });
+    logger.error({ err: error, txHash: metadata.txHash }, "[Worker] Error reconciling transaction");
     await addRetryAttempt(workflow._id, error.message);
   }
 }
@@ -197,7 +203,11 @@ export async function runWorker() {
       });
 
       if (workflows.length === 0) {
-        console.log("[Worker] No workflows to process, waiting...");
+        // Also process outbox events before sleeping
+        const outboxCount = await processOutboxEvents();
+        if (outboxCount === 0) {
+          console.log("[Worker] No workflows or outbox events to process, waiting...");
+        }
         await sleep(CONFIG.pollingInterval);
         continue;
       }
@@ -205,18 +215,44 @@ export async function runWorker() {
       console.log(`[Worker] Processing ${workflows.length} workflow(s)...`);
 
       for (const workflow of workflows) {
-        try {
-          if (workflow.type === WORKFLOW_TYPES.MATERIAL_REGISTRATION) {
-            await processMaterialRegistration(workflow);
-          } else if (workflow.type === WORKFLOW_TYPES.PURCHASE) {
-            await processPurchase(workflow);
-          } else {
-            console.warn(`[Worker] Unknown workflow type: ${workflow.type}`);
+        // Resume the trace that started on the HTTP request which created
+        // this workflow (stamped in createWorkflow), instead of starting a
+        // disconnected new one. Falls back to a fresh trace for older
+        // workflows that predate telemetry stamping.
+        const telemetry = workflow.metadata?.telemetry || {};
+
+        await runWithContext(
+          {
+            correlationId: telemetry.correlationId,
+            traceparent: telemetry.traceparent,
+            jobType: workflow.type,
+          },
+          async () => {
+            try {
+              await withSpan(
+                "worker.process_workflow",
+                { workflowType: workflow.type, workflowId: String(workflow._id) },
+                async () => {
+                  if (workflow.type === WORKFLOW_TYPES.MATERIAL_REGISTRATION) {
+                    await processMaterialRegistration(workflow);
+                  } else if (workflow.type === WORKFLOW_TYPES.PURCHASE) {
+                    await processPurchase(workflow);
+                  } else {
+                    logger.warn({ workflowType: workflow.type }, "[Worker] Unknown workflow type");
+                  }
+                }
+              );
+              incrementCounter("worker_jobs_total", { type: workflow.type, outcome: "success" });
+            } catch (error) {
+              incrementCounter("worker_jobs_total", { type: workflow.type, outcome: "error" });
+              logger.error({ err: error, workflowId: String(workflow._id) }, "[Worker] Error processing workflow");
+            }
           }
-        } catch (error) {
-          console.error(`[Worker] Error processing workflow ${workflow._id}:`, error);
-        }
+        );
       }
+
+      // Also process outbox events after workflows
+      await processOutboxEvents();
 
       await sleep(CONFIG.pollingInterval);
     } catch (error) {

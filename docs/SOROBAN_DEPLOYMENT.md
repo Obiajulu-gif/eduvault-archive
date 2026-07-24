@@ -102,7 +102,22 @@ Contract ID: CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB5C
 
 Save the Contract ID for later use.
 
-### Step 3: Verify Deployment
+### Step 3: Initialize the Contract
+
+After deployment, the contract MUST be initialized before any materials can be registered. This sets the upgrade admin and the initial allowed assets.
+
+```bash
+soroban contract invoke \
+  --id CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB5C \
+  --source eduvault-deployer \
+  --network testnet \
+  -- \
+  initialize \
+  --admin <ADMIN_ADDRESS> \
+  --initial_assets '[{"asset": "<ASSET_ADDRESS>", "kind": 0}]'
+```
+
+### Step 4: Verify Deployment
 
 Verify the contract is deployed correctly:
 
@@ -113,6 +128,23 @@ soroban contract inspect \
 ```
 
 ## Contract Functions Reference
+
+### 0. Initialize
+
+Initializes the contract with an upgrade admin and a list of initially allowed assets. This function can only be called once.
+
+**Function Signature:**
+```rust
+pub fn initialize(
+    env: Env,
+    admin: Address,
+    initial_assets: Vec<InitialAsset>,
+) -> Result<(), RegistryError>
+```
+
+**Parameters:**
+- `admin`: The Stellar address that will be set as the upgrade admin
+- `initial_assets`: Vector of assets to be allowlisted
 
 ### 1. Register Material
 
@@ -267,6 +299,12 @@ The contract returns the following error codes:
 | 11 | InvalidPayoutShareSum | Payout shares don't sum to 10,000 basis points |
 | 12 | MaterialAlreadyExists | Material ID collision (extremely rare) |
 | 13 | MaterialNotFound | Material ID doesn't exist |
+| 14 | NotAuthorized | Caller is not authorized |
+| 15 | UnapprovedAsset | Quote contains an asset not in the allowlist |
+| 16 | EmptyInitialAssets | Initialization called with empty assets |
+| 17 | DuplicateInitialAsset | Initialization called with duplicate assets |
+| 18 | AlreadyInitialized | Contract is already initialized |
+| 19 | NotInitialized | Contract is not initialized |
 
 ## Gas Estimation
 

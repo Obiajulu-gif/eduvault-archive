@@ -9,11 +9,24 @@ export default function PayoutSplits({ onChange, initialSplits = [] }) {
       ? initialSplits
       : [{ address: "", percentage: 100 }],
   );
-  const [errors, setErrors] = useState({});
-
-  useEffect(() => {
-    validateSplits();
-  }, [splits]);
+  const [errors, setErrors] = useState(() => {
+    const newErrors = {};
+    const initial = initialSplits.length > 0 ? initialSplits : [{ address: "", percentage: 100 }];
+    let totalPercentage = 0;
+    initial.forEach((split, index) => {
+      if (split.address && !/^G[A-Z0-9]{55}$/.test(split.address)) {
+        newErrors[`address_${index}`] = "Invalid Stellar wallet address";
+      }
+      const pct = parseFloat(split.percentage) || 0;
+      if (pct <= 0) newErrors[`percentage_${index}`] = "Percentage must be greater than 0";
+      if (pct > 100) newErrors[`percentage_${index}`] = "Percentage cannot exceed 100";
+      totalPercentage += pct;
+    });
+    if (Math.abs(totalPercentage - 100) > 0.01) {
+      newErrors.total = `Total must equal 100% (currently ${totalPercentage.toFixed(2)}%)`;
+    }
+    return newErrors;
+  });
 
   const validateWalletAddress = (address) => {
     // Stellar public key validation (starts with G, 56 characters)
@@ -64,6 +77,7 @@ export default function PayoutSplits({ onChange, initialSplits = [] }) {
 
     return isValid;
   };
+
 
   const handleAddSplit = () => {
     const currentTotal = splits.reduce(

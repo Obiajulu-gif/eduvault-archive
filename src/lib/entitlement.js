@@ -1,6 +1,16 @@
-import { getDb } from '@/lib/mongodb';
-import { PURCHASE_MANAGER_CONTRACT_ID, STELLAR_RPC_URL } from '@/lib/config/chain';
-import { isCompletedPurchaseStatus, normalizeBuyerAddress } from '@/lib/purchases/access';
+import { getDb } from './mongodb.js';
+import { PURCHASE_MANAGER_CONTRACT_ID, STELLAR_RPC_URL, NETWORK_PASSPHRASE } from './config/chain.js';
+import { isCompletedPurchaseStatus, normalizeBuyerAddress } from './purchases/access.js';
+import {
+  Keypair,
+  TransactionBuilder,
+  BASE_FEE,
+  Contract,
+  xdr,
+  Account,
+  Address,
+  nativeToScVal,
+} from '@stellar/stellar-sdk';
 
 async function getCachedEntitlement(db, materialId, buyerAddress) {
   return db.collection('entitlement_cache').findOne({
@@ -30,12 +40,15 @@ async function checkChainEntitlement(materialId, buyerAddress) {
   if (!PURCHASE_MANAGER_CONTRACT_ID || !STELLAR_RPC_URL) return null;
 
   try {
+    const xdrBlob = buildHasEntitlementXdr(materialId, buyerAddress);
+    if (!xdrBlob) return null;
+
     const body = {
       jsonrpc: '2.0',
       id: 1,
       method: 'simulateTransaction',
       params: {
-        transaction: buildHasEntitlementXdr(materialId, buyerAddress),
+        transaction: xdrBlob,
       },
     };
 
@@ -58,11 +71,59 @@ async function checkChainEntitlement(materialId, buyerAddress) {
   }
 }
 
-function buildHasEntitlementXdr(_materialId, _buyerAddress) {
-  return '';
+function buildHasEntitlementXdr(materialId, buyerAddress) {
+  const contractId = PURCHASE_MANAGER_CONTRACT_ID || process.env.NEXT_PUBLIC_PURCHASE_MANAGER_CONTRACT_ID;
+  if (!materialId || !buyerAddress || !contractId) return '';
+  try {
+    const contract = new Contract(contractId);
+
+    const materialIdBytes = Buffer.alloc(32);
+    const cleanId = String(materialId).replace(/^0x/, '');
+    const raw = /^[0-9a-fA-F]+$/.test(cleanId)
+      ? Buffer.from(cleanId, 'hex')
+      : Buffer.from(cleanId, 'utf-8');
+    raw.copy(materialIdBytes, Math.max(0, 32 - raw.length));
+    const materialIdScVal = xdr.ScVal.scvBytes(materialIdBytes);
+
+    let addressScVal;
+    try {
+      addressScVal = Address.fromString(buyerAddress).toScVal();
+    } catch {
+      addressScVal = nativeToScVal(buyerAddress, { type: 'address' });
+    }
+
+    const dummyAccount = new Account(
+      buyerAddress.startsWith('G')
+        ? buyerAddress
+        : 'GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF',
+      '0'
+    );
+
+    const tx = new TransactionBuilder(dummyAccount, {
+      fee: BASE_FEE || '100',
+      networkPassphrase: NETWORK_PASSPHRASE,
+    })
+      .addOperation(
+        contract.call('has_entitlement', materialIdScVal, addressScVal)
+      )
+      .setTimeout(30)
+      .build();
+
+    return tx.toXDR();
+  } catch (err) {
+    console.error('Failed to build has_entitlement XDR:', err);
+    return '';
+  }
 }
 
 function decodeBoolean(xdrBase64) {
+  if (!xdrBase64) return false;
+  try {
+    const scval = xdr.ScVal.fromXDR(xdrBase64, 'base64');
+    if (scval.switch().name === 'scvBool') {
+      return scval.b();
+    }
+  } catch {}
   return xdrBase64.includes('AAAE') || xdrBase64.includes('true');
 }
 
@@ -101,10 +162,12 @@ export async function createEntitlement(materialId, buyerAddress, purchaseData =
     createdAt: new Date(),
   };
 
+  const session = purchaseData.session || null;
+
   await db.collection('entitlement_cache').updateOne(
     { materialId, buyerAddress: normalised },
     { $set: entry },
-    { upsert: true }
+    { upsert: true, session }
   );
 
   return { success: true, source: 'purchase-api' };
@@ -214,3 +277,6 @@ export function requireEntitlement(handler, getMaterialId) {
     return handler(request, context, { materialId, buyerAddress, source });
   };
 }
+
+export { buildHasEntitlementXdr, checkChainEntitlement };
+

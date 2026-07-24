@@ -1,17 +1,38 @@
-import { verifyDashboardToken } from "@/lib/auth/session";
+import { verifyDashboardToken } from "../auth/session.js";
 import { ObjectId } from "mongodb";
-import { getDb } from "@/lib/mongodb";
+import { getDb } from "../mongodb.js";
 
 export async function getUserFromCookie(request) {
-  const cookieHeader = request.headers.get("cookie") || "";
-  const cookieMatch = cookieHeader.match(/auth_token=([^;]+)/);
-  const token = cookieMatch ? decodeURIComponent(cookieMatch[1]) : null;
-  if (!token) return null;
-  const verification = await verifyDashboardToken(token, process.env.JWT_SECRET);
-  if (!verification.valid) {
+  try {
+    const secret = process.env.JWT_SECRET || process.env.NEXTAUTH_SECRET || "";
+    if (!secret || typeof secret !== "string" || secret.trim().length === 0) {
+      return null;
+    }
+
+    const cookieHeader = request?.headers?.get?.("cookie") || "";
+    if (!cookieHeader) return null;
+
+    const cookieMatch = cookieHeader.match(/(?:^|;\s*)(?:auth_token|dashboard_token)=([^;]+)/);
+    if (!cookieMatch) return null;
+
+    let token = null;
+    try {
+      token = decodeURIComponent(cookieMatch[1].trim());
+    } catch {
+      return null;
+    }
+
+    if (!token) return null;
+
+    const verification = await verifyDashboardToken(token, secret);
+    if (!verification?.valid || !verification?.payload) {
+      return null;
+    }
+
+    return verification.payload;
+  } catch {
     return null;
   }
-  return verification.payload;
 }
 
 export async function getFullUserFromCookie(request) {

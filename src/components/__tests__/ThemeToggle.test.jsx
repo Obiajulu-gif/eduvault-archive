@@ -4,6 +4,14 @@ import ThemeToggle from "../ThemeToggle";
 
 describe("ThemeToggle", () => {
 	beforeEach(() => {
+		// Mock localStorage for jsdom
+		let mockStorage = {};
+		window.localStorage = {
+			getItem: (key) => mockStorage[key] || null,
+			setItem: (key, val) => { mockStorage[key] = String(val); },
+			clear: () => { mockStorage = {}; },
+		};
+
 		window.localStorage.clear();
 		document.documentElement.dataset.theme = "light";
 		document.documentElement.style.colorScheme = "light";

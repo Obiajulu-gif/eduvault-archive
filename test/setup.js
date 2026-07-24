@@ -35,11 +35,15 @@ vi.mock('@/lib/mongodb', () => ({
 }));
 
 vi.mock('@/lib/api/auth', () => ({
-    getUserFromCookie: vi.fn(async () => ({
-        sub: 'test_user_1',
-        walletAddress: '0xCreatorWalletAddress1234567890',
-        address: '0xCreatorWalletAddress1234567890',
-    })),
+    getUserFromCookie: vi.fn(async (request) => {
+        const walletAddress = request?.headers?.get('x-user-wallet');
+        if (!walletAddress) return null;
+        return {
+            sub: 'test_user_1',
+            walletAddress,
+            address: walletAddress,
+        };
+    }),
 }));
 
 // --- 2. Soroban Indexer Mock ---

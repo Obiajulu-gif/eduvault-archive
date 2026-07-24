@@ -1,4 +1,4 @@
-import { sanitizeString, normalizeStringList } from "../api/validation.js";
+import { sanitizeString, normalizeStringList, normalizeImageField } from "../api/validation.js";
 import {
   normalizeSubject,
   normalizeCategory,
@@ -52,6 +52,18 @@ export function validateImportSchema(body) {
 
 export function validateImportRow(row, index) {
   const errors = [];
+  const images = {};
+
+  for (const [field, value] of [
+    ["coverImageUrl", row?.coverImageUrl],
+    ["thumbnailUrl", row?.thumbnailUrl],
+  ]) {
+    try {
+      images[field] = normalizeImageField(value, field);
+    } catch (error) {
+      errors.push({ field, message: error.message });
+    }
+  }
 
   const title = sanitizeString(row?.title, { maxLength: 160 });
   if (!title) {
@@ -120,8 +132,7 @@ export function validateImportRow(row, index) {
       price,
       usageRights: sanitizeString(row?.usageRights, { maxLength: 1000 }) || "",
       visibility,
-      coverImageUrl: sanitizeString(row?.coverImageUrl, { maxLength: 2048 }) || null,
-      thumbnailUrl: sanitizeString(row?.thumbnailUrl, { maxLength: 2048 }) || null,
+      ...images,
       category,
       subject,
       level,

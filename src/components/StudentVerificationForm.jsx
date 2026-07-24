@@ -328,6 +328,7 @@ export default function StudentVerificationForm({ onSuccess, userAddress }) {
                   {(documentFile.size / 1024).toFixed(2)} KB
                 </p>
                 {documentPreview && (
+                  // eslint-disable-next-line @next/next/no-img-element
                   <img
                     src={documentPreview}
                     alt="Document preview"

@@ -38,10 +38,17 @@ sequenceDiagram
 ## Indexer Responsibilities
 
 - Polls Stellar RPC for events related to Soroban contracts
-- Writes sync events into `sync_events` to ensure idempotency
-- Applies event side-effects (materials, purchases, entitlement_cache)
-- On transient failures: records retry metadata in `dead_letter_events`
-- Provides a `reprocess-deadletter.mjs` script for maintainers to reprocess
+- Applies a receipt and its material, purchase, and entitlement projections in
+  one MongoDB transaction when transactions are available.
+- Uses recoverable `applying`, `applied`, and `failed` receipt states when a
+  deployment cannot provide transactions. Projection upserts remain idempotent.
+- Advances the source cursor only after every earlier event is either applied
+  or durably recorded in `dead_letter_events` for retry.
+- Identifies events by network, contract, ledger, transaction, and event
+  position when the source does not supply a canonical event ID.
+- Provides `reprocess-deadletter.mjs` for queued failures and
+  `npm run indexer:repair` for bounded reconciliation of legacy or partial
+  `sync_events` receipts.
 
 ## Source-of-truth boundaries
 
@@ -49,7 +56,8 @@ sequenceDiagram
 - MongoDB: authoritative for application catalog, caches, and derived state
 - IPFS/Pinata: authoritative for file bytes and pinned metadata content
 
-Link: see `scripts/run-stellar-indexer.mjs` and `scripts/reprocess-deadletter.mjs` for operational commands.
+Link: see `scripts/run-stellar-indexer.mjs`, `scripts/reprocess-deadletter.mjs`,
+and `scripts/repair-indexer-projections.mjs` for operational commands.
 # EduVault Architecture
 
 ## 1. System Goals
@@ -83,12 +91,7 @@ EduVault needs to do four things reliably:
 - metadata JSON pinned to IPFS
 - searchable application state stored in MongoDB
 
-### Prototype chain layer
-
-- EVM wallet connection via wagmi and RainbowKit
-- archived ERC-721 proof of concept in `archive/legacy-evm/contracts/EduVault.sol`
-
-## 3. Target Stellar-Native Architecture
+## 3. Stellar-Native Architecture
 
 The canonical Soroban contract boundary and event model are documented in [`docs/soroban-contract-architecture.md`](soroban-contract-architecture.md).
 

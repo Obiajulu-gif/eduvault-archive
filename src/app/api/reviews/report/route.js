@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import connectToDatabase from "@/lib/mongodb";
+import { getDb } from "@/lib/mongodb";
 import { validateAuth } from "@/lib/auth/session";
 import { ObjectId } from "mongodb";
 
@@ -39,7 +39,7 @@ export async function POST(request) {
       );
     }
 
-    const { db } = await connectToDatabase();
+    const db = await getDb();
 
     // Verify the material exists and the reporter is the creator
     const material = await db.collection("materials").findOne({
@@ -158,7 +158,7 @@ export async function GET(request) {
     const { searchParams } = new URL(request.url);
     const status = searchParams.get("status") || "pending";
 
-    const { db } = await connectToDatabase();
+    const db = await getDb();
 
     // Check if user is admin (you'll need to implement admin check)
     // For now, we'll return reports created by the authenticated user

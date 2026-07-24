@@ -8,7 +8,7 @@ import { withApiHardening } from "@/lib/api/hardening";
 export async function GET(request) {
   return withApiHardening(
     request,
-    { route: "auth-challenge", rateLimit: { limit: 20, windowMs: 60_000 } },
+    { route: "auth-challenge", rateLimit: { limit: 5, windowMs: 60_000 } },
     async () => {
       try {
         const { searchParams } = new URL(request.url);

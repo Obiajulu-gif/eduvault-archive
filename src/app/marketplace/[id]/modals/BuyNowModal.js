@@ -12,6 +12,7 @@ import { useCreatePurchase, useStartAccessRequest } from "@/hooks/api/usePurchas
 import { ACCEPTED_ASSET, getExplorerTxUrl } from "@/lib/config/chain";
 import { TransactionStatus } from "@/lib/transactions/transaction";
 import { useTransactionCenter } from "@/providers/TransactionProvider";
+import useFocusTrap from "@/hooks/useFocusTrap";
 
 const SUPPORTED_ASSETS = [
   { code: ACCEPTED_ASSET, issuer: null, label: `Stellar ${ACCEPTED_ASSET}` },
@@ -83,6 +84,7 @@ export default function BuyNowModal({
   const [selectedAsset, setSelectedAsset] = useState(SUPPORTED_ASSETS[0]);
   const [receiptStatus, setReceiptStatus] = useState("idle");
   const [receipt, setReceipt] = useState(null);
+  const [checkoutIntent, setCheckoutIntent] = useState(null);
   const [checkoutError, setCheckoutError] = useState(null);
   const [downloadError, setDownloadError] = useState(null);
   const [isDownloading, setIsDownloading] = useState(false);
@@ -110,6 +112,7 @@ export default function BuyNowModal({
     setShowWallet(false);
     setReceiptStatus("idle");
     setReceipt(null);
+    setCheckoutIntent(null);
     setCheckoutError(null);
     setDownloadError(null);
     setIsDownloading(false);
@@ -120,6 +123,8 @@ export default function BuyNowModal({
     resetCheckout();
     onClose();
   };
+
+  const modalRef = useFocusTrap(isOpen && !isReceiptVisible, handleClose);
 
   const handleDownload = async () => {
     if (!materialId || !address) return;
@@ -146,6 +151,27 @@ export default function BuyNowModal({
     }
   };
 
+  const createCheckoutIntent = async () => {
+    const response = await fetch("/api/checkout/initiate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        materialId,
+        asset: selectedAsset,
+      }),
+    });
+    const payload = await response.json();
+
+    if (!response.ok) {
+      const error = new Error(payload?.message || payload?.error || "Unable to prepare checkout terms.");
+      error.code = payload?.code;
+      throw error;
+    }
+
+    setCheckoutIntent(payload.checkout);
+    return payload.checkout;
+  };
+
   const handlePay = async () => {
     if (!address) {
       setShowWallet(true);
@@ -157,25 +183,31 @@ export default function BuyNowModal({
       return;
     }
 
-    const txHash = createLocalTxHash();
-    const purchasedAt = new Date().toISOString();
-    const amount = quote?.amount || price;
-    const asset = quote?.asset || selectedAsset.code;
-
     setCheckoutError(null);
     setDownloadError(null);
-    setReceipt({
-      itemName: materialTitle || `Material #${materialId}`,
-      creator: materialCreator,
-      transactionHash: txHash,
-      totalAmount: amount,
-      currency: asset,
-      totalFee: quote?.fee || "0.00",
-      purchasedAt,
-    });
-    setReceiptStatus("signing");
 
     try {
+      const lockedCheckout = await createCheckoutIntent();
+      const terms = lockedCheckout.terms;
+      const txHash = createLocalTxHash();
+      const purchasedAt = new Date().toISOString();
+      const amount = terms.amount.units;
+      const amountDisplay = terms.amount.display;
+      const asset = terms.asset.contract || terms.asset.code;
+
+      setReceipt({
+        itemName: materialTitle || `Material #${materialId}`,
+        creator: materialCreator,
+        transactionHash: txHash,
+        totalAmount: amountDisplay,
+        currency: terms.asset.code,
+        totalFee: terms.feeBreakdown.platformFeeUnits,
+        purchasedAt,
+        checkoutTerms: terms,
+        checkoutIntentHash: lockedCheckout.intentHash,
+      });
+      setReceiptStatus("signing");
+
       await startAccessRequestMutation.mutateAsync({
         materialId,
         buyerAddress: address,
@@ -214,6 +246,8 @@ export default function BuyNowModal({
         email,
         amount,
         asset,
+        checkoutIntentId: lockedCheckout.checkoutId,
+        checkoutIntentSignature: lockedCheckout.signature,
       });
 
       const confirmedHash = result?.purchase?.transactionHash || result?.transactionHash || txHash;
@@ -262,6 +296,10 @@ export default function BuyNowModal({
             />
 
             <motion.div
+              ref={modalRef}
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="checkout-dialog-title"
               initial={{ opacity: 0, scale: 0.92, y: 50 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.92, y: 50 }}
@@ -271,7 +309,7 @@ export default function BuyNowModal({
                 <button
                   type="button"
                   onClick={handleClose}
-                  className="absolute right-4 top-4 rounded-full p-2 text-slate-400 transition hover:bg-slate-100 hover:text-slate-700"
+                  className="absolute right-4 top-4 rounded-full p-2 text-slate-400 transition hover:bg-slate-100 hover:text-slate-700 focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:outline-none"
                   aria-label="Close checkout"
                 >
                   <FaTimes />
@@ -281,7 +319,7 @@ export default function BuyNowModal({
                   <p className="text-xs font-semibold uppercase tracking-[0.24em] text-slate-400">
                     Access request
                   </p>
-                  <h2 className="mt-1 text-2xl font-bold text-slate-900">Complete payment to unlock</h2>
+                  <h2 id="checkout-dialog-title" className="mt-1 text-2xl font-bold text-slate-900">Complete payment to unlock</h2>
                   <p className="mt-2 text-sm text-slate-600">
                     We will create a pending access request first. The material unlocks only after payment is confirmed.
                   </p>
@@ -297,23 +335,25 @@ export default function BuyNowModal({
                 ) : null}
 
                 <div className="mb-4">
-                  <label className="mb-2 block text-xs font-semibold text-slate-600">
+                  <label htmlFor="checkout-email" className="mb-2 block text-xs font-semibold text-slate-600">
                     EMAIL ADDRESS
                   </label>
                   <input
+                    id="checkout-email"
                     type="email"
                     value={email}
                     onChange={(event) => setEmail(event.target.value)}
                     placeholder="Enter your email"
-                    className="w-full rounded-xl border border-slate-300 px-3 py-2.5 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                    className="w-full rounded-xl border border-slate-300 px-3 py-2.5 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100 focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:outline-none"
                   />
                 </div>
 
                 <div className="mb-4">
-                  <label className="mb-2 block text-xs font-semibold text-slate-600">
+                  <label htmlFor="checkout-asset" className="mb-2 block text-xs font-semibold text-slate-600">
                     PAYMENT ASSET
                   </label>
                   <select
+                    id="checkout-asset"
                     value={selectedAsset.code}
                     onChange={(event) =>
                       setSelectedAsset(
@@ -321,7 +361,7 @@ export default function BuyNowModal({
                           SUPPORTED_ASSETS[0],
                       )
                     }
-                    className="w-full rounded-xl border border-slate-300 px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-100"
+                    className="w-full rounded-xl border border-slate-300 px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-100 focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:outline-none"
                   >
                     {SUPPORTED_ASSETS.map((assetOption) => (
                       <option key={assetOption.code} value={assetOption.code}>
@@ -391,6 +431,8 @@ export default function BuyNowModal({
         totalFee={receipt?.totalFee || quote?.fee}
         totalAmount={receipt?.totalAmount || quote?.amount || price}
         currency={receipt?.currency || quote?.asset || selectedAsset.code}
+        checkoutTerms={receipt?.checkoutTerms || checkoutIntent?.terms}
+        checkoutIntentHash={receipt?.checkoutIntentHash || checkoutIntent?.intentHash}
         purchasedAt={receipt?.purchasedAt}
         errorMessage={checkoutError?.message}
         onClose={handleClose}

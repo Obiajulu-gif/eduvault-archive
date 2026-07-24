@@ -1,77 +1,69 @@
-import { getDb } from "../src/lib/mongodb.js";
+import { getDb, closeMongoConnection } from "../src/lib/mongodb.js";
+import { REQUIRED_INDEXES } from "../src/lib/backend/schemaContracts.js";
 
-async function runIndexPerformanceEvaluation() {
-  console.log("=== Initializing Catalog Index Optimization Evaluation ===");
+/**
+ * Compatibility script.
+ *
+ * Index creation should normally be performed through the migration runner.
+ * This script only reconciles the documented indexes and never inserts data.
+ */
+async function setupDatabaseIndexes() {
+  console.log("[indexes] Starting index reconciliation");
+
   const db = await getDb();
-  const collection = db.collection("materials");
 
-  // Inject sample records to simulate low-latency catalog scaling
-  console.log("Seeding runtime sample nodes for optimization trace...");
-  const sampleCount = await collection.countDocuments();
-  if (sampleCount === 0) {
-    const mockData = Array.from({ length: 50 }).map((_, idx) => ({
-      title: `Advanced Soroban Smart Contract Development Guide Vol ${idx}`,
-      description:
-        "Learn how to build scalable DeFi applications on the Stellar Network utilizing Rust tooling engines.",
-      category: "Blockchain",
-      price: parseFloat((10.5 + idx * 2.5).toFixed(2)),
-      createdAt: new Date(),
-    }));
-    await collection.insertMany(mockData);
-  }
+  for (const [collectionName, indexDefinitions] of Object.entries(
+    REQUIRED_INDEXES,
+  )) {
+    const collection = db.collection(collectionName);
 
-  // Evaluate Query Performance Using Explain Plan
-  console.log("\nExecuting Execution Plan Query Trace via explain()...");
-  const searchQuery = {
-    $text: { $search: "Soroban" },
-    category: "Blockchain",
-    price: { $gte: 10.0 },
-  };
-
-  const explainPlan = await collection
-    .find(searchQuery)
-    .explain("executionStats");
-  const executionStages = explainPlan.executionStats.executionStages;
-
-  // Track if any full-table collection scans occurred
-  const hasColScan = JSON.stringify(explainPlan).includes("COLLSCAN");
-  console.log(
-    `- Query Strategy Strategy Type: ${hasColScan ? "COLLSCAN (Sequential Scan)" : "IXSCAN (Indexed Key Hit)"}`,
-  );
-  console.log(
-    `- Total Documents Inspected: ${explainPlan.executionStats.totalDocsExamined}`,
-  );
-
-  // Evaluate Latency Benchmarks
-  console.log("\nRunning High-Traffic Latency Latency Stress Test...");
-  const startTime = performance.now();
-
-  // Loop execution bounds to test connection pool stability under continuous load
-  for (let i = 0; i < 20; i++) {
-    await collection.find(searchQuery).toArray();
-  }
-
-  const endTime = performance.now();
-  const averageLatency = (endTime - startTime) / 20;
-  console.log(
-    `- Average Query Round-Trip Latency: ${averageLatency.toFixed(2)}ms`,
-  );
-
-  // Validate System SLA Metrics
-  if (averageLatency < 100 && !hasColScan) {
     console.log(
-      "\n ACCEPTANCE CRITERIA SATISFIED: Search returns under 100ms utilizing index hits.",
+      `[indexes] Reconciling ${indexDefinitions.length} index(es) for ${collectionName}`,
     );
-    process.exit(0);
-  } else {
-    console.error(
-      "\n SLA CRITERIA FAILED: Query latency exceeded performance targets or missed index hits.",
-    );
-    process.exit(1);
+
+    for (const definition of indexDefinitions) {
+      const options = {
+        ...definition.options,
+        name: definition.name,
+      };
+
+      try {
+        const indexName = await collection.createIndex(
+          definition.keys,
+          options,
+        );
+
+        console.log(
+          `[indexes] Ensured ${collectionName}.${indexName}`,
+        );
+      } catch (error) {
+        console.error(
+          `[indexes] Failed to create index ${definition.name} on ${collectionName}`,
+          {
+            code: error?.code,
+            codeName: error?.codeName,
+            message: error?.message,
+          },
+        );
+
+        throw error;
+      }
+    }
   }
+
+  console.log("[indexes] Index reconciliation completed");
 }
 
-runIndexPerformanceEvaluation().catch((err) => {
-  console.error("Critical Failure executing index evaluation script:", err);
-  process.exit(1);
-});
+setupDatabaseIndexes()
+  .catch((error) => {
+    console.error("[indexes] Fatal index setup failure", {
+      code: error?.code,
+      codeName: error?.codeName,
+      message: error?.message,
+    });
+
+    process.exitCode = 1;
+  })
+  .finally(async () => {
+    await closeMongoConnection();
+  });

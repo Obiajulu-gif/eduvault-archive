@@ -1,16 +1,17 @@
 import { NextResponse } from "next/server";
 import { getDb } from "@/lib/mongodb";
 import { getPurchaseStatus } from "@/lib/indexer";
+import { resolveAuthenticatedWallet } from "@/lib/auth/walletIdentity";
 
 export const runtime = "nodejs";
 
 export async function GET(request, { params }) {
   try {
-    // Extract the wallet address (mocked via header for tests; normally via cookie/session)
-    const walletAddress = request.headers.get('x-user-wallet');
-    if (!walletAddress) {
-      return NextResponse.json({ error: 'Unauthorized: Wallet connection required' }, { status: 401 });
+    const identity = await resolveAuthenticatedWallet(request);
+    if (!identity.ok) {
+      return NextResponse.json({ error: identity.error }, { status: identity.status });
     }
+    const walletAddress = identity.walletAddress;
 
     const id = params.id;
     const db = await getDb();

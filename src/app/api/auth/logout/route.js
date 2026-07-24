@@ -1,20 +1,25 @@
 import { NextResponse } from 'next/server';
-import { getDb } from '@/lib/mongodb';
 import { getUserFromCookie } from '@/lib/api/auth';
+import { revokeRefreshTokenFamilyByToken, revokeRefreshTokensForUser } from '@/lib/auth/tokenService';
 import { auditLog } from '@/lib/api/audit';
+
+function getRefreshTokenFromCookie(request) {
+  const cookieHeader = request.headers.get('cookie') || '';
+  const match = cookieHeader.match(/refresh_token=([^;]+)/);
+  return match ? decodeURIComponent(match[1]) : null;
+}
 
 export async function POST(request) {
   try {
     const user = await getUserFromCookie(request);
-    
-    // Even if user isn't found, we'll try to clear the cookie
+    const refreshToken = getRefreshTokenFromCookie(request);
+
     const response = NextResponse.json({ success: true });
 
-    // Expire the cookies by setting maxAge to 0
     response.cookies.set('auth_token', '', {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
-      sameSite: 'lax',
+      sameSite: 'strict',
       path: '/',
       maxAge: 0,
     });
@@ -27,20 +32,19 @@ export async function POST(request) {
       maxAge: 0,
     });
 
-    if (user) {
-      const db = await getDb();
-      await db.collection('refresh_tokens').deleteMany({
-        userId: String(user._id || user.id || user.walletAddress)
-      });
-      
-      auditLog({
-        event: "auth_logout_success",
-        route: "auth/logout",
-        method: "POST",
-        status: 200,
-        address: user.walletAddress,
-      });
+    if (refreshToken) {
+      await revokeRefreshTokenFamilyByToken(refreshToken, user?.sub);
+    } else if (user?.sub) {
+      await revokeRefreshTokensForUser(user.sub);
     }
+
+    auditLog({
+      event: "auth_logout_success",
+      route: "auth/logout",
+      method: "POST",
+      status: 200,
+      address: user?.walletAddress,
+    });
 
     return response;
   } catch (error) {

@@ -1,31 +1,34 @@
 import { PHASE_PRODUCTION_BUILD } from "next/constants.js";
 import { assertRuntimeEnv } from "./src/lib/env.js";
 
+const imageHosts = ["gateway.pinata.cloud", "ipfs.io", "www.gravatar.com"];
+try {
+  const gateway = new URL(process.env.NEXT_PUBLIC_GATEWAY_URL);
+  if (gateway.protocol === "https:") imageHosts.push(gateway.hostname);
+} catch {}
+
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactCompiler: true,
+  serverExternalPackages: [],
+  images: {
+    remotePatterns: imageHosts.map((hostname) => ({ protocol: "https", hostname })),
+  },
+  webpack: (config, { isServer }) => {
+    if (!isServer) {
+      config.resolve.fallback = {
+        ...config.resolve.fallback,
+        "node:crypto": false,
+        "node:async_hooks": false,
+      };
+    }
+    return config;
+  },
   async headers() {
     return [
       {
         source: "/(.*)",
         headers: [
-          {
-            key: "Content-Security-Policy",
-            value: [
-              "default-src 'self'",
-              "base-uri 'self'",
-              "form-action 'self'",
-              "frame-ancestors 'none'",
-              "object-src 'none'",
-              "img-src 'self' data: https: blob:",
-              "font-src 'self' https: data:",
-              "style-src 'self' 'unsafe-inline'",
-              "script-src 'self' 'unsafe-inline' 'unsafe-eval'",
-              "connect-src 'self' https: wss:",
-              "media-src 'self' https: blob:",
-              "upgrade-insecure-requests",
-            ].join("; "),
-          },
           { key: "X-Frame-Options", value: "DENY" },
           { key: "X-Content-Type-Options", value: "nosniff" },
           { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
@@ -37,6 +40,9 @@ const nextConfig = {
             key: "Strict-Transport-Security",
             value: "max-age=31536000; includeSubDomains; preload",
           },
+          { key: "Cross-Origin-Opener-Policy", value: "same-origin-allow-popups" },
+          { key: "Cross-Origin-Embedder-Policy", value: "credentialless" },
+          { key: "Cross-Origin-Resource-Policy", value: "same-origin" },
         ],
       },
     ];

@@ -5,6 +5,8 @@ import { ObjectId } from "mongodb";
 import { getDb } from "@/lib/mongodb";
 import PayoutSettingsPanel from "../components/PayoutSettingsPanel";
 import CreatorProfileSettings from "../components/CreatorProfileSettings";
+import PrivacyDataExportPanel from "../components/PrivacyDataExportPanel";
+import PrivacyAccountDeletionPanel from "../components/PrivacyAccountDeletionPanel";
 
 async function getCurrentUser() {
   const cookieStore = await cookies();
@@ -35,6 +37,17 @@ export default async function SettingsPage() {
     <div className="mx-auto max-w-7xl space-y-10 px-4 py-10 lg:px-8">
       <CreatorProfileSettings initialUser={user} />
       <PayoutSettingsPanel initialUser={user} />
+
+      {/* Privacy & Data section */}
+      <div>
+        <h2 className="mb-6 text-lg font-semibold text-gray-900 dark:text-white">
+          Privacy &amp; Data
+        </h2>
+        <div className="space-y-6">
+          <PrivacyDataExportPanel />
+          <PrivacyAccountDeletionPanel />
+        </div>
+      </div>
     </div>
   );
 }

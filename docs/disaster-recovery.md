@@ -76,7 +76,9 @@ NEXT_PUBLIC_PURCHASE_MANAGER_CONTRACT_ID=CC...
 Execute the dedicated indexing process to replay historical blockchain events and reconstruct database state:
 
 ```bash
-npm run indexer:stellar
+# Single batch, exits when done. Repeat until `drained` is true, or run
+# `npm run indexer:stellar` to let the service drain the backlog itself.
+npm run indexer:stellar:once
 ```
 
 This process rebuilds:

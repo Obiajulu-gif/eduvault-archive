@@ -25,24 +25,24 @@ export function WalletButton() {
   switch (state.status) {
     case WalletStatus.Initializing:
       return (
-        <button disabled className={BTN_GHOST}>
-          <span className="h-2 w-2 animate-pulse rounded-full bg-slate-400" />
-          Loading…
+        <button disabled className={BTN_GHOST} aria-busy="true" aria-label="Loading wallet">
+          <span className="h-2 w-2 animate-pulse rounded-full bg-slate-400" aria-hidden="true" />
+          <span>Loading wallet…</span>
         </button>
       );
 
     case WalletStatus.Idle:
       return (
-        <button onClick={connect} className={BTN_PRIMARY}>
+        <button onClick={connect} className={BTN_PRIMARY} aria-label="Connect wallet">
           Connect wallet
         </button>
       );
 
     case WalletStatus.Connecting:
       return (
-        <button disabled className={BTN_PRIMARY}>
-          <span className="h-2 w-2 animate-pulse rounded-full bg-white/80" />
-          Opening wallet…
+        <button disabled className={BTN_PRIMARY} aria-busy="true" aria-label="Opening wallet connection">
+          <span className="h-2 w-2 animate-pulse rounded-full bg-white/80" aria-hidden="true" />
+          <span>Opening wallet…</span>
         </button>
       );
 
@@ -50,10 +50,10 @@ export function WalletButton() {
       const { address } = state.session;
       const short = `${address.slice(0, 4)}…${address.slice(-4)}`;
       return (
-        <div className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white/70 py-1 pl-3 pr-1 shadow-sm">
-          <span className="h-2 w-2 rounded-full bg-emerald-500" />
+        <div className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white/70 py-1 pl-3 pr-1 shadow-sm" role="group" aria-label="Wallet connection status">
+          <span className="h-2 w-2 rounded-full bg-emerald-500" aria-hidden="true" />
           <span className="font-mono text-sm text-slate-700">{short}</span>
-          <button onClick={disconnect} className={BTN_DANGER}>
+          <button onClick={disconnect} className={BTN_DANGER} aria-label={`Disconnect wallet ${short}`}>
             Disconnect
           </button>
         </div>
@@ -62,11 +62,11 @@ export function WalletButton() {
 
     case WalletStatus.Locked:
       return (
-        <div className={`${CARD} border-amber-200 bg-amber-50/70`}>
+        <div className={`${CARD} border-amber-200 bg-amber-50/70`} role="alert">
           <p className="text-sm text-amber-800">
             Your wallet is locked or hasn&apos;t granted access to EduVault.
           </p>
-          <button onClick={connect} className={`${BTN_PRIMARY} self-start`}>
+          <button onClick={connect} className={`${BTN_PRIMARY} self-start`} aria-label="Unlock and reconnect wallet">
             Unlock and reconnect
           </button>
         </div>
@@ -74,7 +74,7 @@ export function WalletButton() {
 
     case WalletStatus.Unsupported:
       return (
-        <div className={`${CARD} border-amber-200 bg-amber-50/70`}>
+        <div className={`${CARD} border-amber-200 bg-amber-50/70`} role="alert">
           <p className="text-sm text-amber-800">
             Your wallet is on the wrong network. Switch to{' '}
             <span className="font-semibold">
@@ -82,7 +82,7 @@ export function WalletButton() {
             </span>{' '}
             in your wallet and reconnect.
           </p>
-          <button onClick={disconnect} className={`${BTN_GHOST} self-start`}>
+          <button onClick={disconnect} className={`${BTN_GHOST} self-start`} aria-label="Disconnect wallet">
             Disconnect
           </button>
         </div>
@@ -90,18 +90,18 @@ export function WalletButton() {
 
     case WalletStatus.Error:
       return (
-        <button onClick={connect} className={BTN_PRIMARY}>
+        <button onClick={connect} className={BTN_PRIMARY} aria-label="Reconnect wallet">
           Connect wallet
         </button>
       );
 
     case WalletStatus.Expired:
       return (
-        <div className={`${CARD} border-amber-200 bg-amber-50/70`}>
+        <div className={`${CARD} border-amber-200 bg-amber-50/70`} role="alert">
           <p className="text-sm text-amber-800">
             Wallet session expired. Reconnect to continue using protected actions.
           </p>
-          <button onClick={connect} className={`${BTN_PRIMARY} self-start`}>
+          <button onClick={connect} className={`${BTN_PRIMARY} self-start`} aria-label="Reconnect wallet">
             Reconnect wallet
           </button>
         </div>

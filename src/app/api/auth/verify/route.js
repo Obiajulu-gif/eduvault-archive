@@ -1,5 +1,4 @@
-export const dynamic = "force-dynamic";
-
+import crypto from "crypto";
 import { NextResponse } from "next/server";
 import { verifyChallenge, cleanupExpiredChallenges } from "@/lib/auth/challenge";
 import { normalizeWalletAddress } from "@/lib/api/validation";
@@ -8,6 +7,16 @@ import { getDb } from "@/lib/mongodb";
 import { auditLog } from "@/lib/api/audit";
 import { generateAccessToken, generateRefreshToken, storeRefreshToken } from "@/lib/auth/tokenService";
 import { errorResponse } from "@/lib/utils/errorResponse";
+
+export const dynamic = "force-dynamic";
+
+function getClientIp(request) {
+  return (
+    request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ||
+    request.headers.get("x-real-ip") ||
+    "unknown"
+  );
+}
 
 export async function POST(request) {
   return withApiHardening(
@@ -62,8 +71,11 @@ export async function POST(request) {
         }
 
         const userId = user?._id?.toString() ?? address;
+        const sessionId = crypto.randomUUID();
+
         const tokenPayload = {
           sub: userId,
+          jti: sessionId,
           email: user?.email ?? "",
           name: user?.fullName ?? "",
           walletAddress: address,
@@ -71,7 +83,13 @@ export async function POST(request) {
 
         const accessToken = generateAccessToken(tokenPayload);
         const refreshToken = generateRefreshToken();
-        await storeRefreshToken(userId, refreshToken);
+        await storeRefreshToken(userId, refreshToken, {
+          deviceInfo: {
+            ip: getClientIp(request),
+            userAgent: request.headers.get("user-agent") || "unknown",
+            origin: request.headers.get("origin") || null,
+          },
+        });
 
         const isProduction = process.env.NODE_ENV === "production";
         const response = NextResponse.json({
@@ -85,7 +103,7 @@ export async function POST(request) {
           secure: isProduction,
           sameSite: "strict",
           path: "/",
-          maxAge: 15 * 60, // 15 minutes
+          maxAge: 15 * 60,
         });
 
         response.cookies.set("refresh_token", refreshToken, {
@@ -93,7 +111,7 @@ export async function POST(request) {
           secure: isProduction,
           sameSite: "strict",
           path: "/api/auth/refresh",
-          maxAge: 7 * 24 * 60 * 60, // 7 days
+          maxAge: 7 * 24 * 60 * 60,
         });
 
         auditLog({
@@ -102,6 +120,7 @@ export async function POST(request) {
           method: "POST",
           status: 200,
           address,
+          sessionId,
         });
 
         return response;

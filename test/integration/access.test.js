@@ -17,7 +17,7 @@ describe('Buyer Access Status Flow', () => {
         const data = await res.json();
 
         expect(res.status).toBe(401);
-        expect(data).toEqual({ error: 'Unauthorized: Wallet connection required' });
+        expect(data).toEqual({ error: 'Authentication required' });
     });
 
     it('returns not_purchased when no entitlement exists on-chain', async () => {

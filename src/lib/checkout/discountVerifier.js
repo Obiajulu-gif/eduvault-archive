@@ -29,6 +29,9 @@ export async function findMaterial(materialId, db = null) {
           price: doc.price,
           userAddress: doc.userAddress || doc.authorAddress || null,
           creatorAddress: doc.userAddress || doc.authorAddress || null,
+          status: doc.status || null,
+          paused: Boolean(doc.paused),
+          withdrawn: Boolean(doc.withdrawn || doc.isWithdrawn),
         };
       }
     } catch (e) {
@@ -47,13 +50,16 @@ export async function findMaterial(materialId, db = null) {
     } else if (typeof listing.price === "number") {
       price = listing.price;
     }
-    return {
-      id: listing.id,
-      title: listing.title,
-      price: price,
-      userAddress: listing.userAddress || (listing.author && listing.author.walletAddress) || null,
-      creatorAddress: listing.userAddress || (listing.author && listing.author.walletAddress) || null,
-    };
+      return {
+        id: listing.id,
+        title: listing.title,
+        price: price,
+        userAddress: listing.userAddress || (listing.author && listing.author.walletAddress) || null,
+        creatorAddress: listing.userAddress || (listing.author && listing.author.walletAddress) || null,
+        status: listing.status || null,
+        paused: Boolean(listing.paused),
+        withdrawn: Boolean(listing.withdrawn || listing.isWithdrawn),
+      };
   }
 
   return null;

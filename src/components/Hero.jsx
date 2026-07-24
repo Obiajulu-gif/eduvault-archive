@@ -38,7 +38,7 @@ export default function Hero() {
             className="flex items-center gap-2 bg-stellar-blue/5 border border-stellar-blue/10 px-4 py-1.5 rounded-full text-xs font-bold text-stellar-blue mb-6"
           >
             <span className="relative flex h-2 w-2">
-              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-stellar-blue opacity-75"></span>
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-stellar-blue opacity-75 motion-reduce:animate-none motion-reduce:hidden"></span>
               <span className="relative inline-flex rounded-full h-2 w-2 bg-stellar-blue"></span>
             </span>
             Powered by Stellar Soroban
@@ -100,8 +100,8 @@ export default function Hero() {
         >
           <div className="relative w-full max-w-[500px] aspect-square">
             {/* Glass Card Decoration */}
-            <div className="absolute -top-6 -left-6 w-32 h-32 bg-stellar-blue/10 rounded-3xl blur-2xl animate-pulse" />
-            <div className="absolute -bottom-6 -right-6 w-32 h-32 bg-accent-purple/10 rounded-3xl blur-2xl animate-pulse" />
+            <div className="absolute -top-6 -left-6 w-32 h-32 bg-stellar-blue/10 rounded-3xl blur-2xl motion-safe:animate-pulse" />
+            <div className="absolute -bottom-6 -right-6 w-32 h-32 bg-accent-purple/10 rounded-3xl blur-2xl motion-safe:animate-pulse" />
             
             <div className="relative z-10 w-full h-full rounded-[2.5rem] overflow-hidden shadow-2xl border border-white/20 backdrop-blur-sm">
               <Image

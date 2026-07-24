@@ -85,6 +85,9 @@
                 },
                 {
                   "i128": "1000000"
+                },
+                {
+                  "bytes": "35353065383430302d653239622d343164342d613731362d343436363535343430303030"
                 }
               ]
             }
@@ -420,13 +423,16 @@
               "key": {
                 "vec": [
                   {
-                    "symbol": "Admin"
+                    "symbol": "AdminRole"
+                  },
+                  {
+                    "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM"
                   }
                 ]
               },
               "durability": "persistent",
               "val": {
-                "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM"
+                "bool": true
               }
             }
           },
@@ -681,6 +687,14 @@
                     "val": {
                       "i128": "1000000"
                     }
+                  },
+                  {
+                    "key": {
+                      "symbol": "transaction_id"
+                    },
+                    "val": {
+                      "bytes": "35353065383430302d653239622d343164342d613731362d343436363535343430303030"
+                    }
                   }
                 ]
               }
@@ -707,12 +721,6 @@
               "durability": "persistent",
               "val": {
                 "map": [
-                  {
-                    "key": {
-                      "symbol": "oracle"
-                    },
-                    "val": "void"
-                  },
                   {
                     "key": {
                       "symbol": "paused"

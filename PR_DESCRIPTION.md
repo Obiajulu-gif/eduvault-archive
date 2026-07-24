@@ -1,111 +1,57 @@
-# PR Description
+# PR Description: Harden Webhook Registration and Delivery
 
 ## Overview
-This PR implements critical operational safety and compliance features for the EduVault marketplace, including contract pause/unpause functionality, geolocation-based tax estimation, and verification of existing multi-destination payout and platform fee collection features.
+This PR implements critical operational safety, security, and observability features for outbound webhook delivery across the EduVault marketplace. Previously, webhooks were sent in-memory without validation of the destination URL or payload signatures. This PR hardens the egress path to strictly prevent SSRF and DNS rebinding attacks, introduces versioned HMAC payload signatures with overlapping key rotation, and implements a resilient background delivery system with exponential backoff and dead-lettering.
 
-## Changes
+## Key Changes
 
-### Task 1: Add pause/unpause operational safety toggles (#310)
-**File:** `soroban/contracts/purchase-manager/src/lib.rs`
+### 1. SSRF Protection and Strict Egress Controls
+**File:** `src/lib/webhooks/dispatcher.js`
+- Replaced naive `fetch` wrapper with a highly restrictive custom `dispatcher.js`.
+- Enforces `https://` protocol and standard secure ports (443, 8443).
+- **DNS Resolution & Filtering:** Manually resolves domain names via DNS and blocks requests to private IPv4 networks (e.g., `10.x`, `192.168.x`), IPv6 local scopes, loopbacks, and reserved subnets to thwart SSRF.
+- **DNS Rebinding Prevention:** Directs the HTTP connection directly to the verified IP address, passing the original hostname as the `Host` and SNI headers to guarantee the target IP doesn't shift between resolution and connection (TOCTOU attacks).
+- Implements strict 5-second timeouts and a 1MB response size limit.
+- Securely limits and validates redirects.
 
-- Added dedicated `pause()` function to temporarily halt all state-modifying contract operations
-- Added dedicated `unpause()` function to resume normal operations
-- Both functions are admin-only and emit `PlatformConfigUpdatedEvent` for transparency
-- The existing `set_platform_config()` already supported pause functionality, but these dedicated functions provide clearer operational safety controls
-- When paused, the `purchase()` function returns `PurchaseError::ContractPaused`
+### 2. Versioned HMAC Signatures & Rotating Secrets
+**File:** `src/lib/webhooks/signature.js`
+- All webhook payloads are now wrapped in a standardized schema containing a stable UUID event `id`, `type`, `created` timestamp, and `data`.
+- Generates a `v1` SHA-256 HMAC signature using the raw payload and a timestamp, appended to the `Eduvault-Signature` header (e.g., `t=...,v1=...`).
+- **Overlapping Key Rotation:** Supports multiple active signing secrets simultaneously, allowing users to safely rotate secrets without dropping events.
+- **Replay Protection:** Verification checks include a 5-minute clock drift tolerance to prevent replay attacks, comparing signatures with `crypto.timingSafeEqual` to avoid timing attacks.
 
-**Acceptance Criteria:**
-- ✅ Transactions fail if contract is paused (existing check at line 367-369)
-- ✅ Only administrators can pause/unpause (admin verification at lines 623 and 647)
+### 3. Resilient Background Delivery & Retries
+**Files:** `src/lib/backend/schemaContracts.js`, `src/lib/webhooks/sender.js`, `src/lib/backend/webhookWorker.js`
+- **Schema:** Added `webhooks` and `webhook_deliveries` collections to the database.
+- Webhook events are no longer sent synchronously. They are enqueued into the `webhook_deliveries` collection as `pending`.
+- Created `webhookWorker.js` to poll and process pending deliveries.
+- **Bounded Backoff & Jitter:** Automatically retries failed HTTP requests utilizing exponential backoff (e.g., 2s, 4s, 8s) combined with jitter.
+- **Dead-Lettering:** Classifies a delivery as `dead_letter` after 5 failed attempts.
 
-### Task 2: Implement geolocation checking for tax estimation APIs (#299)
-**Files:** 
-- `src/lib/checkout/taxEstimator.js` (new)
-- `src/app/api/checkout/initiate/route.js` (new)
-
-**taxEstimator.js:**
-- Implemented `estimateTax()` function that resolves geolocation from IP address using ip-api.com
-- Added comprehensive tax rate database for 40+ countries (stored in basis points)
-- Implemented `calculateTaxAmount()` for precise tax calculations
-- Added `applyTaxToCheckout()` to integrate tax estimation into checkout flow
-- Included `isValidTaxRate()` validation function (max 30% tax rate)
-- Supports manual country code override or automatic IP-based detection
-
-**checkout/initiate/route.js:**
-- Created POST endpoint to initiate checkout with tax estimation
-- Automatically extracts buyer IP from request headers (x-forwarded-for, x-real-ip)
-- Stores checkout intents in MongoDB with 30-minute expiration
-- Returns complete tax breakdown including base amount, tax rate, tax amount, and total
-- Created GET endpoint for tax estimation without creating checkout intent
-
-**Acceptance Criteria:**
-- ✅ Geolocation resolver estimates tax based on IP queries
-- ✅ Totals in invoice payload are adjusted correctly (originalAmount + taxAmount = totalAmount)
-
-### Task 3: Implement multi-destination payout splits in Soroban contract (#306)
-**File:** `soroban/contracts/purchase-manager/src/lib.rs`
-
-**Verification:** This feature is already fully implemented in the contract:
-- `PayoutShare` structure (lines 52-58) defines recipient and share_bps
-- `MaterialRecord` includes `payout_shares: Vec<PayoutShare>` (line 69)
-- `validate_payout_shares()` (lines 699-733) validates:
-  - Share count between 1-5 recipients
-  - Individual shares between 0-10000 basis points
-  - Total shares equal exactly 10000 basis points (100%)
-  - No duplicate recipients
-- `distribute_payout_shares()` (lines 735-787) executes:
-  - Calculates each recipient's share percentage
-  - Uses last-recipient-remainder strategy to prevent dust token leaks
-  - Transfers tokens to each recipient via SAC interface
-  - Emits `PayoutDistributedEvent` for each payout
-- Integration in `purchase()` function (lines 433-441) calls distribution after platform fee collection
-
-**Acceptance Criteria:**
-- ✅ Payments are split correctly based on defined ratios (lines 753-758)
-- ✅ Contracts reject invalid payout splits (lines 699-733, totals must equal 100%)
-
-### Task 4: Add contract platform fee deduction collection rules (#308)
-**File:** `soroban/contracts/purchase-manager/src/lib.rs`
-
-**Verification:** This feature is already fully implemented in the contract:
-- `PlatformConfig` includes `platform_fee_bps` field (line 78) and `treasury` address (line 77)
-- `MAX_PLATFORM_FEE_BPS` constant limits fee to 10% (line 9)
-- Platform fee calculation in `purchase()` (lines 407-409):
-  - `platform_fee = (gross * platform_fee_bps) / BASIS_POINTS`
-  - `seller_net = gross - platform_fee`
-- Platform fee transfer (lines 417-430):
-  - Transfers fee to treasury address via SAC
-  - Emits `PayoutDistributedEvent` with role "platform_fee"
-- Validation during initialization (lines 313-316) and config updates (lines 542-545)
-- Treasury validation prevents self-transfer (lines 319-321, 548-550)
-
-**Acceptance Criteria:**
-- ✅ Platform wallet destination address defined in config
-- ✅ Platform fee calculated on purchase execution (lines 407-409)
-- ✅ Platform fee transferred to treasury, creator share to recipients (lines 417-441)
-
-## Testing Recommendations
-
-### Smart Contract Tests
-- Test pause/unpause functions with admin and non-admin accounts
-- Verify purchases fail when paused
-- Test multi-destination payout splits with various configurations
-- Verify platform fee calculation and transfer accuracy
-
-### Backend Tests
-- Test tax estimation with known IP addresses
-- Verify tax rate database accuracy
-- Test checkout initiation with and without tax
-- Test geolocation fallback behavior
+### 4. User-Facing Webhook Management APIs
+**Files:** `src/app/api/webhooks/...`
+- Built full CRUD capabilities for webhook registration and endpoint observability.
+- `GET /api/webhooks`: Lists registered endpoints with redacted secrets.
+- `POST /api/webhooks`: Registers a new endpoint, revealing the secret only once.
+- `DELETE /api/webhooks/[id]`: Soft deletes/disables a webhook.
+- `POST /api/webhooks/[id]/rotate`: Facilitates overlapping key rotation by expiring the old secret in 24 hours while generating a new primary secret.
+- `GET /api/webhooks/[id]/deliveries`: Inspect deliveries, attempts, and error reasons for troubleshooting.
+- `POST /api/webhooks/[id]/deliveries/[deliveryId]/replay`: Manually replay an event without mutating the original payload.
 
 ## Security Considerations
-- Pause/unpause functions are admin-only with proper authentication
-- Tax rates are capped at 30% to prevent excessive charges
-- Platform fees are capped at 10% during initialization
-- Payout shares validate total equals 100% to prevent fund loss
-- Dust token prevention via last-recipient-remainder strategy
+- Comprehensive SSRF mitigations prevent the EduVault backend from querying internal network services, databases, or cloud metadata endpoints.
+- DNS Rebinding protection ensures DNS cannot shift mid-request.
+- Strong timing-safe HMAC cryptography guarantees data integrity and origin authenticity.
+- Secrets are securely persisted, redacted in GET endpoints, and rotated gracefully.
+
+## Testing
+- Tests implemented in `tests/backend/webhooks.test.mjs`.
+- Covers SSRF IP filtering (`127.0.0.1`, `169.254.x.x`, `::1`, `::ffff:127.0.0.1`, etc.).
+- Covers signature validation, replay tolerances, and key rotation scenarios.
+- All webhook backend tests pass successfully.
 
 ## Breaking Changes
-None. All changes are additive or verify existing functionality.
+- The `webhookUrls` string array on the `users` collection is deprecated. A seamless JIT migration path was introduced in `sender.js` to migrate active legacy URLs into the new `webhooks` collection on-the-fly when events are broadcast.
 
-Closes #310, #299, #306, #308
+Closes #<WEBHOOK_ISSUE_NUMBER>

@@ -26,6 +26,13 @@ Systems involved: Frontend, Wallet, Soroban `PurchaseManager`, Stellar RPC, Inde
 
 ## Maintainer Operations
 
-- Run the indexer locally: `npm run indexer:stellar` (uses `scripts/run-stellar-indexer.mjs`).
+- Run the indexer locally: `docker compose up -d mongodb` (waits for the
+  single-node replica set to come up), then `npm run indexer:stellar` (uses
+  `scripts/run-stellar-indexer.mjs`). The replica set is required: the indexer
+  commits each event's `sync_events` receipt and its purchase/entitlement
+  projections in one transaction, and Mongo only permits transactions on a
+  replica set. Against a standalone mongod the indexer logs a warning and falls
+  back to non-transactional writes.
+- Process one batch and exit: `npm run indexer:stellar:once`.
 - Reprocess dead-letter entries: `node scripts/reprocess-deadletter.mjs`.
 - Inspect dead-letter events in MongoDB collection `dead_letter_events` for failure details.

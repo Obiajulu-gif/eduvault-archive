@@ -1,6 +1,17 @@
-import { Horizon } from '@stellar/stellar-sdk';
-import { HORIZON_URL, isMainnet } from '@/lib/config/chain';
-import logger from '@/lib/logger';
+import { Horizon } from "@stellar/stellar-sdk";
+import { HORIZON_URL, isMainnet } from "@/lib/config/chain";
+
+const horizonLogger = {
+  warn(data, message) {
+    console.warn(message, data);
+  },
+  info(data, message) {
+    console.info(message, data);
+  },
+  error(data, message) {
+    console.error(message, data);
+  },
+};
 
 // Primary URL from config; fallback list ordered by preference.
 const PRIMARY_URL = HORIZON_URL;
@@ -30,7 +41,21 @@ const DEFAULT_TIMEOUT_MS = Number(process.env.STELLAR_HORIZON_TIMEOUT_MS || 8000
 const DEFAULT_RETRIES = Number(process.env.STELLAR_HORIZON_RETRIES || 2);
 
 function buildServer(url) {
-  return new Horizon.Server(url, { allowHttp: url.startsWith('http://') });
+  const options = {
+    allowHttp: url.startsWith("http://"),
+  };
+
+  try {
+    return new Horizon.Server(url, options);
+  } catch (error) {
+    if (
+      error instanceof TypeError &&
+      String(error.message || "").includes("not a constructor")
+    ) {
+      return Horizon.Server(url, options);
+    }
+    throw error;
+  }
 }
 
 function isTransientError(error) {
@@ -74,26 +99,52 @@ export async function withFailover(fn, { timeoutMs = DEFAULT_TIMEOUT_MS, retries
       const result = await withTimeout(fn(server), timeoutMs, url);
 
       if (attempt > 0) {
-        logger.info({ failoverUrl: url, attempt }, 'Horizon failover succeeded');
+        horizonLogger.info(
+          {
+            failoverUrl: url,
+            attempt: attempt + 1,
+          },
+          "Horizon failover succeeded",
+        );
       }
       return result;
     } catch (err) {
       errors.push({ url, message: err.message });
 
       if (!isTransientError(err)) {
-        logger.warn({ url, err: err.message }, 'Horizon non-transient error — not failing over');
+        horizonLogger.warn(
+          {
+            url,
+            error: err.message,
+          },
+          "Horizon non-transient error; failover stopped",
+        );
         throw err;
       }
 
-      logger.warn(
-        { primaryUrl: ALL_ENDPOINTS[0], failoverUrl: url, attempt, err: err.message },
-        'Horizon connection drop detected — switching to next node'
+      horizonLogger.warn(
+        {
+          primaryUrl: ALL_ENDPOINTS[0],
+          failedUrl: url,
+          nextUrl:
+            ALL_ENDPOINTS[
+              (attempt + 1) % ALL_ENDPOINTS.length
+            ],
+          attempt: attempt + 1,
+          error: err.message,
+        },
+        "Horizon connection error detected; switching endpoint",
       );
     }
   }
 
-  const summary = errors.map((e) => `${e.url}: ${e.message}`).join(' | ');
-  throw new Error(`All Horizon endpoints failed after ${retries + 1} attempts. Errors: ${summary}`);
+  const summary = errors
+    .map(({ url, message }) => `${url}: ${message}`)
+    .join(" | ");
+
+  throw new Error(
+    `All Horizon endpoints failed after ${retries + 1} attempts. Errors: ${summary}`,
+  );
 }
 
 /**
@@ -140,39 +191,30 @@ export function getConfiguredEndpoints() {
  */
 export async function getFeeStats() {
   try {
-    const response = await fetch(`${HORIZON_URL}/fee_stats`, {
-      headers: {
-        "Content-Type": "application/json",
-      },
-    });
-
-    if (!response.ok) {
-      throw new Error(`Failed to fetch fee stats: ${response.statusText}`);
-    }
-
-    const data = await response.json();
-    return data;
+    return await fetchFeeStats();
   } catch (error) {
-    console.error("Error fetching Stellar fee stats:", error);
-    // Fallback to minimal defaults in case of error
-    return {
-      fee_charged: {
-        min: "100",
-        p10: "100",
-        p20: "100",
-        p30: "100",
-        p40: "100",
-        p50: "100",
-        p60: "100",
-        p70: "100",
-        p80: "100",
-        p90: "100",
-        p95: "100",
-        p99: "100",
-        max: "100",
+    horizonLogger.error(
+      {
+        error:
+          error instanceof Error
+            ? error.message
+            : String(error),
       },
-    };
+    );
   }
+
+  const response = await fetch(`${HORIZON_URL}/fee_stats`, {
+    headers: {
+      "Content-Type": "application/json",
+    },
+  });
+
+  if (!response.ok) {
+    throw new Error(`Failed to fetch fee stats: ${response.statusText}`);
+  }
+
+  const data = await response.json();
+  return data;
 }
 
 /**
@@ -202,6 +244,8 @@ export async function getDynamicBaseFee(tier = 'medium') {
   const optimalFees = calculateOptimalFees(feeStats);
   
   return optimalFees[tier] || optimalFees.medium;
+}
+
 const KNOWN_USDC_ISSUERS = {
   testnet: 'GBBD47IF6LWK7P7MDEVSCWRZDPOVPOFWLYERWFBN4JSE3OUQTISLV5EX',
   mainnet: 'GA5ZSEJYB37JDD5G3LYVYF77RD7QFGHSXPJNKXJFUMIVYQ33HE6IGM4Y',
@@ -226,9 +270,13 @@ export async function checkBuyerTrustline(publicKey, assetCode, issuerAddress) {
   );
 
   if (!trustline) {
-    logger.info(
-      { publicKey, assetCode, issuer },
-      'Buyer missing trustline for asset'
+    horizonLogger.info(
+      {
+        publicKey,
+        assetCode,
+        issuer,
+      },
+      "Buyer is missing the required asset trustline",
     );
     return {
       hasTrustline: false,
@@ -247,5 +295,9 @@ export async function checkBuyerTrustline(publicKey, assetCode, issuerAddress) {
     };
   }
 
-  return { hasTrustline: true, balance: trustline.balance, issuer };
+  return {
+    hasTrustline: true,
+    balance: trustline.balance,
+    issuer,
+  };
 }

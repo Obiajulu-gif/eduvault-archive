@@ -1,4 +1,5 @@
 import { getMaterialAccessStatus, createPendingAccessRequest } from "../../../../lib/purchases/access.js";
+import { resolveAuthenticatedWallet } from "../../../../lib/auth/walletIdentity.js";
 
 export const dynamic = 'force-dynamic';
 
@@ -34,7 +35,13 @@ export async function GET(request) {
   try {
     const { searchParams } = new URL(request.url);
     const materialId = searchParams.get('materialId') || '';
-    const buyerAddress = searchParams.get('buyerAddress') || '';
+    const identity = await resolveAuthenticatedWallet(request);
+    const buyerAddress = identity.ok ? identity.walletAddress : '';
+
+    if (!identity.ok) {
+      const { NextResponse } = await import('next/server');
+      return NextResponse.json({ error: identity.error }, { status: identity.status });
+    }
 
     if (!materialId || !buyerAddress) {
       const { NextResponse } = await import('next/server');
@@ -65,7 +72,13 @@ export async function POST(request) {
   try {
     const body = await request.json();
     const materialId = body?.materialId || '';
-    const buyerAddress = body?.buyerAddress || '';
+    const identity = await resolveAuthenticatedWallet(request);
+    const buyerAddress = identity.ok ? identity.walletAddress : '';
+
+    if (!identity.ok) {
+      const { NextResponse } = await import('next/server');
+      return NextResponse.json({ error: identity.error }, { status: identity.status });
+    }
 
     if (!materialId || !buyerAddress) {
       const { NextResponse } = await import('next/server');

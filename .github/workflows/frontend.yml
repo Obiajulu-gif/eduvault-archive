@@ -68,3 +68,6 @@ jobs:
 
       - name: Build frontend
         run: npm run build --if-present
+
+      - name: Run browser security tests
+        run: node --test tests/browser/*.test.mjs

@@ -4,7 +4,6 @@ import Modal from '../Modal';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 describe('Modal Accessibility Baseline', () => {
-  // Use a mock function to track if the modal tries to close
   let onClose;
 
   beforeEach(() => {
@@ -17,8 +16,7 @@ describe('Modal Accessibility Baseline', () => {
         <p>Modal Content</p>
       </Modal>
     );
-    
-    // Runs the automated WCAG audit
+
     const results = await axe(container);
     expect(results).toHaveNoViolations();
   });
@@ -29,26 +27,71 @@ describe('Modal Accessibility Baseline', () => {
         <p>Modal Content</p>
       </Modal>
     );
-    
-    // Runs the automated WCAG audit on the ariaLabel state
+
     const results = await axe(container);
     expect(results).toHaveNoViolations();
   });
 
-  it('should close on Escape key', async () => {
+  it('should close on Escape key', () => {
     render(
       <Modal isOpen={true} onClose={onClose} title="Test Modal">
-        <button aria-label="Inner Button">Click Me</button>
+        <button>Click Me</button>
       </Modal>
     );
 
-    // Target 'document' specifically to match the listener in useFocusTrap.js
-    fireEvent.keyDown(document, { 
-      key: 'Escape', 
+    fireEvent.keyDown(document, {
+      key: 'Escape',
       code: 'Escape',
-      keyCode: 27 
+      keyCode: 27
     });
-    
+
     expect(onClose).toHaveBeenCalled();
+  });
+
+  it('should close when clicking backdrop', () => {
+    render(
+      <Modal isOpen={true} onClose={onClose} title="Test Modal">
+        <p>Modal Content</p>
+      </Modal>
+    );
+
+    const backdrop = screen.getByRole('presentation');
+    fireEvent.click(backdrop);
+
+    expect(onClose).toHaveBeenCalled();
+  });
+
+  it('has accessible dialog role with correct attributes', () => {
+    render(
+      <Modal isOpen={true} onClose={onClose} title="Test Modal">
+        <p>Modal Content</p>
+      </Modal>
+    );
+
+    const dialog = screen.getByRole('dialog');
+    expect(dialog).toHaveAttribute('aria-modal', 'true');
+    expect(dialog).toHaveAttribute('aria-labelledby');
+  });
+
+  it('should return focus to trigger element on close', () => {
+    const triggerButton = document.createElement('button');
+    triggerButton.textContent = 'Open Modal';
+    document.body.appendChild(triggerButton);
+    triggerButton.focus();
+
+    const { rerender } = render(
+      <Modal isOpen={true} onClose={onClose} title="Test Modal">
+        <p>Modal Content</p>
+      </Modal>
+    );
+
+    rerender(
+      <Modal isOpen={false} onClose={onClose} title="Test Modal">
+        <p>Modal Content</p>
+      </Modal>
+    );
+
+    expect(document.activeElement).toBe(triggerButton);
+    document.body.removeChild(triggerButton);
   });
 });

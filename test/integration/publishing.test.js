@@ -16,7 +16,7 @@ describe('Material Publishing Flow', () => {
     it('successfully creates a draft material record', async () => {
         const req = new Request('http://localhost/api/materials', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: { 'Content-Type': 'application/json', 'x-user-wallet': users.creator.walletAddress },
             body: JSON.stringify(materials.draft),
         });
 
@@ -33,7 +33,10 @@ describe('Material Publishing Flow', () => {
     it('fails publish validation if material ID is invalid', async () => {
         mockCollections.materials.findOne.mockResolvedValue(null);
 
-        const req = new Request('http://localhost/api/materials/invalid_id/publish', { method: 'POST' });
+        const req = new Request('http://localhost/api/materials/invalid_id/publish', {
+            method: 'POST',
+            headers: { 'x-user-wallet': users.creator.walletAddress },
+        });
         const res = await PublishMaterial(req, { params: { id: 'invalid_id' } });
         const data = await res.json();
 
@@ -47,7 +50,7 @@ describe('Material Publishing Flow', () => {
 
         const req = new Request(`http://localhost/api/materials/${materials.draft._id}/publish`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: { 'Content-Type': 'application/json', 'x-user-wallet': users.creator.walletAddress },
             // Simulating passing on-chain registry details back to backend
             body: JSON.stringify({ contractId: 'C_NEW_CONTRACT' }),
         });

@@ -1,5 +1,8 @@
-import { getDb } from '@/lib/mongodb';
-import { logger } from '@/lib/logger';
+import { getDb } from '../mongodb.js';
+import { logger } from '../logger.js';
+import { COLLECTIONS } from '../backend/schemaContracts.js';
+import { generateEventId, createWebhookPayload } from './signature.js';
+import crypto from 'node:crypto';
 
 export async function getDailyStats(db) {
   const now = new Date();
@@ -48,87 +51,89 @@ export async function getDailyStats(db) {
   };
 }
 
-export async function sendWebhookWithRetry(url, payload, retries = 3) {
-  for (let attempt = 1; attempt <= retries; attempt++) {
-    try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 5000);
-
-      const response = await fetch(url, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'User-Agent': 'EduVault-Webhook-Sender/1.0',
-        },
-        body: JSON.stringify(payload),
-        signal: controller.signal,
-      });
-
-      clearTimeout(timeoutId);
-
-      if (response.ok) {
-        logger.info(`Webhook sent successfully to ${url}`);
-        return true;
-      } else {
-        logger.warn(`Webhook failed (Attempt ${attempt}/${retries}): ${response.status} ${response.statusText}`);
-      }
-    } catch (error) {
-      if (error.name === 'AbortError') {
-        logger.warn(`Webhook timeout (Attempt ${attempt}/${retries}) for ${url}`);
-      } else {
-        logger.error(`Webhook error (Attempt ${attempt}/${retries}) for ${url}: ${error.message}`);
-      }
-    }
-
-    if (attempt < retries) {
-      // Exponential backoff: 1s, 2s, 4s...
-      const delay = Math.pow(2, attempt - 1) * 1000;
-      await new Promise(resolve => setTimeout(resolve, delay));
-    }
-  }
-
-  logger.error(`Webhook failed permanently after ${retries} attempts for ${url}`);
-  return false;
-}
-
 export async function broadcastPurchaseEvent(materialId, purchaseData) {
   try {
     const db = await getDb();
     
     // Find the material to get the creatorId
-    const material = await db.collection('materials').findOne({ id: materialId });
+    const material = await db.collection(COLLECTIONS.materials).findOne({ id: materialId });
     if (!material || !material.creatorId) return;
 
-    // Find the creator's webhook URLs
-    const creator = await db.collection('users').findOne({ 
-      $or: [
-        { id: material.creatorId },
-        { _id: material.creatorId },
-        { walletAddress: material.creatorId }
-      ]
-    });
+    // Find the creator's webhooks
+    let webhooks = await db.collection(COLLECTIONS.webhooks).find({
+      userId: material.creatorId,
+      status: 'active'
+    }).toArray();
 
-    if (!creator || !creator.webhookUrls || !Array.isArray(creator.webhookUrls)) {
+    // Migration: if no webhooks but user has legacy webhookUrls, migrate them
+    if (webhooks.length === 0) {
+      const creator = await db.collection(COLLECTIONS.users).findOne({ 
+        $or: [
+          { id: material.creatorId },
+          { _id: material.creatorId },
+          { walletAddress: material.creatorId }
+        ]
+      });
+
+      if (creator && creator.webhookUrls && Array.isArray(creator.webhookUrls)) {
+        const newWebhooks = creator.webhookUrls.map(url => ({
+          userId: material.creatorId,
+          url,
+          secrets: [{
+            key: crypto.randomBytes(32).toString('hex'),
+            createdAt: new Date(),
+            expiresAt: null
+          }],
+          status: 'active',
+          createdAt: new Date(),
+          updatedAt: new Date()
+        }));
+
+        if (newWebhooks.length > 0) {
+          await db.collection(COLLECTIONS.webhooks).insertMany(newWebhooks);
+          webhooks = await db.collection(COLLECTIONS.webhooks).find({
+            userId: material.creatorId,
+            status: 'active'
+          }).toArray();
+        }
+      }
+    }
+
+    if (!webhooks || webhooks.length === 0) {
       return;
     }
 
-    const payload = {
-      event: 'purchase.completed',
-      data: {
-        materialId,
-        buyerAddress: purchaseData.buyerAddress,
-        amount: purchaseData.amount,
-        asset: purchaseData.asset,
-        transactionHash: purchaseData.transactionHash,
-        purchasedAt: new Date().toISOString()
-      }
+    const payloadData = {
+      materialId,
+      buyerAddress: purchaseData.buyerAddress,
+      amount: purchaseData.amount,
+      asset: purchaseData.asset,
+      transactionHash: purchaseData.transactionHash,
+      purchasedAt: new Date().toISOString()
     };
 
-    // Send to all registered webhooks for this creator
-    const promises = creator.webhookUrls.map(url => sendWebhookWithRetry(url, payload));
+    const deliveriesCollection = db.collection(COLLECTIONS.webhookDeliveries);
+
+    // Enqueue webhook deliveries for all active endpoints
+    const promises = webhooks.map(async (webhook) => {
+      const eventId = generateEventId();
+      const payload = createWebhookPayload(eventId, 'purchase.completed', payloadData);
+      
+      return deliveriesCollection.insertOne({
+        webhookId: webhook._id,
+        userId: material.creatorId,
+        eventId,
+        eventType: 'purchase.completed',
+        payload,
+        status: 'pending',
+        attempts: [],
+        nextAttemptAt: new Date(),
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      });
+    });
     
-    // We don't await this so it happens in the background
-    Promise.allSettled(promises);
+    await Promise.allSettled(promises);
 
   } catch (error) {
     logger.error(`Failed to broadcast purchase event for material ${materialId}: ${error.message}`);

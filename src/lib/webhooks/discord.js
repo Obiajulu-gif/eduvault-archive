@@ -1,4 +1,5 @@
 import { logger } from '@/lib/logger';
+import { dispatchWebhook } from '@/lib/webhooks/dispatcher';
 
 export function createStatsEmbed(stats) {
   return {
@@ -40,32 +41,16 @@ export function createStatsEmbed(stats) {
 export async function sendDiscordWebhook(url, payload, retries = 3) {
   for (let attempt = 1; attempt <= retries; attempt++) {
     try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 10000);
+      const response = await dispatchWebhook(url, JSON.stringify(payload), null);
 
-      const response = await fetch(url, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(payload),
-        signal: controller.signal,
-      });
-
-      clearTimeout(timeoutId);
-
-      if (response.ok) {
+      if (response.status >= 200 && response.status < 300) {
         logger.info('Discord webhook sent successfully');
         return true;
       }
 
-      logger.warn(`Discord webhook failed (Attempt ${attempt}/${retries}): ${response.status} ${response.statusText}`);
+      logger.warn(`Discord webhook failed (Attempt ${attempt}/${retries}): ${response.status}`);
     } catch (error) {
-      if (error.name === 'AbortError') {
-        logger.warn(`Discord webhook timeout (Attempt ${attempt}/${retries})`);
-      } else {
-        logger.error(`Discord webhook error (Attempt ${attempt}/${retries}): ${error.message}`);
-      }
+      logger.error(`Discord webhook error (Attempt ${attempt}/${retries}): ${error.message}`);
     }
 
     if (attempt < retries) {

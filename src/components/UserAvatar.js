@@ -72,6 +72,7 @@ export default function UserAvatar({
       <div
         className={`${sizeClass} rounded-full overflow-hidden flex-shrink-0 ${className}`}
       >
+        {/* eslint-disable-next-line @next/next/no-img-element */}
         <img
           src={src}
           alt={displayName || "User avatar"}

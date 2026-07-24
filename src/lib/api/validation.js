@@ -1,9 +1,15 @@
+import { Address } from "@stellar/stellar-sdk";
 import {
   normalizeSubject,
   normalizeCategory,
   normalizeLevel,
   validateCategorySubject,
 } from "../backend/taxonomy.js";
+import {
+  normalizeExternalUrl,
+  normalizePlainText,
+  normalizeRemoteImageUrl,
+} from "../security/input.js";
 
 export class ValidationError extends Error {
   constructor(message, details = {}) {
@@ -13,15 +19,34 @@ export class ValidationError extends Error {
   }
 }
 
-const CONTROL_CHARS = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g;
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const EVM_ADDRESS_PATTERN = /^0x[a-fA-F0-9]{40}$/;
-const STELLAR_ADDRESS_PATTERN = /^G[A-Z2-7]{55}$/;
+const STELLAR_ADDRESS_PATTERN = /^G[A-Z2-7]{55}$/i;
 const CURRENCY_CODE_PATTERN = /^[A-Z][A-Z0-9]{2,11}$/;
+export const PROFILE_LINK_RULES = {
+  twitterUrl: { allowedHosts: ["x.com", "twitter.com"], allowSubdomains: true, maxLength: 256 },
+  githubUrl: { allowedHosts: ["github.com"], allowSubdomains: true, maxLength: 256 },
+  websiteUrl: { maxLength: 256 },
+};
 
 export function sanitizeString(value, { maxLength = 5000 } = {}) {
-  if (value === undefined || value === null) return "";
-  return String(value).replace(CONTROL_CHARS, "").trim().slice(0, maxLength);
+  return normalizePlainText(value, { maxLength });
+}
+
+export function normalizeUrlField(value, field, options) {
+  try {
+    return normalizeExternalUrl(value, options);
+  } catch (error) {
+    throw new ValidationError(error.message, { field });
+  }
+}
+
+export function normalizeImageField(value, field = "imageUrl") {
+  try {
+    return normalizeRemoteImageUrl(value);
+  } catch (error) {
+    throw new ValidationError(error.message, { field });
+  }
 }
 
 export function sanitizeObject(input, fieldLimits = {}) {
@@ -61,10 +86,18 @@ export function validateEmail(email) {
 export function normalizeWalletAddress(address) {
   const clean = sanitizeString(address, { maxLength: 80 });
   if (!clean) return null;
-  if (!EVM_ADDRESS_PATTERN.test(clean) && !STELLAR_ADDRESS_PATTERN.test(clean)) {
-    throw new ValidationError("Invalid wallet address", { field: "walletAddress" });
+  if (EVM_ADDRESS_PATTERN.test(clean)) {
+    return clean.toLowerCase();
   }
-  return clean;
+  if (STELLAR_ADDRESS_PATTERN.test(clean)) {
+    try {
+      Address.fromString(clean.toUpperCase());
+      return clean.toLowerCase();
+    } catch {
+      throw new ValidationError("Invalid wallet address", { field: "walletAddress" });
+    }
+  }
+  throw new ValidationError("Invalid wallet address", { field: "walletAddress" });
 }
 
 export function normalizeCurrencyCode(currency) {
@@ -91,10 +124,10 @@ export function validateProfilePayload(body) {
     institution: sanitizeString(body?.institution, { maxLength: 160 }) || null,
     country: sanitizeString(body?.country, { maxLength: 80 }) || null,
     bio: sanitizeString(body?.bio, { maxLength: 1000 }) || null,
-    avatarUrl: sanitizeString(body?.avatarUrl, { maxLength: 2048 }) || null,
-    twitterUrl: sanitizeString(body?.twitterUrl, { maxLength: 256 }) || null,
-    githubUrl: sanitizeString(body?.githubUrl, { maxLength: 256 }) || null,
-    websiteUrl: sanitizeString(body?.websiteUrl, { maxLength: 256 }) || null,
+    avatarUrl: normalizeImageField(body?.avatarUrl, "avatarUrl"),
+    ...Object.fromEntries(Object.entries(PROFILE_LINK_RULES).map(([field, rules]) => [
+      field, normalizeUrlField(body?.[field], field, rules),
+    ])),
     walletAddress,
     walletAddressLower: walletAddress ? walletAddress.toLowerCase() : null,
   };
@@ -183,8 +216,8 @@ export function validateMaterialPayload(body) {
     price,
     usageRights: sanitizeString(body?.usageRights, { maxLength: 1000 }),
     visibility,
-    coverImageUrl: sanitizeString(body?.coverImageUrl, { maxLength: 2048 }) || null,
-    thumbnailUrl: sanitizeString(body?.thumbnailUrl, { maxLength: 2048 }) || null,
+    coverImageUrl: normalizeImageField(body?.coverImageUrl, "coverImageUrl"),
+    thumbnailUrl: normalizeImageField(body?.thumbnailUrl, "thumbnailUrl"),
     tokenId: sanitizeString(body?.tokenId, { maxLength: 80 }) || null,
     txHash: sanitizeString(body?.txHash, { maxLength: 100 }) || null,
     category,
@@ -241,7 +274,7 @@ export function validateMaterialUpdatePayload(body) {
   }
 
   if (body.thumbnailUrl !== undefined) {
-    allowed.thumbnailUrl = sanitizeString(body.thumbnailUrl, { maxLength: 2048 }) || null;
+    allowed.thumbnailUrl = normalizeImageField(body.thumbnailUrl, "thumbnailUrl");
   }
 
   if (body.category !== undefined) {

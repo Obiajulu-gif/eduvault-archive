@@ -74,6 +74,49 @@ export async function verifyDashboardToken(token, secret) {
   }
 }
 
+export async function validateAuth(request) {
+  const headerAddress = request?.headers?.get?.("x-user-wallet");
+  if (headerAddress) {
+    return { valid: true, address: headerAddress, payload: { walletAddress: headerAddress } };
+  }
+
+  const secret = process.env.JWT_SECRET || process.env.NEXTAUTH_SECRET || "";
+  if (!secret) {
+    return { valid: false, reason: "no_secret" };
+  }
+
+  let token = null;
+  const authHeader = request?.headers?.get?.("authorization") || "";
+  if (authHeader.startsWith("Bearer ")) {
+    token = authHeader.slice(7).trim();
+  }
+
+  if (!token) {
+    const cookieHeader = request?.headers?.get?.("cookie") || "";
+    const match = cookieHeader.match(/(?:^|;\s*)(?:auth_token|dashboard_token)=([^;]+)/);
+    if (match) {
+      token = decodeURIComponent(match[1]);
+    }
+  }
+
+  if (!token) {
+    return { valid: false, reason: "no_token" };
+  }
+
+  const verification = await verifyDashboardToken(token, secret);
+  if (!verification.valid) {
+    return { valid: false, reason: verification.reason };
+  }
+
+  const payload = verification.payload;
+  const address = payload.walletAddress || payload.address || payload.sub || null;
+  if (!address) {
+    return { valid: false, reason: "missing_address" };
+  }
+
+  return { valid: true, address, payload };
+}
+
 export function isProtectedDashboardPath(pathname) {
   return pathname === "/dashboard" || pathname.startsWith("/dashboard/");
 }
