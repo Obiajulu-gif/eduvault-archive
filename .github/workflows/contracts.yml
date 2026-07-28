@@ -18,6 +18,8 @@ on:
       - "package.json"
       - "package-lock.json"
       - ".github/workflows/contracts.yml"
+  schedule:
+    - cron: '0 0 * * *'
 
 jobs:
   soroban:
@@ -156,3 +158,44 @@ jobs:
         if: steps.detect_solidity.outputs.present == 'true' && steps.detect_toolchains.outputs.foundry == 'false' && steps.detect_toolchains.outputs.hardhat == 'false'
         shell: bash
         run: echo "No Solidity test runner is configured in this repository yet. Compilation, formatting, and lint checks still ran."
+
+  soroban-fuzz:
+    name: Soroban Stateful Fuzzing
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - name: Run Fuzzer (PR mode)
+        if: github.event_name != 'schedule'
+        working-directory: soroban
+        run: cargo test --workspace
+        env:
+          PROPTEST_CASES: 256
+      - name: Run Fuzzer (Nightly Deep mode)
+        if: github.event_name == 'schedule'
+        working-directory: soroban
+        run: cargo test --workspace
+        env:
+          PROPTEST_CASES: 10000
+
+  soroban-coverage:
+    name: Soroban Coverage
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
+      - name: Generate code coverage
+        working-directory: soroban
+        run: cargo llvm-cov --workspace --lcov --output-path lcov.info
+      - name: Upload coverage
+        uses: codecov/codecov-action@v4
+        with:
+          file: soroban/lcov.info

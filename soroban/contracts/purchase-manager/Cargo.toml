@@ -13,5 +13,9 @@ doctest = false
 soroban-sdk = { workspace = true }
 shared-interface = { workspace = true }
 
+[features]
+seeded-defects = []
+
 [dev-dependencies]
 soroban-sdk = { workspace = true, features = ["testutils"] }
+proptest = "1.4.0"

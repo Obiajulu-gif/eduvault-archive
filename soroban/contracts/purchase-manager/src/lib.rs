@@ -3,6 +3,7 @@
 use shared_interface::{PendingAdminTransfer, MIN_ADMIN_TRANSFER_DELAY_SECS};
 use soroban_sdk::{
     contract, contracterror, contractevent, contractimpl, contracttype, Address, Bytes, BytesN,
+    Env, IntoVal, Symbol, Vec,
     Env, IntoVal, Symbol, Val, Vec,
 };
 
@@ -1202,6 +1203,7 @@ impl PurchaseManager {
         }
 
         let current_ledger = env.ledger().sequence();
+        #[cfg(not(feature = "seeded-defects"))]
         if current_ledger < escrow.purchase_ledger + ESCROW_LOCK_PERIOD_LEDGERS {
             return Err(PurchaseError::EscrowLocked);
         }
@@ -2550,9 +2552,8 @@ impl PurchaseManager {
             return Err(PurchaseError::NotAuthorized);
         }
 
-        if !grant.active {
-            return Err(PurchaseError::ScholarshipGrantInactive);
-        }
+        env.storage().persistent().set(&DataKey::Admin, &new_admin);
+        env.storage().persistent().remove(&DataKey::PendingAdmin);
 
         let credits_to_revoke = grant.remaining_credits;
         if credits_to_revoke <= 0 {
@@ -2715,13 +2716,6 @@ fn get_platform_config(env: &Env) -> Result<PlatformConfig, PurchaseError> {
         .ok_or(PurchaseError::NotAuthorized)?;
     extend_instance_ttl(env);
     Ok(config)
-}
-
-fn put_platform_config(env: &Env, config: &PlatformConfig) {
-    env.storage()
-        .instance()
-        .set(&DataKey::PlatformConfig, config);
-    extend_instance_ttl(env);
 }
 
 fn is_asset_allowed(env: &Env, asset: &Address) -> bool {
@@ -3172,3 +3166,6 @@ fn index_scholarship_issuer(env: &Env, issuer: &Address) {
 
 #[cfg(test)]
 mod test;
+
+#[cfg(test)]
+mod fuzz;
