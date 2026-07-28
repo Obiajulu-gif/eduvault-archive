@@ -9,6 +9,7 @@ import {
   FaSave,
 } from "react-icons/fa";
 import { useUpdateProfile } from "@/hooks/api/useProfile";
+import CoverPhotoUpload from "@/components/CoverPhotoUpload";
 
 function validate(form) {
   const errors = {};
@@ -46,6 +47,7 @@ export default function CreatorProfileSettings({ initialUser }) {
   const [success, setSuccess] = useState(null);
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setForm({
       displayName: initialUser?.fullName || "",
       bio: initialUser?.bio || "",
@@ -126,6 +128,11 @@ export default function CreatorProfileSettings({ initialUser }) {
       ) : null}
 
       <form onSubmit={onSubmit} className="space-y-6" noValidate>
+        <CoverPhotoUpload
+          currentCoverUrl={initialUser?.coverPhoto || initialUser?.coverUrl}
+          onCoverChange={(url) => setForm((curr) => ({ ...curr, coverPhoto: url }))}
+        />
+
         <div className="grid gap-5 md:grid-cols-2">
           <label className="block">
             <span className="mb-2 block text-sm font-medium text-slate-700">

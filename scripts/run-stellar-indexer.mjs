@@ -1,6 +1,7 @@
 import { getDb } from "../src/lib/mongodb.js";
 import { createJsonRpcEventSource, runIndexerBatch } from "../src/lib/indexer/stellarIndexer.js";
 import { runRecovery } from "../src/lib/indexer/recovery.js";
+import { getLedgerBySequence } from "../src/lib/stellar/horizonClient.js";
 
 const rpcUrl = process.env.NEXT_PUBLIC_STELLAR_RPC_URL;
 const contractIds = [
@@ -34,6 +35,8 @@ if (runMode === 'recover') {
   const result = await runIndexerBatch({
     db,
     eventSource: createJsonRpcEventSource({ rpcUrl, contractId }),
+    // Enables ledger-hash-based fork detection and checkpointing (#469).
+    getLedgerHash: getLedgerBySequence,
   });
 
   console.log(JSON.stringify({ event: "stellar_indexer_batch_complete", ...result }));

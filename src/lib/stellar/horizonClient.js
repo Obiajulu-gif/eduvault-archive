@@ -127,11 +127,61 @@ export async function fetchFeeStats() {
 }
 
 /**
+ * Resolve a transaction hash to its on-chain confirmation status by querying
+ * Horizon with failover support. Used by the asynchronous payment
+ * reconciliation job (issue #418) to grant access once a pending payment lands.
+ *
+ * @param {string} hash - Stellar transaction hash.
+ * @returns {Promise<'confirmed'|'failed'|'pending'|'not_found'>}
+ *   - 'confirmed'  transaction is in the ledger and succeeded
+ *   - 'failed'     transaction is in the ledger but did not succeed
+ *   - 'pending'    not yet visible on Horizon (still awaiting inclusion)
+ *   - 'not_found'  no hash supplied
+ */
+export async function getTransactionStatus(hash) {
+  if (!hash) return 'not_found';
+
+  try {
+    const tx = await withFailover((server) => server.transactions().transaction(hash).call());
+    return tx?.successful ? 'confirmed' : 'failed';
+  } catch (err) {
+    const status = err?.response?.status ?? err?.status;
+    // Horizon returns 404 until the transaction is included in a ledger.
+    // Treat that as "still pending" so the next polling run re-checks it.
+    if (status === 404) return 'pending';
+    throw err;
+  }
+}
+
+/**
  * Return the list of all configured Horizon endpoints (primary + fallbacks)
  * for diagnostics / health checks.
  */
 export function getConfiguredEndpoints() {
   return [...ALL_ENDPOINTS];
+}
+
+/**
+ * Fetch a ledger's canonical hash by sequence number, for reorg detection
+ * (#469). Soroban RPC's `getEvents` does not return ledger hashes, only
+ * sequence numbers, so the indexer supplements it with this Horizon lookup
+ * whenever it needs to confirm a previously-checkpointed ledger hasn't been
+ * replaced by a chain reorganization.
+ *
+ * @param {number} sequence
+ * @returns {Promise<{ sequence: number, hash: string } | null>} null if the
+ *   ledger is not found (e.g. already outside Horizon's retention window).
+ */
+export async function getLedgerBySequence(sequence) {
+  try {
+    return await withFailover(async (server) => {
+      const ledger = await server.ledgers().ledger(sequence).call();
+      return { sequence: ledger.sequence, hash: ledger.hash };
+    });
+  } catch (error) {
+    if (error?.response?.status === 404) return null;
+    throw error;
+  }
 }
 
 /**
@@ -200,8 +250,45 @@ export function calculateOptimalFees(feeStats) {
 export async function getDynamicBaseFee(tier = 'medium') {
   const feeStats = await getFeeStats();
   const optimalFees = calculateOptimalFees(feeStats);
-  
+
   return optimalFees[tier] || optimalFees.medium;
+}
+
+/**
+ * Measure RPC node latency for Horizon server endpoints.
+ * @param {string} [endpointUrl]
+ * @returns {Promise<{ url: string, latencyMs: number | null, isOnline: boolean, status: 'green'|'yellow'|'red' }>}
+ */
+export async function measureNodeLatency(endpointUrl = PRIMARY_URL) {
+  const start = Date.now();
+  try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 5000);
+    const response = await fetch(`${endpointUrl.replace(/\/$/, '')}/fee_stats`, {
+      method: 'GET',
+      signal: controller.signal,
+      headers: { 'Accept': 'application/json' },
+    });
+    clearTimeout(timeoutId);
+    
+    if (!response.ok) {
+      return { url: endpointUrl, latencyMs: null, isOnline: false, status: 'red' };
+    }
+    
+    const latencyMs = Date.now() - start;
+    let status = 'green';
+    if (latencyMs >= 800) {
+      status = 'red';
+    } else if (latencyMs >= 300) {
+      status = 'yellow';
+    }
+
+    return { url: endpointUrl, latencyMs, isOnline: true, status };
+  } catch {
+    return { url: endpointUrl, latencyMs: null, isOnline: false, status: 'red' };
+  }
+}
+
 const KNOWN_USDC_ISSUERS = {
   testnet: 'GBBD47IF6LWK7P7MDEVSCWRZDPOVPOFWLYERWFBN4JSE3OUQTISLV5EX',
   mainnet: 'GA5ZSEJYB37JDD5G3LYVYF77RD7QFGHSXPJNKXJFUMIVYQ33HE6IGM4Y',
@@ -217,6 +304,12 @@ const KNOWN_USDC_ISSUERS = {
  * @returns {Promise<{ hasTrustline: boolean, balance?: string, issuer?: string }>}
  */
 export async function checkBuyerTrustline(publicKey, assetCode, issuerAddress) {
+  if (assetCode === 'XLM') {
+    const account = await loadAccount(publicKey);
+    const nativeBalance = account.balances.find((b) => b.asset_type === 'native');
+    return { hasTrustline: true, balance: nativeBalance?.balance ?? '0', issuer: null };
+  }
+
   const issuer = issuerAddress || process.env.NEXT_PUBLIC_USDC_ISSUER
     || KNOWN_USDC_ISSUERS[isMainnet ? 'mainnet' : 'testnet'];
 
@@ -248,4 +341,63 @@ export async function checkBuyerTrustline(publicKey, assetCode, issuerAddress) {
   }
 
   return { hasTrustline: true, balance: trustline.balance, issuer };
+}
+
+// ---------------------------------------------------------------------------
+// Node latency measurement (issue #355)
+// ---------------------------------------------------------------------------
+
+export const LATENCY_THRESHOLDS = { green: 300, yellow: 800 };
+
+/**
+ * Classify a measured latency into a traffic-light status.
+ *
+ * @param {number|null} latencyMs - measured latency, or null when the
+ *   request failed or timed out.
+ * @returns {'green'|'yellow'|'red'}
+ *   green  < 300ms, yellow 300–800ms, red > 800ms or unreachable.
+ */
+export function classifyLatency(latencyMs) {
+  if (latencyMs === null || !Number.isFinite(latencyMs)) return 'red';
+  if (latencyMs < LATENCY_THRESHOLDS.green) return 'green';
+  if (latencyMs <= LATENCY_THRESHOLDS.yellow) return 'yellow';
+  return 'red';
+}
+
+/**
+ * Measure round-trip latency to a Horizon node with a single lightweight
+ * request to its root document. Returns null latency when the node is
+ * unreachable or slower than `timeoutMs`, so callers can render a
+ * disconnected state instead of hanging.
+ *
+ * @param {{ url?: string, timeoutMs?: number, fetchImpl?: typeof fetch }} [opts]
+ * @returns {Promise<{ url: string, latencyMs: number|null, status: 'green'|'yellow'|'red' }>}
+ */
+export async function measureHorizonLatency({
+  url = PRIMARY_URL,
+  timeoutMs = 5000,
+  fetchImpl = typeof fetch !== 'undefined' ? fetch : undefined,
+} = {}) {
+  if (!fetchImpl) return { url, latencyMs: null, status: 'red' };
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const startedAt = Date.now();
+
+  try {
+    const res = await fetchImpl(url, {
+      method: 'GET',
+      cache: 'no-store',
+      signal: controller.signal,
+    });
+    if (!res.ok) {
+      return { url, latencyMs: null, status: 'red' };
+    }
+    const latencyMs = Date.now() - startedAt;
+    return { url, latencyMs, status: classifyLatency(latencyMs) };
+  } catch {
+    return { url, latencyMs: null, status: 'red' };
+  } finally {
+    clearTimeout(timer);
+  }
 }

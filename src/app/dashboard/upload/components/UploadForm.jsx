@@ -31,6 +31,7 @@ export default function UploadForm() {
 
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
+  const [category, setCategory] = useState("");
   const [price, setPrice] = useState("");
   const [usageRights, setUsageRights] = useState(
     "Standard License (download only)",
@@ -221,6 +222,7 @@ export default function UploadForm() {
       await createMaterialMutation.mutateAsync({
         title,
         description,
+        category: category || undefined,
         price,
         usageRights,
         visibility,
@@ -241,6 +243,7 @@ export default function UploadForm() {
       // Reset form
       setTitle("");
       setDescription("");
+      setCategory("");
       setPrice("");
       setLevel("");
       setDocFile(null);
@@ -293,8 +296,9 @@ export default function UploadForm() {
       </p>
 
       <div className="mb-5">
-        <label className="block text-sm font-medium mb-2">Document Title</label>
+        <label htmlFor="material-title" className="block text-sm font-medium mb-2">Document Title</label>
         <input
+          id="material-title"
           type="text"
           value={title}
           onChange={(e) => setTitle(e.target.value)}
@@ -312,10 +316,11 @@ export default function UploadForm() {
       </div>
 
       <div className="mb-5">
-        <label className="block text-sm font-medium mb-2">
+        <label htmlFor="material-description" className="block text-sm font-medium mb-2">
           Short Description
         </label>
         <textarea
+          id="material-description"
           value={description}
           onChange={(e) => setDescription(e.target.value)}
           placeholder="Comprehensive lecture notes covering key development theories and examples."
@@ -469,10 +474,28 @@ export default function UploadForm() {
 
       <div className="grid sm:grid-cols-3 gap-4 mb-5">
         <div>
-          <label className="block text-sm font-medium mb-2">
+          <label htmlFor="material-category" className="block text-sm font-medium mb-2">Category</label>
+          <select
+            id="material-category"
+            value={category}
+            onChange={(e) => setCategory(e.target.value)}
+            className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:ring-2 focus:ring-blue-100 focus:border-blue-500"
+          >
+            <option value="">Select a category</option>
+            <option value="STEM">STEM</option>
+            <option value="Business">Business</option>
+            <option value="Law">Law</option>
+            <option value="Arts">Arts</option>
+            <option value="Humanities">Humanities</option>
+            <option value="Professional Development">Professional Development</option>
+          </select>
+        </div>
+        <div>
+          <label htmlFor="material-price" className="block text-sm font-medium mb-2">
             Set Your Price (optional)
           </label>
           <input
+            id="material-price"
             type="number"
             value={price}
             onChange={(e) => setPrice(e.target.value)}
@@ -489,8 +512,9 @@ export default function UploadForm() {
           )}
         </div>
         <div>
-          <label className="block text-sm font-medium mb-2">Usage Rights</label>
+          <label htmlFor="material-usage-rights" className="block text-sm font-medium mb-2">Usage Rights</label>
           <select
+            id="material-usage-rights"
             value={usageRights}
             onChange={(e) => setUsageRights(e.target.value)}
             className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:ring-2 focus:ring-blue-100 focus:border-blue-500"
@@ -501,8 +525,9 @@ export default function UploadForm() {
           </select>
         </div>
         <div>
-          <label className="block text-sm font-medium mb-2">Level</label>
+          <label htmlFor="material-level" className="block text-sm font-medium mb-2">Level</label>
           <select
+            id="material-level"
             value={level}
             onChange={(e) => setLevel(e.target.value)}
             className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:ring-2 focus:ring-blue-100 focus:border-blue-500"

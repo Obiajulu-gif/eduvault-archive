@@ -2,7 +2,7 @@ import { apiClient } from '@/lib/api/apiClient';
 
 export const profileService = {
   getProfile: async (address) => {
-    return apiClient(`/api/profile?address=${address}`);
+    return apiClient(`/api/profile?address=${encodeURIComponent(address)}`);
   },
 
   createProfile: async (profileData) => {
@@ -14,7 +14,8 @@ export const profileService = {
   },
 
   getTopCreators: async () => {
-    return apiClient('/api/creators/top');
+    const data = await apiClient('/api/creators/top');
+    return data?.creators || [];
   },
 
   getDashboardStats: async () => {

@@ -1,13 +1,14 @@
 import { apiClient } from '@/lib/api/apiClient';
+import { buildQueryParams } from '@/lib/api/queryParams';
 
 export const materialService = {
   getMarketplaceMaterials: async (params = {}) => {
-    const searchParams = new URLSearchParams(params);
+    const searchParams = buildQueryParams(params);
     return apiClient(`/api/market-materials?${searchParams.toString()}`);
   },
 
   getMaterialDetail: async (id) => {
-    return apiClient(`/api/market-materials?id=${id}`);
+    return apiClient(`/api/market-materials?id=${encodeURIComponent(id)}`);
   },
 
   getMaterialFeedback: async (id) => {
@@ -60,7 +61,7 @@ export const materialService = {
   },
 
   getTrendingMaterials: async (params = {}) => {
-    const searchParams = new URLSearchParams({ ...params, sort: 'trending' });
+    const searchParams = buildQueryParams({ ...params, sort: 'trending' });
     return apiClient(`/api/market-materials?${searchParams.toString()}`);
   },
 };

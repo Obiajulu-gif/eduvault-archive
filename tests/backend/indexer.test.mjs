@@ -72,7 +72,7 @@ test("runIndexerBatch stores cursor progress", async () => {
     },
   });
 
-  assert.deepEqual(result, { applied: 0, skipped: 0, nextCursor: "cursor-2" });
+  assert.deepEqual(result, { applied: 0, skipped: 0, nextCursor: "cursor-2", hadFailure: false });
   assert.equal((await db.collection("sync_state").findOne({ _id: "stellar:events" })).cursor, "cursor-2");
 });
 

@@ -11,9 +11,6 @@ export default function PayoutSplits({ onChange, initialSplits = [] }) {
   );
   const [errors, setErrors] = useState({});
 
-  useEffect(() => {
-    validateSplits();
-  }, [splits]);
 
   const validateWalletAddress = (address) => {
     // Stellar public key validation (starts with G, 56 characters)
@@ -64,6 +61,10 @@ export default function PayoutSplits({ onChange, initialSplits = [] }) {
 
     return isValid;
   };
+  useEffect(() => {
+    validateSplits();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [splits]);
 
   const handleAddSplit = () => {
     const currentTotal = splits.reduce(

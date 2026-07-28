@@ -15,14 +15,14 @@
  */
 
 const BADGE_STYLES = {
-  Free: "bg-emerald-50 text-emerald-700 border border-emerald-200",
-  New: "bg-blue-50 text-blue-700 border border-blue-200",
-  Verified: "bg-indigo-50 text-indigo-700 border border-indigo-200",
-  "Top Rated": "bg-amber-50 text-amber-700 border border-amber-200",
-  Popular: "bg-purple-50 text-purple-700 border border-purple-200",
-  Draft: "bg-gray-100 text-gray-600 border border-gray-200",
-  Unlisted: "bg-orange-50 text-orange-700 border border-orange-200",
-  Published: "bg-green-50 text-green-700 border border-green-200",
+  Free: "bg-emerald-50 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800",
+  New: "bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-800",
+  Verified: "bg-indigo-50 dark:bg-indigo-900/30 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800",
+  "Top Rated": "bg-amber-50 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-800",
+  Popular: "bg-purple-50 dark:bg-purple-900/30 text-purple-700 dark:text-purple-300 border border-purple-200 dark:border-purple-800",
+  Draft: "bg-gray-100 dark:bg-surface-muted text-gray-600 dark:text-muted-foreground border border-gray-200 dark:border-border-strong",
+  Unlisted: "bg-orange-50 dark:bg-orange-900/30 text-orange-700 dark:text-orange-300 border border-orange-200 dark:border-orange-800",
+  Published: "bg-green-50 dark:bg-green-900/30 text-green-700 dark:text-green-300 border border-green-200 dark:border-green-800",
 };
 
 const BADGE_TOOLTIPS = {
@@ -79,7 +79,7 @@ export function deriveBadges(material) {
  * Renders a single badge pill with an optional tooltip.
  */
 export function StatusBadge({ label, className = "" }) {
-  const base = BADGE_STYLES[label] ?? "bg-gray-100 text-gray-600 border border-gray-200";
+  const base = BADGE_STYLES[label] ?? "bg-gray-100 dark:bg-surface-muted text-gray-600 dark:text-muted-foreground border border-gray-200 dark:border-border-strong";
   const tooltip = BADGE_TOOLTIPS[label];
   return (
     <span
@@ -99,7 +99,7 @@ export function CreatorBadge({ creator, className = "" }) {
   if (!creator) return null;
   return (
     <span
-      className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold leading-tight bg-slate-50 text-slate-600 border border-slate-200 cursor-default ${className}`}
+      className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold leading-tight bg-slate-50 dark:bg-slate-800/50 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700 cursor-default ${className}`}
       title={`Created by ${creator}`}
       aria-label={`Creator: ${creator}`}
     >
@@ -120,7 +120,7 @@ export function UpdatedAtBadge({ date, className = "" }) {
   });
   return (
     <span
-      className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold leading-tight bg-gray-50 text-gray-500 border border-gray-200 cursor-default ${className}`}
+      className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold leading-tight bg-gray-50 dark:bg-surface-muted text-gray-500 dark:text-muted-foreground border border-gray-200 dark:border-border-strong cursor-default ${className}`}
       title={`Last updated: ${formatted}`}
       aria-label={`Last updated: ${formatted}`}
     >

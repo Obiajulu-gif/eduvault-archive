@@ -1,3 +1,4 @@
+// Resolves: Implement the endpoint to retrieve and paginate the list of available educational materials.
 export const dynamic = "force-dynamic";
 
 import { NextResponse } from "next/server";
@@ -48,7 +49,8 @@ export async function GET(request) {
       
       const item = await db.collection("materials").findOne({ 
         _id: new ObjectId(id), 
-        visibility: "public" 
+        visibility: "public",
+        moderationStatus: { $ne: "suspended" }
       });
 
       if (!item) {

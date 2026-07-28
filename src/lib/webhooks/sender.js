@@ -91,6 +91,8 @@ export async function sendWebhookWithRetry(url, payload, retries = 3) {
   return false;
 }
 
+import { enqueueSideEffect } from '@/lib/backend/outbox';
+
 export async function broadcastPurchaseEvent(materialId, purchaseData) {
   try {
     const db = await getDb();
@@ -124,13 +126,20 @@ export async function broadcastPurchaseEvent(materialId, purchaseData) {
       }
     };
 
-    // Send to all registered webhooks for this creator
-    const promises = creator.webhookUrls.map(url => sendWebhookWithRetry(url, payload));
-    
-    // We don't await this so it happens in the background
-    Promise.allSettled(promises);
+    await enqueueSideEffect({
+      sourceAggregate: 'material',
+      sourceId: String(material._id || materialId),
+      intent: {
+        type: 'webhook',
+        channel: 'purchase.completed',
+        payload: {
+          urls: creator.webhookUrls,
+          payload,
+        },
+      },
+    });
 
   } catch (error) {
-    logger.error(`Failed to broadcast purchase event for material ${materialId}: ${error.message}`);
+    logger.error(`Failed to enqueue purchase webhook for material ${materialId}: ${error.message}`);
   }
 }

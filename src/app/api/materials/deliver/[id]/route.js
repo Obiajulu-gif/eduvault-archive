@@ -6,7 +6,7 @@ import { ObjectId } from "mongodb";
 import { getUserFromCookie } from "@/lib/api/auth";
 import { withApiHardening } from "@/lib/api/hardening";
 import { auditLog } from "@/lib/api/audit";
-import { verifyEntitlement } from "@/lib/entitlement";
+import { authorizeMaterialAccess } from "@/lib/entitlement";
 import { getIpfsUrl } from "@/lib/config/chain";
 import { normalizeBuyerAddress } from "@/lib/purchases/access";
 
@@ -51,42 +51,25 @@ export async function GET(req, { params }) {
         return NextResponse.json({ error: "Material not found" }, { status: 404 });
       }
 
-      // ── 4. Verify access ───────────────────────────────────────────────
-      // Check ownership first (fast path)
-      const isOwner =
-        normalizeBuyerAddress(material.userAddress) === userAddress ||
-        normalizeBuyerAddress(material.ownerAddress) === userAddress;
+      // ── 4. Verify access via the single entitlement policy boundary ─────
+      const decision = await authorizeMaterialAccess({ db, material, buyerAddress: userAddress });
+      const accessSource = decision.source;
 
-      let hasAccess = isOwner;
-      let accessSource = "owner";
-
-      if (!hasAccess) {
-        // Free public materials
-        const price = Number(material.price || 0);
-        if (price <= 0 && material.visibility === "public") {
-          hasAccess = true;
-          accessSource = "free-public";
-        } else {
-          // Entitlement verification (cache → DB → chain)
-          const entitlement = await verifyEntitlement(id, userAddress);
-          hasAccess = entitlement.hasAccess;
-          accessSource = entitlement.source;
-        }
-      }
-
-      if (!hasAccess) {
+      if (!decision.allowed) {
         auditLog({
-          event: "deliver_access_denied",
+          event: decision.state === "unavailable" ? "deliver_unavailable" : "deliver_access_denied",
           route: "material-deliver",
           method: "GET",
-          status: 403,
+          status: decision.httpStatus,
           actor: user.sub,
           walletAddress: userAddress,
           materialId: id,
         });
         return NextResponse.json(
-          { error: "Access denied. You do not have permission to access this material." },
-          { status: 403 }
+          decision.state === "unavailable"
+            ? { error: "Could not confirm your entitlement right now. Please try again shortly." }
+            : { error: "Access denied. You do not have permission to access this material." },
+          { status: decision.httpStatus }
         );
       }
 

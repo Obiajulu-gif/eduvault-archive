@@ -16,6 +16,7 @@ import {
 	FaWallet,
 	FaRocket,
 	FaGraduationCap,
+	FaDownload,
 } from "react-icons/fa";
 
 export default function Sidebar() {
@@ -31,6 +32,7 @@ export default function Sidebar() {
 		{ icon: <FaUpload />, label: "Upload Material", href: "/dashboard/upload" },
 		{ icon: <FaFileUpload />, label: "Bulk Upload", href: "/dashboard/bulk-upload" },
 		{ icon: <FaUser />, label: "My Materials", href: "/dashboard/my-materials" },
+		{ icon: <FaDownload />, label: "Download Logs", href: "/dashboard/analytics/downloads" },
 	];
 
 	const financeItems = [

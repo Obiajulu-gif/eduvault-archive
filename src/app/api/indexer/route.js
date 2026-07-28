@@ -6,7 +6,9 @@ import { getDb } from "@/lib/mongodb";
 import {
   runIndexerBatch,
   createJsonRpcEventSource,
+  getIndexerHealth,
 } from "@/lib/indexer/stellarIndexer";
+import { getLedgerBySequence } from "@/lib/stellar/horizonClient";
 import {
   PURCHASE_MANAGER_CONTRACT_ID,
   MATERIAL_REGISTRY_CONTRACT_ID,
@@ -60,6 +62,8 @@ export async function POST(request) {
       eventSource,
       source: "stellar",
       limit: BATCH_LIMIT,
+      // Enables ledger-hash-based fork detection and checkpointing (#469).
+      getLedgerHash: getLedgerBySequence,
     });
 
     console.log(
@@ -92,11 +96,19 @@ export async function GET(request) {
       .collection("sync_state")
       .findOne({ _id: "stellar:events" });
 
+    // `currentLedger` (for the `lag` metric) is intentionally omitted here:
+    // there is no "latest ledger" lookup wired up yet, only lookup-by-
+    // sequence (`getLedgerBySequence`, used for fork detection). Wire one up
+    // via Horizon's ledgers-desc-order-limit-1 query if/when lag needs to be
+    // measured precisely; `getIndexerHealth` degrades to `lag: null` without it.
+    const health = await getIndexerHealth(db, { source: "stellar" });
+
     return NextResponse.json({
       synced: !!state,
       cursor: state?.cursor ?? null,
       lastLedger: state?.lastLedger ?? null,
       updatedAt: state?.updatedAt ?? null,
+      health,
     });
   } catch (err) {
     return NextResponse.json(

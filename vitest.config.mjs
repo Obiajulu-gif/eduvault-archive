@@ -17,7 +17,10 @@ export default defineConfig({
     include: [
       "src/**/*.{test,spec}.{js,jsx,ts,tsx}",
       "test/integration/**/*.{test,spec}.{js,jsx,ts,tsx}",
+      "tests/components/**/*.{test,spec}.{js,jsx,ts,tsx}",
     ],
-    exclude: ["tests/**", "archive/**", "contracts/**", "soroban/**", "node_modules/**"],
+    // tests/backend runs under `node --test` and tests/legacy-evm under hardhat —
+    // both use test runner globals incompatible with Vitest, so they stay excluded.
+    exclude: ["tests/backend/**", "tests/legacy-evm/**", "archive/**", "contracts/**", "soroban/**", "node_modules/**"],
   },
 });

@@ -90,35 +90,89 @@ EduVault needs to do four things reliably:
 
 ## 3. Target Stellar-Native Architecture
 
-The canonical Soroban contract boundary and event model are documented in [`docs/soroban-contract-architecture.md`](soroban-contract-architecture.md).
+The canonical Soroban contract boundary and event model are documented in [`docs/soroban-contract-architecture.md`](soroban-contract-architecture.md). The end-to-end purchase and entitlement sequence is documented in [`docs/stellar-purchase-flow.md`](stellar-purchase-flow.md).
+
+### Stellar Network Component Diagram
+
+```mermaid
+flowchart TB
+  subgraph Frontend
+    W[Wallet UI] --> Kit[Stellar Wallets Kit]
+    Kit --> SDK["@stellar/stellar-sdk"]
+  end
+
+  subgraph Backend
+    API[Next.js API Routes]
+    IDX[Indexer Worker]
+  end
+
+  subgraph Soroban["Soroban Contracts"]
+    MR[MaterialRegistry]
+    PM[PurchaseManager]
+  end
+
+  subgraph Stellar["Stellar Network"]
+    RPC[Stellar RPC / Horizon]
+    Events[Event Stream]
+  end
+
+  subgraph Storage
+    IPFS[IPFS / Pinata]
+    DB[(MongoDB)]
+  end
+
+  SDK --> RPC
+  RPC --> MR
+  RPC --> PM
+  MR --> Events
+  PM --> Events
+  Events --> IDX
+  IDX --> DB
+  API --> DB
+  API --> IPFS
+  API --> RPC
+```
+
+### On-chain contracts
+
+- `MaterialRegistry`
+  - stores immutable references to content metadata (`material_id`, `metadata_hash`, `rights_hash`)
+  - binds creator address, accepted-asset quotes, and payout share configuration
+  - emits `material.registered`, `material.sale_terms_updated`, and `material.status_updated` events
+  - source of truth for seller-authored listing state
+- `PurchaseManager`
+  - holds global platform config (treasury, fee, allowed assets, pause flag)
+  - validates material purchasability and asset eligibility
+  - collects buyer payment, routes creator and platform payouts atomically
+  - writes per-buyer entitlement records keyed by `(material_id, buyer)`
+  - emits `purchase.completed` and `payout.distributed` events
+  - source of truth for payment settlement and buyer entitlements
+- optional asset issuance layer
+  - creator or institution-issued Stellar assets for access credits, scholarships, or cohort passes
 
 ### Off-chain components
 
 - `web-app`
-  - creator onboarding
-  - listing management
-  - checkout UI
-  - access verification UI
+  - creator onboarding via Stellar wallet connection (`@creit-tech/stellar-wallets-kit`)
+  - material upload wizard with IPFS pinning
+  - checkout UI that constructs and signs Soroban transactions
+  - entitlement-aware download gating
 - `api`
-  - material ingestion
-  - metadata validation
+  - material ingestion and metadata validation
+  - entitlement verification (cache-first with on-chain fallback)
   - entitlement-aware file delivery
   - email and notification workflows
 - `indexer`
-  - reads contract events from Stellar RPC/Horizon
-  - synchronizes purchases and listing state into MongoDB for fast queries
+  - polls Stellar RPC for normalized Soroban events
+  - writes idempotent `sync_events` entries
+  - maintains `purchases` and `entitlement_cache` derived collections in MongoDB
+  - dead-letter queue with retry support
 
-### On-chain components
+### Wallet integration
 
-- `MaterialRegistry`
-  - stores immutable references to content metadata
-  - binds creator, rights hash, accepted-asset quotes, and payout shares
-- `PurchaseManager`
-  - receives payment
-  - records purchase entitlement
-  - routes creator and platform shares
-- optional asset issuance layer
-  - creator or institution-issued Stellar assets for access credits, scholarships, or cohort passes
+EduVault uses the Stellar Wallets Kit (`@creit-tech/stellar-wallets-kit`) which supports multiple wallets through a unified API: Freighter (browser extension), LOBSTR (mobile), Albedo (web-based), Rabet (browser extension), and Stellar Bifrost (web-based).
+
+The `WalletProvider` at `src/providers/WalletProvider.jsx` manages connection state, balance loading, session persistence, and transaction signing. See [`docs/stellar-wallet-setup.md`](stellar-wallet-setup.md) for user-facing setup instructions.
 
 ## 4. Data Model
 
@@ -152,25 +206,56 @@ The canonical Soroban contract boundary and event model are documented in [`docs
 
 ## 5. Purchase Flow
 
-1. Creator uploads content.
-2. Backend pins files and metadata, then stores catalog metadata.
-3. Creator registers the material on Soroban with price and asset settings.
-4. Buyer initiates checkout.
-5. Wallet signs a Stellar transaction.
-6. `PurchaseManager` records the entitlement and handles payment routing.
-7. Indexer syncs the purchase event.
-8. API verifies entitlement before issuing a download response.
+The full purchase sequence diagram is documented in [`docs/stellar-purchase-flow.md`](stellar-purchase-flow.md). The summary below describes the eight phases:
 
-## 6. Security Considerations
+1. Creator uploads content via the Upload Wizard.
+2. Backend pins files and metadata to IPFS, stores catalog metadata in MongoDB.
+3. Creator registers the material on Soroban via `MaterialRegistry.register_material()`, setting price quotes and payout shares.
+4. Buyer initiates checkout; backend returns current quotes from the on-chain `MaterialRecord`.
+5. Wallet signs a Stellar transaction targeting `PurchaseManager.purchase()`.
+6. `PurchaseManager` validates the material, transfers funds atomically across creator and treasury recipients, and writes an `EntitlementRecord`.
+7. Indexer detects the `purchase.completed` event, creates `purchases` and `entitlement_cache` records in MongoDB.
+8. API verifies entitlement before issuing the download response.
+
+### On-chain data model (Soroban)
+
+The Soroban contracts use the following key structures:
+
+| Contract | Storage Key | Purpose |
+| --- | --- | --- |
+| `MaterialRegistry` | `material(material_id)` | Full `MaterialRecord` including creator, hashes, quotes, payout shares |
+| `MaterialRegistry` | `creator_nonce(address)` | Monotonic nonce for generating unique `material_id` values |
+| `PurchaseManager` | `entitlement((material_id, buyer))` | `EntitlementRecord` — active flag, purchase ID, asset, amount |
+| `PurchaseManager` | `platform_config` | Treasury address, fee in basis points, pause flag |
+| `PurchaseManager` | `allowed_asset(address)` | Global asset allowlist |
+
+## 6. Event Flow
+
+Soroban contracts emit events that the indexer consumes to build derived MongoDB state:
+
+| Event | Emitter | Indexed Into | Purpose |
+| --- | --- | --- | --- |
+| `material.registered` | MaterialRegistry | `materials` | Seed canonical chain linkage for a material |
+| `material.sale_terms_updated` | MaterialRegistry | `materials` | Refresh marketplace price and asset caches |
+| `material.status_updated` | MaterialRegistry | `materials` | Hide archived or paused materials from purchase flows |
+| `purchase.completed` | PurchaseManager | `purchases`, `entitlement_cache` | Record settled purchase and grant download access |
+| `payout.distributed` | PurchaseManager | Creator earnings view | Payout audit trail and treasury reconciliation |
+
+Events are normalized by the indexer into stable shapes and logged idempotently in `sync_events`. Failed event processing is captured in `dead_letter_events` for manual retry.
+
+## 7. Security Considerations
 
 - Keep file bytes off-chain to avoid leaking paid content.
-- Use entitlement checks before download access.
+- Use entitlement checks before download access. Cache-first reads with on-chain fallback.
 - Treat MongoDB as a query cache and application store, not the source of truth for purchase rights.
 - Keep payout logic on-chain where it is auditable.
+- Every state-changing path uses Soroban auth checks for the relevant actor.
+- Asset transfer failures revert the entire purchase. No silent fallback to an alternate asset.
 - Separate issuer and distribution responsibilities if asset issuance is introduced.
 - Never store private keys in the web application.
+- v1 does not support refunds or entitlement revocation.
 
-## 7. Deployment Direction
+## 8. Deployment Direction
 
 ### Current
 
@@ -180,12 +265,23 @@ The canonical Soroban contract boundary and event model are documented in [`docs
 
 ### Planned
 
-- Stellar testnet deployment for Soroban contracts
+- Stellar testnet deployment for `MaterialRegistry` and `PurchaseManager` contracts
 - production RPC/Horizon provider
 - background worker for event indexing and entitlement reconciliation
+- Soroban contract upgrade pattern: admin-gated Wasm hash replacement (see [`docs/soroban-upgrade-pattern.md`](soroban-upgrade-pattern.md))
 
-## 8. Design Principle
+## 9. Design Principle
 
 The chain should secure settlement and rights. The web application should optimize search, onboarding, and delivery. EduVault does not need to put files on-chain to benefit from Stellar.
 
-For the detailed storage model, invariants, accepted-asset rules, and event contract, use [`docs/soroban-contract-architecture.md`](soroban-contract-architecture.md) as the implementation reference.
+## References
+
+| Document | Purpose |
+| --- | --- |
+| [`soroban-contract-architecture.md`](soroban-contract-architecture.md) | Contract boundaries, invariants, storage model, event contract |
+| [`stellar-purchase-flow.md`](stellar-purchase-flow.md) | Detailed checkout and entitlement sequence diagram |
+| [`stellar-integration.md`](stellar-integration.md) | Developer environment setup and integration code patterns |
+| [`stellar-wallet-setup.md`](stellar-wallet-setup.md) | User-facing Stellar wallet installation and connection guide |
+| [`creator-publishing-guide.md`](creator-publishing-guide.md) | Step-by-step tutorial for uploading and listing materials |
+| [`soroban-upgrade-pattern.md`](soroban-upgrade-pattern.md) | Contract upgrade strategy and migration rules |
+| [`purchase-flow-architecture.md`](purchase-flow-architecture.md) | Hybrid on-chain/off-chain purchase boundaries |

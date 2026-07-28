@@ -220,6 +220,29 @@ Response:
 
 - `{ items, page, pageSize, total, totalPages }`.
 
+### `GET /api/creator/payouts`
+
+Aggregates and reports the authenticated creator's earnings from sales, distinct
+from `GET /api/creator/analytics` which covers broader dashboard metrics.
+
+Request:
+
+- `from`, `to`: optional ISO date strings bounding the reporting window (default:
+  trailing 30 days). Rejected with `400` when unparsable, when `from` is after
+  `to`, or when the range exceeds 366 days.
+
+Response:
+
+- `creatorAddress`, `dateRange: { from, to }`.
+- `earnings`: `grossRevenue`, `salesCount` (all-time, completed purchases only),
+  `windowRevenue`, `windowSalesCount` (within `dateRange`), `pendingRevenue`,
+  `pendingCount`, `refundedAmount`, `refundedCount`.
+- `payouts`: `totalPaidOut`, `totalPending`, `lastPayoutAt` derived from the
+  `payouts` collection.
+- `outstandingBalance`: `max(grossRevenue - totalPaidOut, 0)`.
+- `byMaterial`: per-material `{ materialId, title, salesCount, grossRevenue }`,
+  sorted by revenue descending.
+
 ## Schema Change Rules
 
 - Add fields as optional first, then backfill, then make route-level validation stricter.

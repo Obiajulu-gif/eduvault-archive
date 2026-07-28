@@ -10,6 +10,8 @@
 
 // ── Field definitions ────────────────────────────────────────────────────────
 
+import { QUARANTINE_STATES } from '@/lib/publishing/quarantine';
+
 export const PUBLISH_REQUIRED_FIELDS = [
   {
     key: "file",
@@ -22,6 +24,12 @@ export const PUBLISH_REQUIRED_FIELDS = [
     label: "Title",
     description: "A descriptive title helps learners find your material.",
     check: (m) => !!(m.title && String(m.title).trim().length > 0),
+  },
+  {
+    key: "quarantine",
+    label: "Malware scan",
+    description: "The uploaded content must complete malware scanning and be marked clean.",
+    check: (m) => m.quarantineState === QUARANTINE_STATES.CLEAN,
   },
 ];
 

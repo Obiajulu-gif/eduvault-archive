@@ -10,6 +10,8 @@ import {
   normalizeBuyerAddress,
 } from "@/lib/purchases/access";
 import { broadcastPurchaseEvent } from '@/lib/webhooks/sender';
+import { sendReceiptIfEligible } from '@/lib/email';
+
 
 export async function GET(req) {
   try {
@@ -101,6 +103,7 @@ export async function POST(req) {
       const access = await getMaterialAccessStatus(db, materialId, buyerAddress);
 
       if (paymentCompleted) {
+        sendReceiptIfEligible(db, existing._id).catch(err => console.error(err));
         // Fire webhook asynchronously
         broadcastPurchaseEvent(materialId, {
           buyerAddress,
@@ -141,6 +144,8 @@ export async function POST(req) {
         purchaseId: String(result.insertedId),
         transactionHash: transactionHash || null,
       });
+
+      sendReceiptIfEligible(db, result.insertedId).catch(err => console.error(err));
 
       // Fire webhook asynchronously
       broadcastPurchaseEvent(materialId, purchaseRecord);

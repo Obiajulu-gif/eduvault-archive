@@ -20,34 +20,28 @@ export default function UploadPage() {
 								1
 							</span>
 							<p className="text-sm text-gray-700">
-								It’s free to upload. Pay a small gas fee for minting.
-							</p>
+							Connect your wallet and prepare your educational material.
+						</p>
 						</li>
 						<li className="flex items-start gap-3 opacity-50">
 							<span className="flex-shrink-0 w-6 h-6 border border-gray-300 rounded-full flex items-center justify-center text-sm font-semibold">
 								2
 							</span>
-							<p className="text-sm text-gray-700">
-								Review and Confirm Details
-							</p>
+						<p className="text-sm text-gray-700">
+							Add title, description, price, and the right category for discovery.
+						</p>
 						</li>
 						<li className="flex items-start gap-3 opacity-50">
 							<span className="flex-shrink-0 w-6 h-6 border border-gray-300 rounded-full flex items-center justify-center text-sm font-semibold">
 								3
 							</span>
-							<p className="text-sm text-gray-700">Mint NFT via wallet</p>
+						<p className="text-sm text-gray-700">Publish to the EduVault marketplace and share your work.</p>
 						</li>
 						<li className="flex items-start gap-3 opacity-50">
 							<span className="flex-shrink-0 w-6 h-6 border border-gray-300 rounded-full flex items-center justify-center text-sm font-semibold">
 								4
 							</span>
-							<p className="text-sm text-gray-700">Success confirmation</p>
-						</li>
-					</ol>
-
-					{/* Help section */}
-					<div className="mt-10 border-t border-gray-100 pt-6">
-						<h4 className="text-sm font-semibold mb-2">Need Help?</h4>
+						<p className="text-sm text-gray-700">Track your listing and update details from your dashboard.</p>
 						<p className="text-sm text-gray-600 mb-4">
 							Get to know how your campaign can reach a wider audience.
 						</p>

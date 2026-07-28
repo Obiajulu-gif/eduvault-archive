@@ -8,6 +8,7 @@ import {
   validatePublishRequest,
   getPublishingChecklist,
 } from "@/lib/publishing/checklist";
+import { pinMaterialMetadata } from "@/lib/ipfs/metadata";
 
 /**
  * POST /api/materials/[id]/publish
@@ -100,6 +101,23 @@ export async function POST(request, { params }) {
       updatePayload.contractId = contractId;
     }
 
+    let metadataResult = null;
+    try {
+      metadataResult = await pinMaterialMetadata({ ...material, materialId });
+      updatePayload.metadataCid = metadataResult.metadataCid;
+      updatePayload.metadataUrl = metadataResult.metadataUrl;
+    } catch (metadataErr) {
+      auditLog({
+        event: "publish_metadata_pin_failed",
+        route: "material-publish",
+        method: "POST",
+        status: 502,
+        actor: user.sub,
+        materialId,
+        reason: metadataErr.message,
+      });
+    }
+
     await db.collection("materials").updateOne(
       { _id: materialId },
       { $set: updatePayload }
@@ -112,6 +130,7 @@ export async function POST(request, { params }) {
       status: 200,
       actor: user.sub,
       materialId,
+      metadataPinned: Boolean(metadataResult),
     });
 
     return NextResponse.json(
@@ -119,6 +138,7 @@ export async function POST(request, { params }) {
         success: true,
         status: "published",
         checklist: validation.checklist,
+        metadataUrl: metadataResult?.metadataUrl || null,
       },
       { status: 200 }
     );

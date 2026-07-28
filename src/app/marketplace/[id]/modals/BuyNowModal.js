@@ -3,18 +3,22 @@
 import { useEffect, useMemo, useState } from "react";
 import Image from "next/image";
 import { AnimatePresence, motion } from "framer-motion";
-import { FaTimes } from "react-icons/fa";
+import { FaCheckCircle, FaTimes } from "react-icons/fa";
 import { useAccount } from "wagmi";
+import { useWallet } from "@/hooks/useWallet";
 import CheckoutReceiptModal from "../../../../../components/modals/CheckoutReceiptModal";
 import ConnectWalletModal from "./ConnectWalletModal";
 import TransactionStatusPanel from "@/components/transactions/TransactionStatusPanel";
 import { useCreatePurchase, useStartAccessRequest } from "@/hooks/api/usePurchases";
-import { ACCEPTED_ASSET, getExplorerTxUrl } from "@/lib/config/chain";
+import { ACCEPTED_ASSET, NATIVE_ASSET, getExplorerTxUrl } from "@/lib/config/chain";
 import { TransactionStatus } from "@/lib/transactions/transaction";
 import { useTransactionCenter } from "@/providers/TransactionProvider";
 
 const SUPPORTED_ASSETS = [
-  { code: ACCEPTED_ASSET, issuer: null, label: `Stellar ${ACCEPTED_ASSET}` },
+  { code: NATIVE_ASSET, issuer: null, label: "Stellar Lumens (XLM)", requiresTrustline: false },
+  ...(ACCEPTED_ASSET && ACCEPTED_ASSET !== NATIVE_ASSET
+    ? [{ code: ACCEPTED_ASSET, issuer: null, label: `Stellar ${ACCEPTED_ASSET}`, requiresTrustline: true }]
+    : []),
 ];
 
 function useQuote(materialId, asset, price) {
@@ -24,7 +28,7 @@ function useQuote(materialId, asset, price) {
   const [refreshKey, setRefreshKey] = useState(0);
 
   useEffect(() => {
-    if (!materialId || !asset) return undefined;
+    if (!materialId || !asset) return;
 
     const loadingTimer = window.setTimeout(() => {
       setLoading(true);
@@ -75,7 +79,11 @@ export default function BuyNowModal({
   materialCreator,
   onAccessUpdated,
 }) {
-  const { address } = useAccount();
+  const { address: evmAddress } = useAccount();
+  const { state: stellarState } = useWallet();
+  const stellarAddress = stellarState.status === "Connected" ? stellarState.session.address : null;
+  const address = stellarAddress || evmAddress;
+
   const createPurchaseMutation = useCreatePurchase();
   const startAccessRequestMutation = useStartAccessRequest();
   const [showWallet, setShowWallet] = useState(false);
@@ -265,39 +273,46 @@ export default function BuyNowModal({
               initial={{ opacity: 0, scale: 0.92, y: 50 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.92, y: 50 }}
-              className="fixed inset-0 z-50 flex items-center justify-center p-4"
+              className="fixed inset-0 z-50 flex items-end justify-center overflow-y-auto p-0 sm:items-center sm:p-4"
             >
-              <div className="relative w-full max-w-lg rounded-3xl border border-slate-200 bg-white p-6 shadow-2xl">
+              <div className="relative w-full max-w-lg rounded-3xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-6 shadow-2xl">
                 <button
                   type="button"
                   onClick={handleClose}
-                  className="absolute right-4 top-4 rounded-full p-2 text-slate-400 transition hover:bg-slate-100 hover:text-slate-700"
+                  className="absolute right-4 top-4 rounded-full p-2 text-slate-400 transition hover:bg-slate-100 dark:hover:bg-slate-800 hover:text-slate-700 dark:hover:text-slate-200"
                   aria-label="Close checkout"
                 >
                   <FaTimes />
                 </button>
 
                 <div className="mb-6">
-                  <p className="text-xs font-semibold uppercase tracking-[0.24em] text-slate-400">
+                  <p className="text-xs font-semibold uppercase tracking-[0.24em] text-slate-400 dark:text-slate-500">
                     Access request
                   </p>
-                  <h2 className="mt-1 text-2xl font-bold text-slate-900">Complete payment to unlock</h2>
-                  <p className="mt-2 text-sm text-slate-600">
+                  <h2 className="mt-1 text-2xl font-bold text-slate-900 dark:text-slate-50">Complete payment to unlock</h2>
+                  <p className="mt-2 text-sm text-slate-600 dark:text-slate-400">
                     We will create a pending access request first. The material unlocks only after payment is confirmed.
                   </p>
                 </div>
 
+                {address ? (
+                  <div className="mb-4 rounded-2xl border border-slate-100 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/50 px-4 py-3">
+                    <p className="text-xs text-slate-500 dark:text-slate-400">Connected as</p>
+                    <p className="mt-0.5 font-mono text-sm text-slate-900 dark:text-slate-100 break-all">{address}</p>
+                  </div>
+                ) : null}
+
                 {materialTitle ? (
-                  <div className="mb-4 rounded-2xl border border-slate-100 bg-slate-50 px-4 py-3">
-                    <p className="text-sm font-semibold text-slate-900">{materialTitle}</p>
+                  <div className="mb-4 rounded-2xl border border-slate-100 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/50 px-4 py-3">
+                    <p className="text-sm font-semibold text-slate-900 dark:text-slate-100">{materialTitle}</p>
                     {materialCreator ? (
-                      <p className="mt-1 text-xs text-slate-500">by {materialCreator}</p>
+                      <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">by {materialCreator}</p>
                     ) : null}
                   </div>
                 ) : null}
 
                 <div className="mb-4">
-                  <label className="mb-2 block text-xs font-semibold text-slate-600">
+                  <label className="mb-2 block text-xs font-semibold text-slate-600 dark:text-slate-400">
                     EMAIL ADDRESS
                   </label>
                   <input
@@ -305,51 +320,63 @@ export default function BuyNowModal({
                     value={email}
                     onChange={(event) => setEmail(event.target.value)}
                     placeholder="Enter your email"
-                    className="w-full rounded-xl border border-slate-300 px-3 py-2.5 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                    className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 px-3 py-2.5 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100 dark:focus:ring-blue-900/40"
                   />
                 </div>
 
                 <div className="mb-4">
-                  <label className="mb-2 block text-xs font-semibold text-slate-600">
+                  <label className="mb-2 block text-xs font-semibold text-slate-600 dark:text-slate-400">
                     PAYMENT ASSET
                   </label>
-                  <select
-                    value={selectedAsset.code}
-                    onChange={(event) =>
-                      setSelectedAsset(
-                        SUPPORTED_ASSETS.find((assetOption) => assetOption.code === event.target.value) ||
-                          SUPPORTED_ASSETS[0],
-                      )
-                    }
-                    className="w-full rounded-xl border border-slate-300 px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-100"
-                  >
-                    {SUPPORTED_ASSETS.map((assetOption) => (
-                      <option key={assetOption.code} value={assetOption.code}>
-                        {assetOption.label}
-                      </option>
-                    ))}
-                  </select>
+                  <div role="radiogroup" aria-label="Payment asset" className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    {SUPPORTED_ASSETS.map((assetOption) => {
+                      const isSelected = assetOption.code === selectedAsset.code;
+                      return (
+                        <button
+                          key={assetOption.code}
+                          type="button"
+                          role="radio"
+                          aria-checked={isSelected}
+                          onClick={() => setSelectedAsset(assetOption)}
+                          className={`flex items-center gap-2 rounded-xl border px-3 py-2.5 text-left text-sm transition focus-visible:ring-2 focus-visible:ring-blue-500 ${
+                            isSelected
+                              ? "border-blue-500 bg-blue-50 dark:bg-blue-950/40 text-blue-700 dark:text-blue-300"
+                              : "border-slate-300 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800"
+                          }`}
+                        >
+                          <Image src="/images/stellar.png" alt="" width={18} height={18} aria-hidden="true" />
+                          <span className="flex-1 font-medium">{assetOption.label}</span>
+                          {isSelected ? <FaCheckCircle className="text-blue-500" /> : null}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  {selectedAsset.requiresTrustline ? (
+                    <p className="mt-2 text-xs text-amber-600 dark:text-amber-400">
+                      Requires an active {selectedAsset.code} trustline in your wallet before payment can be submitted.
+                    </p>
+                  ) : null}
                 </div>
 
-                <div className="mb-5 flex flex-col gap-3 rounded-2xl border border-slate-100 bg-slate-50 px-4 py-3 text-sm sm:flex-row sm:items-center sm:justify-between">
-                  <span className="text-slate-600">You will pay</span>
+                <div className="mb-5 flex flex-col gap-3 rounded-2xl border border-slate-100 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/50 px-4 py-3 text-sm sm:flex-row sm:items-center sm:justify-between">
+                  <span className="text-slate-600 dark:text-slate-400">You will pay</span>
                   {quoteLoading ? (
-                    <span className="text-slate-400">Loading quote...</span>
+                    <span className="text-slate-400 dark:text-slate-500">Loading quote...</span>
                   ) : quoteError ? (
-                    <span className="text-rose-500">Error loading quote</span>
+                    <span className="text-rose-500 dark:text-rose-400">Error loading quote</span>
                   ) : quote ? (
-                    <div className="flex items-center gap-2 font-semibold text-slate-900">
+                    <div className="flex items-center gap-2 font-semibold text-slate-900 dark:text-slate-100">
                       <Image src="/images/stellar.png" alt={selectedAsset.label} width={20} height={20} />
                       {quote.amount} {quote.asset}
-                      {quote.fee ? <span className="text-xs text-slate-400">+{quote.fee} fee</span> : null}
+                      {quote.fee ? <span className="text-xs text-slate-400 dark:text-slate-500">+{quote.fee} fee</span> : null}
                     </div>
                   ) : (
-                    <span className="text-slate-400">No quote available</span>
+                    <span className="text-slate-400 dark:text-slate-500">No quote available</span>
                   )}
                   <button
                     type="button"
                     onClick={refresh}
-                    className="text-left text-xs font-medium text-blue-600 underline sm:text-right"
+                    className="text-left text-xs font-medium text-blue-600 dark:text-blue-400 underline sm:text-right"
                   >
                     Refresh
                   </button>

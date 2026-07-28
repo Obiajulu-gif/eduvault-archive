@@ -86,7 +86,7 @@ export default function StudentVerificationPage() {
                   <ul className="mt-2 space-y-1 text-left max-w-md mx-auto">
                     <li>• Our team reviews your submitted documents</li>
                     <li>
-                      • You'll receive an email notification with the decision
+                      • You&apos;ll receive an email notification with the decision
                     </li>
                     <li>
                       • Once approved, student pricing will automatically apply

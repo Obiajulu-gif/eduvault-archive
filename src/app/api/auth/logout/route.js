@@ -10,20 +10,26 @@ export async function POST(request) {
     // Even if user isn't found, we'll try to clear the cookie
     const response = NextResponse.json({ success: true });
 
-    // Expire the cookie by setting maxAge to 0
+    // Expire the cookies by setting maxAge to 0
     response.cookies.set('auth_token', '', {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
-      sameSite: 'lax',
+      sameSite: 'strict',
       path: '/',
       maxAge: 0,
     });
 
+    response.cookies.set('refresh_token', '', {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'strict',
+      path: '/api/auth/refresh',
+      maxAge: 0,
+    });
+
     if (user) {
-      // Optional: if there's a refresh tokens DB, we delete it here.
-      // (Assuming `refreshTokens` collection exists based on issue description)
       const db = await getDb();
-      await db.collection('refreshTokens').deleteMany({
+      await db.collection('refresh_tokens').deleteMany({
         userId: String(user._id || user.id || user.walletAddress)
       });
       

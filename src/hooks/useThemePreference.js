@@ -45,6 +45,25 @@ export function useThemePreference() {
 		applyTheme(theme);
 	}, [theme]);
 
+	// Listen for OS-level theme changes and apply them when no explicit
+	// preference is stored by the user.
+	useEffect(() => {
+		const mediaQuery = window.matchMedia("(prefers-color-scheme: dark)");
+
+		const handleSystemChange = (e) => {
+			const stored = window.localStorage.getItem(STORAGE_KEY);
+			if (stored === LIGHT || stored === DARK) {
+				// User has an explicit preference — don't override it.
+				return;
+			}
+			const next = e.matches ? DARK : LIGHT;
+			setTheme(next);
+		};
+
+		mediaQuery.addEventListener("change", handleSystemChange);
+		return () => mediaQuery.removeEventListener("change", handleSystemChange);
+	}, []);
+
 	const toggleTheme = () => {
 		const nextTheme = theme === DARK ? LIGHT : DARK;
 		window.localStorage.setItem(STORAGE_KEY, nextTheme);

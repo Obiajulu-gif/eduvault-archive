@@ -5,6 +5,8 @@ import { useToast } from '@/hooks/useToast';
 import { purchaseService } from '@/services/purchaseService';
 import { useWallet } from '@/hooks/useWallet';
 import { isMainnet } from '@/lib/config/chain';
+import { useTransactionCenter } from '@/providers/TransactionProvider';
+import { TransactionStatus } from '@/lib/transactions/transaction';
 
 export const CartContext = createContext(null);
 
@@ -13,6 +15,7 @@ export function CartProvider({ children }) {
   const [isCartOpen, setIsCartOpen] = useState(false);
   const toast = useToast();
   const { isConnected, address } = useWallet();
+  const { beginTransaction, markStatus, confirmTransaction, failTransaction } = useTransactionCenter();
 
   const addToCart = useCallback((material) => {
     const materialId = material._id || material.id;
@@ -99,31 +102,34 @@ export function CartProvider({ children }) {
       return;
     }
 
-    const toastId = toast.show({
-      title: 'Broadcasting Transaction',
+    beginTransaction({
+      title: 'Checkout Confirmation',
       message: 'Preparing single consolidated Stellar transaction for checkout...',
-      type: 'loading',
-      duration: 0, // keeps it active
     });
 
     try {
       // Simulate Stellar transaction signing delay
-      toast.update(toastId, {
-        title: 'Broadcasting Transaction',
+      markStatus(TransactionStatus.Signing, {
+        title: 'Requesting Signature',
         message: 'Awaiting signature for consolidated Stellar purchase contract in wallet...',
-        type: 'loading',
       });
       await new Promise((resolve) => setTimeout(resolve, 2000));
 
       // Simulate Stellar Soroban smart contract purchase broadcasting
-      toast.update(toastId, {
+      markStatus(TransactionStatus.Submitting, {
         title: 'Broadcasting Transaction',
         message: `Broadcasting transaction to Soroban ${isMainnet ? 'mainnet' : 'testnet'} validators...`,
-        type: 'loading',
       });
       await new Promise((resolve) => setTimeout(resolve, 1500));
-
+      
       const simulatedHash = 'simulated_cart_hash_' + Math.random().toString(36).substring(7);
+
+      markStatus(TransactionStatus.PendingConfirmation, {
+        title: 'Confirming Transaction',
+        message: 'Waiting for ledger confirmation...',
+        txHash: simulatedHash,
+      });
+      await new Promise((resolve) => setTimeout(resolve, 1000));
 
       // Save each purchase to the database
       const purchasePromises = cartItems.map((item) => {
@@ -139,25 +145,22 @@ export function CartProvider({ children }) {
       await Promise.all(purchasePromises);
 
       // Success
-      toast.update(toastId, {
+      confirmTransaction({
         title: 'Transaction Success',
-        message: `Consolidated purchase of ${cartItems.length} materials confirmed on-chain! Tx: ${simulatedHash.substring(0, 16)}...`,
-        type: 'success',
-        duration: 6000,
+        message: `Consolidated purchase of ${cartItems.length} materials confirmed on-chain!`,
+        txHash: simulatedHash,
       });
 
       setCartItems([]);
       setIsCartOpen(false);
     } catch (err) {
       console.error('Checkout error:', err);
-      toast.update(toastId, {
+      failTransaction(err, {
         title: 'Transaction Rejected',
         message: err?.message || 'The checkout transaction failed or was rejected.',
-        type: 'error',
-        duration: 5000,
       });
     }
-  }, [cartItems, isConnected, address, toast]);
+  }, [cartItems, isConnected, address, toast, beginTransaction, markStatus, confirmTransaction, failTransaction]);
 
   const value = {
     cartItems,

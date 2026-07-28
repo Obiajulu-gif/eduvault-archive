@@ -14,6 +14,7 @@ import { WalletStatus } from "@/providers/WalletProvider";
 import { FaShoppingCart, FaExternalLinkAlt, FaCopy, FaCheck } from "react-icons/fa";
 import { getExplorerAccountUrl } from "@/lib/config/chain";
 import NotificationCenter from "./notifications/NotificationCenter";
+import NetworkWarning from "./NetworkWarning";
 
 export default function Navbar() {
 	const [menuOpen, setMenuOpen] = useState(false);
@@ -50,16 +51,21 @@ export default function Navbar() {
 
 	return (
 		<header 
+			className={`fixed top-0 left-0 right-0 flex flex-col items-center py-2 px-4 md:px-0 z-[100] transition-all duration-300 ${
+				scrolled ? "bg-white/10 backdrop-blur-xl py-2" : "bg-transparent"
 			className={`fixed top-0 left-0 right-0 flex justify-center py-4 px-4 md:px-0 z-[100] transition-all duration-300 ${
-				scrolled ? "bg-white/10 backdrop-blur-xl py-3" : "bg-transparent"
+				scrolled ? "bg-surface/10 backdrop-blur-xl py-3" : "bg-transparent"
 			}`}
 		>
+			<div className="w-full md:w-[90%] lg:w-[85%] max-w-6xl mb-1 hidden sm:block">
+				<NetworkWarning />
+			</div>
 			<motion.nav
 				initial={{ y: -40, opacity: 0 }}
 				animate={{ y: 0, opacity: 1 }}
 				transition={{ duration: 0.6, ease: "easeOut" }}
 				className={`flex items-center justify-between w-full md:w-[90%] lg:w-[85%] max-w-6xl 
-        ${scrolled ? "bg-white/90" : "bg-white/80"} backdrop-blur-lg border border-gray-200/50 rounded-full py-2.5 px-6 md:px-10 shadow-lg shadow-black/5 z-10 transition-all duration-300`}
+        ${scrolled ? "bg-surface-strong/90" : "bg-surface/80"} backdrop-blur-lg border border-border-subtle rounded-full py-2.5 px-6 md:px-10 shadow-lg shadow-black/5 z-10 transition-all duration-300`}
 			>
 				{/* Logo */}
 				<Link href="/" className="flex items-center gap-2.5 group">
@@ -77,7 +83,7 @@ export default function Navbar() {
 				</Link>
 
 				{/* Desktop Menu */}
-				<div className="hidden md:flex items-center space-x-8 text-sm font-semibold text-gray-600">
+				<div className="hidden md:flex items-center space-x-8 text-sm font-semibold text-muted-foreground">
 					<Link
 						href="/#howitworks"
 						className="hover:text-stellar-blue transition-all duration-200"
@@ -102,10 +108,14 @@ export default function Navbar() {
 				{/* Actions */}
 				<div className="flex items-center gap-4">
 					<NotificationCenter />
+					{/* Theme toggle — desktop only (mobile handled in dropdown) */}
+					<div className="hidden md:block">
+						<ThemeToggle />
+					</div>
 					{/* Shopping Cart Drawer Trigger */}
 					<button
 						onClick={() => setIsCartOpen(true)}
-						className="relative p-2.5 bg-gray-150/40 hover:bg-gray-200/60 active:scale-95 rounded-full text-gray-700 hover:text-stellar-blue transition-all cursor-pointer flex items-center justify-center shrink-0 border border-gray-200/20"
+						className="relative p-2.5 bg-surface-muted hover:bg-surface active:scale-95 rounded-full text-foreground hover:text-stellar-blue transition-all cursor-pointer flex items-center justify-center shrink-0 border border-border-subtle"
 						title="Open shopping cart"
 					>
 						<FaShoppingCart className="w-4 h-4" />
@@ -120,8 +130,8 @@ export default function Navbar() {
 						<div className="hidden md:flex items-center gap-4">
 							{balance && (
 								<div className="hidden lg:flex flex-col items-end">
-									<span className="text-[10px] uppercase tracking-wider text-gray-400 font-bold">Balance</span>
-									<span className="text-xs text-gray-900 font-bold">
+									<span className="text-[10px] uppercase tracking-wider text-muted-foreground font-bold">Balance</span>
+									<span className="text-xs text-foreground font-bold">
 										{parseFloat(balance).toFixed(2)} {balanceSymbol}
 									</span>
 								</div>
@@ -137,24 +147,24 @@ export default function Navbar() {
 									{formatAddress(address)}
 								</button>
 
-								<div className="absolute right-0 mt-3 w-48 bg-white rounded-2xl shadow-xl border border-gray-100 opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 z-50 p-2 overflow-hidden">
-									<div className="px-4 py-2 border-b border-gray-100 mb-1">
-										<span className="text-xs font-bold text-gray-500 uppercase tracking-wider">Network</span>
+								<div className="absolute right-0 mt-3 w-48 bg-surface-strong rounded-2xl shadow-xl border border-border-subtle opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 z-50 p-2 overflow-hidden">
+									<div className="px-4 py-2 border-b border-border-subtle mb-1">
+										<span className="text-xs font-bold text-muted-foreground uppercase tracking-wider">Network</span>
 										<div className="flex items-center gap-1.5 mt-0.5">
 											<div className="w-1.5 h-1.5 bg-green-500 rounded-full"></div>
-											<span className="text-sm font-semibold text-gray-800">Testnet</span>
+											<span className="text-sm font-semibold text-foreground">Testnet</span>
 										</div>
 									</div>
 									<button
 										onClick={handleCopy}
-										className="flex items-center justify-between w-full text-left px-4 py-2.5 text-sm text-gray-700 hover:bg-gray-50 rounded-xl transition-colors"
+										className="flex items-center justify-between w-full text-left px-4 py-2.5 text-sm text-foreground hover:bg-surface-muted rounded-xl transition-colors"
 									>
 										Copy Address
-										{copied ? <FaCheck className="text-green-500" size={12} /> : <FaCopy className="text-gray-400" size={12} />}
+										{copied ? <FaCheck className="text-green-500" size={12} /> : <FaCopy className="text-muted-foreground" size={12} />}
 									</button>
 									<Link
 										href="/dashboard"
-										className="flex items-center px-4 py-2.5 text-sm text-gray-700 hover:bg-gray-50 rounded-xl transition-colors"
+										className="flex items-center px-4 py-2.5 text-sm text-foreground hover:bg-surface-muted rounded-xl transition-colors"
 									>
 										Dashboard
 									</Link>
@@ -162,13 +172,13 @@ export default function Navbar() {
 										href={getExplorerAccountUrl(address)}
 										target="_blank"
 										rel="noopener noreferrer"
-										className="flex items-center px-4 py-2.5 text-sm text-gray-700 hover:bg-gray-50 rounded-xl transition-colors"
+										className="flex items-center px-4 py-2.5 text-sm text-foreground hover:bg-surface-muted rounded-xl transition-colors"
 									>
 										View on Explorer <FaExternalLinkAlt className="ml-1" size={10} />
 									</a>
 									<button
 										onClick={disconnect}
-										className="flex items-center w-full text-left px-4 py-2.5 text-sm text-red-600 hover:bg-red-50 rounded-xl transition-colors mt-1"
+										className="flex items-center w-full text-left px-4 py-2.5 text-sm text-red-600 hover:bg-red-500/10 rounded-xl transition-colors mt-1"
 									>
 										Disconnect
 									</button>
@@ -183,10 +193,12 @@ export default function Navbar() {
 					<button
 						className="md:hidden flex flex-col space-y-1.5 p-2"
 						onClick={() => setMenuOpen(!menuOpen)}
+						aria-label={menuOpen ? "Close menu" : "Open menu"}
+						aria-expanded={menuOpen}
 					>
-						<span className={`w-5 h-0.5 bg-stellar-dark transition-transform ${menuOpen ? "rotate-45 translate-y-2" : ""}`}></span>
-						<span className={`w-5 h-0.5 bg-stellar-dark transition-opacity ${menuOpen ? "opacity-0" : ""}`}></span>
-						<span className={`w-5 h-0.5 bg-stellar-dark transition-transform ${menuOpen ? "-rotate-45 -translate-y-2" : ""}`}></span>
+						<span className={`w-5 h-0.5 bg-foreground transition-transform ${menuOpen ? "rotate-45 translate-y-2" : ""}`}></span>
+						<span className={`w-5 h-0.5 bg-foreground transition-opacity ${menuOpen ? "opacity-0" : ""}`}></span>
+						<span className={`w-5 h-0.5 bg-foreground transition-transform ${menuOpen ? "-rotate-45 -translate-y-2" : ""}`}></span>
 					</button>
 				</div>
 
@@ -195,11 +207,11 @@ export default function Navbar() {
 					<motion.div 
 						initial={{ opacity: 0, scale: 0.95 }}
 						animate={{ opacity: 1, scale: 1 }}
-						className="absolute top-full left-0 right-0 mt-4 mx-4 bg-white border border-gray-100 rounded-3xl shadow-2xl flex flex-col items-center space-y-4 py-8 text-gray-700 md:hidden z-50"
+						className="absolute top-full left-0 right-0 mt-4 mx-4 bg-surface-strong border border-border-subtle rounded-3xl shadow-2xl flex flex-col items-center space-y-4 py-8 text-foreground md:hidden z-50"
 					>
-						<Link href="/#howitworks" onClick={() => setMenuOpen(false)} className="text-lg font-bold">How It Works</Link>
-						<Link href="/marketplace" onClick={() => setMenuOpen(false)} className="text-lg font-bold">Marketplace</Link>
-						<Link href="https://edu-vault.gitbook.io/edu-vault-docs/" onClick={() => setMenuOpen(false)} className="text-lg font-bold">Docs</Link>
+						<Link href="/#howitworks" onClick={() => setMenuOpen(false)} className="text-lg font-bold hover:text-stellar-blue transition-colors">How It Works</Link>
+						<Link href="/marketplace" onClick={() => setMenuOpen(false)} className="text-lg font-bold hover:text-stellar-blue transition-colors">Marketplace</Link>
+						<Link href="https://edu-vault.gitbook.io/edu-vault-docs/" onClick={() => setMenuOpen(false)} className="text-lg font-bold hover:text-stellar-blue transition-colors">Docs</Link>
 
 						<div className="w-full px-8 pt-4">
 							<div className="flex justify-center mb-4">
@@ -207,24 +219,24 @@ export default function Navbar() {
 							</div>
 							{isConnected && address ? (
 								<div className="flex flex-col items-center gap-4 w-full">
-									<div className="flex items-center gap-2 text-sm font-bold text-stellar-dark bg-gray-100 px-4 py-2 rounded-full">
+									<div className="flex items-center gap-2 text-sm font-bold text-foreground bg-surface-muted px-4 py-2 rounded-full">
 										<div className="w-2 h-2 bg-green-500 rounded-full"></div>
 										{formatAddress(address)}
 									</div>
 									{balance && (
-										<p className="text-xs text-gray-500">
+										<p className="text-xs text-muted-foreground">
 											{parseFloat(balance).toFixed(2)} {balanceSymbol}
 										</p>
 									)}
 									<div className="flex gap-2 w-full flex-col">
 										<button
 											onClick={handleCopy}
-											className="flex items-center justify-center gap-2 flex-1 bg-gray-50 hover:bg-gray-100 text-gray-700 text-sm font-bold py-3 px-4 rounded-2xl transition-colors"
+											className="flex items-center justify-center gap-2 flex-1 bg-surface-muted hover:bg-surface text-foreground text-sm font-bold py-3 px-4 rounded-2xl transition-colors"
 										>
 											{copied ? (
 												<><FaCheck className="text-green-500" size={12} /> Copied!</>
 											) : (
-												<><FaCopy className="text-gray-500" size={12} /> Copy Address</>
+												<><FaCopy className="text-muted-foreground" size={12} /> Copy Address</>
 											)}
 										</button>
 										<div className="flex gap-2 w-full">
@@ -240,7 +252,7 @@ export default function Navbar() {
 													setMenuOpen(false);
 													disconnect();
 												}}
-												className="flex-1 bg-red-50 text-red-600 text-sm font-bold py-3 px-4 rounded-2xl"
+												className="flex-1 bg-red-500/10 text-red-600 text-sm font-bold py-3 px-4 rounded-2xl"
 											>
 												Log Out
 											</button>

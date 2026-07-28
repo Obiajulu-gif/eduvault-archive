@@ -1,6 +1,7 @@
 import { getDb } from '@/lib/mongodb';
 import { NETWORK_PASSPHRASE } from '@/lib/config/chain';
 import { Transaction, xdr, Keypair } from '@stellar/stellar-sdk';
+import crypto from 'crypto';
 
 const CHALLENGE_TTL_MS = 5 * 60 * 1000;
 const CHALLENGE_CLEANUP_INTERVAL_MS = 60 * 1000;
@@ -13,21 +14,35 @@ function generateNonce() {
     .join('');
 }
 
-function getChallengeMessage(nonce, address) {
-  return `EduVault Login\nAddress: ${address}\nNonce: ${nonce}\nTimestamp: ${Date.now()}`;
+function getDomainSeparationString(action, origin, network, contract) {
+  return `${action || 'default'}:${origin || 'default'}:${network || 'default'}:${contract || 'default'}`;
 }
 
-export async function issueChallenge(address) {
+function getChallengeMessage(nonce, address, domainSeparation) {
+  return `EduVault\nAddress: ${address}\nNonce: ${nonce}\nDomain: ${domainSeparation}\nTimestamp: ${Date.now()}`;
+}
+
+export async function issueChallenge(address, options = {}) {
   const db = await getDb();
   const nonce = generateNonce();
   const expiresAt = new Date(Date.now() + CHALLENGE_TTL_MS);
+  const issuedAt = new Date();
+
+  const { action = 'default', origin, network, contract } = options;
+  const domainSeparation = getDomainSeparationString(action, origin, network, contract);
 
   const doc = {
     address: address.toLowerCase(),
     nonce,
     expiresAt,
+    issuedAt,
     used: false,
     createdAt: new Date(),
+    action,
+    origin: origin || null,
+    network: network || null,
+    contract: contract || null,
+    domainSeparation,
   };
 
   await db.collection('auth_challenges').insertOne(doc);
@@ -36,14 +51,16 @@ export async function issueChallenge(address) {
     nonce,
     address,
     expiresAt: expiresAt.toISOString(),
-    message: getChallengeMessage(nonce, address),
+    message: getChallengeMessage(nonce, address, domainSeparation),
   };
 }
 
-export async function verifyChallenge(address, nonce, signedTransactionXdr) {
+export async function verifyChallenge(address, nonce, signedTransactionXdr, options = {}) {
   const db = await getDb();
+  const addressLower = address.toLowerCase();
+
   const challenge = await db.collection('auth_challenges').findOne({
-    address: address.toLowerCase(),
+    address: addressLower,
     nonce,
     used: false,
     expiresAt: { $gt: new Date() },
@@ -51,6 +68,14 @@ export async function verifyChallenge(address, nonce, signedTransactionXdr) {
 
   if (!challenge) {
     return { valid: false, reason: 'Challenge not found, expired, or already used' };
+  }
+
+  const { action = 'default', origin, network, contract } = options;
+  const requestedDomain = getDomainSeparationString(action, origin, network, contract);
+
+  if (challenge.domainSeparation !== requestedDomain) {
+    await markChallengeUsed(db, challenge._id);
+    return { valid: false, reason: 'Challenge domain separation mismatch' };
   }
 
   try {
@@ -84,7 +109,16 @@ export async function verifyChallenge(address, nonce, signedTransactionXdr) {
       return { valid: false, reason: 'Invalid signature' };
     }
 
-    return { valid: true };
+    return {
+      valid: true,
+      sessionContext: {
+        address: addressLower,
+        action: challenge.action,
+        origin: challenge.origin,
+        network: challenge.network,
+        contract: challenge.contract,
+      }
+    };
   } catch (err) {
     await markChallengeUsed(db, challenge._id).catch(() => {});
     return { valid: false, reason: `Verification failed: ${err.message}` };

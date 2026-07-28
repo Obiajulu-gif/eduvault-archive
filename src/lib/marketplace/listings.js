@@ -7,7 +7,7 @@ export const marketplaceListings = [
     department: "Economics",
     level: "200 Level",
     uploadedAt: "October 25, 2025",
-    price: "0.25 CELO",
+    price: "0.25 XLM",
     likes: "18.6K",
     coverImage: "/images/image2.jpg",
     shortSummary:
@@ -38,7 +38,7 @@ export const marketplaceListings = [
     department: "Chemistry",
     level: "100 Level",
     uploadedAt: "November 3, 2025",
-    price: "0.25 CELO",
+    price: "0.25 XLM",
     likes: "21.5K",
     coverImage: "/images/image5.jpg",
     shortSummary:
@@ -66,7 +66,7 @@ export const marketplaceListings = [
     department: "Mathematics",
     level: "100 Level",
     uploadedAt: "November 8, 2025",
-    price: "0.10 CELO",
+    price: "0.10 XLM",
     likes: "9.2K",
     coverImage: "/images/image1.jpg",
     shortSummary:
@@ -94,7 +94,7 @@ export const marketplaceListings = [
     department: "Biology",
     level: "200 Level",
     uploadedAt: "October 18, 2025",
-    price: "0.15 CELO",
+    price: "0.15 XLM",
     likes: "4.8K",
     coverImage: "/images/image2.jpg",
     shortSummary:
@@ -122,7 +122,7 @@ export const marketplaceListings = [
     department: "English",
     level: "300 Level",
     uploadedAt: "October 11, 2025",
-    price: "0.05 CELO",
+    price: "0.05 XLM",
     likes: "1.2K",
     coverImage: null,
     shortSummary: "",
@@ -140,7 +140,7 @@ export const marketplaceListings = [
     department: "Physics",
     level: "100 Level",
     uploadedAt: "October 6, 2025",
-    price: "0.20 CELO",
+    price: "0.20 XLM",
     likes: "12.3K",
     coverImage: "/images/image4.jpg",
     shortSummary:
@@ -169,7 +169,7 @@ export const marketplaceListings = [
     department: "Computer Science",
     level: "200 Level",
     uploadedAt: "September 30, 2025",
-    price: "0.30 CELO",
+    price: "0.30 XLM",
     likes: "8.6K",
     coverImage: "/images/image5.jpg",
     shortSummary:
@@ -197,7 +197,7 @@ export const marketplaceListings = [
     department: "Economics",
     level: "100 Level",
     uploadedAt: "September 21, 2025",
-    price: "0.08 CELO",
+    price: "0.08 XLM",
     likes: "3.4K",
     coverImage: "/images/image6.jpg",
     shortSummary:
@@ -225,7 +225,7 @@ export const marketplaceListings = [
     department: "Medicine",
     level: "400 Level",
     uploadedAt: "September 14, 2025",
-    price: "0.35 CELO",
+    price: "0.35 XLM",
     likes: "6.7K",
     coverImage: "/images/image7.jpg",
     shortSummary:
@@ -253,7 +253,7 @@ export const marketplaceListings = [
     department: "Psychology",
     level: "100 Level",
     uploadedAt: "September 4, 2025",
-    price: "0.03 CELO",
+    price: "0.03 XLM",
     likes: "2.1K",
     coverImage: "/images/image8.jpg",
     shortSummary:

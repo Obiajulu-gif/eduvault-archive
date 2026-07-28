@@ -1408,6 +1408,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "shared-interface"
+version = "0.1.0"
+dependencies = [
+ "soroban-sdk",
+]
+
+[[package]]
 name = "shlex"
 version = "1.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

@@ -6,6 +6,7 @@ import { CartProvider } from "@/providers/CartProvider";
 import { ComparisonProvider } from "@/providers/ComparisonProvider";
 import CartDrawer from "@/components/CartDrawer";
 import ComparisonMatrix from "@/components/ComparisonMatrix";
+import SupportWidget from "@/components/SupportWidget";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -57,6 +58,7 @@ export default function RootLayout({ children }) {
                 {children}
                 <CartDrawer />
                 <ComparisonMatrix />
+                <SupportWidget />
               </ComparisonProvider>
             </CartProvider>
           </ToastProvider>

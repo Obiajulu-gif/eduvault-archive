@@ -188,6 +188,11 @@ npm run test:contracts
 - [Environment Setup](docs/environment-setup.md)
 - [Contribution Guide](docs/contributing.md)
 - [Backend Contracts](docs/backend-contracts.md)
+- [Stellar Purchase Flow](docs/stellar-purchase-flow.md)
+- [Stellar Wallet Setup](docs/stellar-wallet-setup.md)
+- [Creator Publishing Guide](docs/creator-publishing-guide.md)
+- [Soroban Contract Architecture](docs/soroban-contract-architecture.md)
+- [Stellar Integration Guide](docs/stellar-integration.md)
 
 ## Deployment Notes
 

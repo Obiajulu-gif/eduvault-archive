@@ -1,3 +1,5 @@
+import { resolveEntitlement, ENTITLEMENT_STATE } from "../entitlement.js";
+
 export const COMPLETED_PURCHASE_STATUSES = new Set(["confirmed", "settled", "completed"]);
 export const INCOMPLETE_PURCHASE_STATUSES = new Set(["pending", "indexing", "processing", "requires_payment"]);
 export const FAILED_PURCHASE_STATUSES = new Set(["failed", "cancelled", "canceled", "expired"]);
@@ -95,11 +97,34 @@ export async function getMaterialAccessStatus(db, materialId, buyerAddress) {
   }
 
   if (isCompletedPurchaseStatus(purchase.status)) {
+    // A "completed" purchase status in MongoDB is not, by itself, proof of
+    // a usable entitlement — it can be stale relative to a refund, dispute,
+    // or expiry that finalized on-chain. Route the final decision through
+    // the same policy boundary every download route uses so this status
+    // endpoint can never claim access that the authorization service denies.
+    const decision = await resolveEntitlement({
+      db,
+      materialId,
+      buyerAddress,
+      purchaseId: purchase.purchaseId || null,
+    });
+
+    if (!decision.hasAccess) {
+      return {
+        status: decision.state === ENTITLEMENT_STATE.UNAVAILABLE ? "unavailable" : "revoked",
+        hasAccess: false,
+        accessGranted: false,
+        source: decision.source,
+        purchaseStatus: purchase.status,
+        entitlement: purchase,
+      };
+    }
+
     return {
       status: "active",
       hasAccess: true,
       accessGranted: true,
-      source: "purchases-db",
+      source: decision.source,
       purchaseStatus: purchase.status,
       entitlement: purchase,
     };

@@ -5,7 +5,7 @@ import { useWallet } from "@/hooks/useWallet";
 import { useUserMaterials, useUpdateMaterial } from "@/hooks/api/useMaterials";
 import { FaEdit, FaSave, FaTimes, FaSpinner, FaCheckCircle, FaExclamationTriangle } from "react-icons/fa";
 import ResourceStatusBadge from "@/components/materials/ResourceStatusBadge";
-import { EDITABLE_MATERIAL_FIELDS, IMMUTABLE_MATERIAL_FIELDS } from "@/lib/backend/schemaContracts";
+import { IMMUTABLE_MATERIAL_FIELDS } from "@/lib/backend/schemaContracts";
 
 function EditModal({ material, isOpen, onClose }) {
   const updateMutation = useUpdateMaterial();
@@ -180,6 +180,11 @@ export default function MyMaterialsPage() {
   const { data: materials, isLoading, error: queryError } = useUserMaterials();
   const [editMaterial, setEditMaterial] = useState(null);
 
+  const materialCount = materials?.length || 0;
+  const publicCount = materials?.filter((material) => material.visibility === "public").length || 0;
+  const paidCount = materials?.filter((material) => Number(material.price) > 0).length || 0;
+  const estimatedRevenue = materials?.reduce((sum, material) => sum + Number(material.price || 0), 0) || 0;
+
   if (!address) {
     return (
       <div className="flex items-center justify-center py-24">
@@ -197,6 +202,22 @@ export default function MyMaterialsPage() {
         <p className="text-sm text-gray-500">
           Manage your published educational materials. Editable fields can be updated after publishing.
         </p>
+      </div>
+
+      <div className="mb-8 grid gap-4 md:grid-cols-3">
+        <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+          <p className="text-sm font-medium text-slate-500">Published materials</p>
+          <p className="mt-2 text-2xl font-semibold text-slate-950">{materialCount}</p>
+        </div>
+        <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+          <p className="text-sm font-medium text-slate-500">Public listings</p>
+          <p className="mt-2 text-2xl font-semibold text-slate-950">{publicCount}</p>
+        </div>
+        <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+          <p className="text-sm font-medium text-slate-500">Estimated revenue</p>
+          <p className="mt-2 text-2xl font-semibold text-slate-950">{estimatedRevenue.toFixed(2)} XLM</p>
+          <p className="mt-1 text-xs text-slate-500">{paidCount} paid resources available</p>
+        </div>
       </div>
 
       {isLoading && (
@@ -237,13 +258,45 @@ export default function MyMaterialsPage() {
       )}
 
       {materials?.length > 0 && (
-        <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-6">
-          {materials.map((material) => (
-            <div
-              key={material._id}
-              className="bg-white rounded-xl border border-gray-200 shadow-sm hover:shadow-md transition-shadow flex flex-col"
-            >
-              <div className="w-full h-36 bg-gradient-to-br from-blue-50 to-purple-50 rounded-t-xl flex items-center justify-center overflow-hidden">
+        <>
+          <div className="mb-8 rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+            <div className="mb-4 flex items-center justify-between">
+              <div>
+                <h2 className="text-lg font-semibold text-slate-950">Sales snapshot</h2>
+                <p className="text-sm text-slate-500">Track the pricing and visibility of the materials you&apos;ve published.</p>
+              </div>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="min-w-full text-left text-sm">
+                <thead>
+                  <tr className="border-b border-slate-200 text-slate-500">
+                    <th className="px-3 py-2 font-medium">Material</th>
+                    <th className="px-3 py-2 font-medium">Price</th>
+                    <th className="px-3 py-2 font-medium">Visibility</th>
+                    <th className="px-3 py-2 font-medium">Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {materials.map((material) => (
+                    <tr key={material._id} className="border-b border-slate-100 last:border-0">
+                      <td className="px-3 py-3 font-medium text-slate-800">{material.title}</td>
+                      <td className="px-3 py-3 text-slate-600">{material.price ? `${material.price} XLM` : "Free"}</td>
+                      <td className="px-3 py-3 text-slate-600 capitalize">{material.visibility || "public"}</td>
+                      <td className="px-3 py-3 text-slate-600">{material.updatedAt ? "Updated" : "Published"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-6">
+            {materials.map((material) => (
+              <div
+                key={material._id}
+                className="bg-white rounded-xl border border-gray-200 shadow-sm hover:shadow-md transition-shadow flex flex-col"
+              >
+              <div className="w-full h-36 bg-linear-to-br from-blue-50 to-purple-50 rounded-t-xl flex items-center justify-center overflow-hidden">
                 {material.thumbnailUrl ? (
                   /* eslint-disable-next-line @next/next/no-img-element */
                   <img
@@ -296,8 +349,9 @@ export default function MyMaterialsPage() {
                 </div>
               </div>
             </div>
-          ))}
-        </div>
+            ))}
+          </div>
+        </>
       )}
 
       <EditModal

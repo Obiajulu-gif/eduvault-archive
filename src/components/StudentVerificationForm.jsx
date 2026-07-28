@@ -328,11 +328,14 @@ export default function StudentVerificationForm({ onSuccess, userAddress }) {
                   {(documentFile.size / 1024).toFixed(2)} KB
                 </p>
                 {documentPreview && (
-                  <img
-                    src={documentPreview}
-                    alt="Document preview"
-                    className="mt-2 max-w-xs max-h-48 rounded border"
-                  />
+                  <>
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      src={documentPreview}
+                      alt="Document preview"
+                      className="mt-2 max-w-xs max-h-48 rounded border"
+                    />
+                  </>
                 )}
                 <button
                   type="button"

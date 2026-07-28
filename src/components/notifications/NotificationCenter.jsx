@@ -29,7 +29,7 @@ export default function NotificationCenter() {
         onClick={() => setIsOpen((prev) => !prev)}
         aria-label={`Notifications${unreadCount > 0 ? `, ${unreadCount} unread` : ""}`}
         aria-expanded={isOpen}
-        className="relative p-2.5 bg-gray-150/40 hover:bg-gray-200/60 active:scale-95 rounded-full text-gray-700 hover:text-stellar-blue transition-all cursor-pointer flex items-center justify-center shrink-0 border border-gray-200/20"
+        className="relative p-2.5 bg-gray-150/40 dark:bg-gray-800/40 hover:bg-gray-200/60 dark:hover:bg-gray-700/60 active:scale-95 rounded-full text-gray-700 dark:text-gray-300 hover:text-stellar-blue transition-all cursor-pointer flex items-center justify-center shrink-0 border border-gray-200/20 dark:border-gray-700/20"
       >
         <FaBell className="w-4 h-4" />
         {unreadCount > 0 && (
@@ -40,9 +40,9 @@ export default function NotificationCenter() {
       </button>
 
       {isOpen && (
-        <div className="absolute right-0 mt-3 w-80 bg-white rounded-2xl shadow-xl border border-gray-100 z-50 overflow-hidden">
-          <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100">
-            <span className="text-sm font-bold text-gray-900">Notifications</span>
+        <div className="absolute right-0 mt-3 w-80 bg-white dark:bg-gray-900 rounded-2xl shadow-xl border border-gray-100 dark:border-gray-800 z-50 overflow-hidden">
+          <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100 dark:border-gray-800">
+            <span className="text-sm font-bold text-gray-900 dark:text-gray-100">Notifications</span>
             <div className="flex items-center gap-2">
               {unreadCount > 0 && (
                 <button
@@ -64,7 +64,7 @@ export default function NotificationCenter() {
           </div>
 
           {recent.length === 0 ? (
-            <div className="px-4 py-8 text-center text-sm text-gray-400">
+            <div className="px-4 py-8 text-center text-sm text-gray-400 dark:text-gray-500">
               No notifications
             </div>
           ) : (
@@ -74,13 +74,13 @@ export default function NotificationCenter() {
                   key={notif.id}
                   role="listitem"
                   onClick={() => markRead(notif.id)}
-                  className={`px-4 py-3 border-b border-gray-50 cursor-pointer hover:bg-gray-50 transition-colors ${
-                    !notif.read ? "bg-blue-50/40" : ""
+                  className={`px-4 py-3 border-b border-gray-50 dark:border-gray-800 cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors ${
+                    !notif.read ? "bg-blue-50/40 dark:bg-blue-950/30" : ""
                   }`}
                 >
                   <div className="flex items-start justify-between gap-2">
                     <div className="flex-1 min-w-0">
-                      <p className={`text-xs font-bold ${notif.read ? "text-gray-700" : "text-gray-900"}`}>
+                      <p className={`text-xs font-bold ${notif.read ? "text-gray-700 dark:text-gray-300" : "text-gray-900 dark:text-gray-100"}`}>
                         {notif.title}
                       </p>
                       <p className="text-xs text-gray-500 mt-0.5 leading-relaxed">

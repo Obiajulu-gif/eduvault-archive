@@ -5,6 +5,7 @@ import { ObjectId } from "mongodb";
 import { getDb } from "@/lib/mongodb";
 import PayoutSettingsPanel from "../components/PayoutSettingsPanel";
 import CreatorProfileSettings from "../components/CreatorProfileSettings";
+import EmailPreferences from "@/components/EmailPreferences";
 
 async function getCurrentUser() {
   const cookieStore = await cookies();
@@ -31,10 +32,15 @@ export default async function SettingsPage() {
     redirect("/");
   }
 
+  // Pass persisted email preferences to the client component so the initial
+  // render is populated without an extra round-trip.
+  const initialSubscriptions = user.emailSubscriptions ?? null;
+
   return (
     <div className="mx-auto max-w-7xl space-y-10 px-4 py-10 lg:px-8">
       <CreatorProfileSettings initialUser={user} />
       <PayoutSettingsPanel initialUser={user} />
+      <EmailPreferences initialSubscriptions={initialSubscriptions} />
     </div>
   );
 }

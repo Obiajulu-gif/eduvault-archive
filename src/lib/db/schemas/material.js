@@ -28,6 +28,18 @@ export const MaterialSchema = {
           bsonType: "string",
           description: "IPFS Content Identifier pointing to the raw file asset",
         },
+        storageKey: {
+          bsonType: "string",
+          description: "Primary storage key/content hash for the uploaded asset",
+        },
+        quarantineState: {
+          bsonType: "string",
+          description: "Quarantine scan state for the associated content hash",
+        },
+        quarantineExpiresAt: {
+          bsonType: "date",
+          description: "When the quarantine record expires",
+        },
         createdAt: {
           bsonType: "date",
           description: "Timestamp tracing entity entry operations",

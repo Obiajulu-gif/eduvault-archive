@@ -1,8 +1,25 @@
 import { NextResponse } from "next/server";
 import { getDb } from "@/lib/mongodb";
-import { getPurchaseStatus } from "@/lib/indexer";
+import { authorizeMaterialAccess } from "@/lib/entitlement";
 
 export const runtime = "nodejs";
+
+// Maps a denied authorization decision's source/state onto this route's
+// historical status vocabulary, so existing clients keep working while the
+// decision itself now flows through the single entitlement policy boundary.
+function statusForDeniedDecision(decision) {
+  if (decision.state === "unavailable") return "unavailable";
+  switch (decision.source) {
+    case "not-found":
+      return "not_purchased";
+    case "purchases-db-incomplete":
+      return "pending";
+    case "buyer-suspended":
+      return "suspended";
+    default:
+      return "revoked";
+  }
+}
 
 export async function GET(request, { params }) {
   try {
@@ -20,10 +37,9 @@ export async function GET(request, { params }) {
       return NextResponse.json({ error: 'Material not found' }, { status: 404 });
     }
 
-    // Call our mocked Soroban indexer to verify on-chain entitlement
-    const status = await getPurchaseStatus(walletAddress, id);
+    const decision = await authorizeMaterialAccess({ db, material, buyerAddress: walletAddress });
 
-    if (status === 'available') {
+    if (decision.allowed) {
       return NextResponse.json({
         status: 'available',
         accessGranted: true,
@@ -31,7 +47,7 @@ export async function GET(request, { params }) {
       }, { status: 200 });
     }
 
-    return NextResponse.json({ status, accessGranted: false }, { status: 200 });
+    return NextResponse.json({ status: statusForDeniedDecision(decision), accessGranted: false }, { status: 200 });
   } catch (error) {
     return NextResponse.json({ error: 'Server error' }, { status: 500 });
   }

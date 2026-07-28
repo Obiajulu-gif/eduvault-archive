@@ -28,6 +28,18 @@ export const REQUIRED_INDEXES = {
     { keys: { subject: 1 } },
     { keys: { level: 1 } },
     { keys: { category: 1, subject: 1 } },
+    {
+      keys: { category: 1, price: 1 },
+      options: { name: "materials_category_price_idx", background: true },
+    },
+    {
+      keys: { title: "text", description: "text" },
+      options: { name: "materials_text_idx", background: true },
+    },
+    {
+      keys: { category: 1, price: 1, title: 1, description: 1 },
+      options: { name: "materials_search_compound_idx", background: true },
+    },
   ],
   purchases: [
     { keys: { buyerAddress: 1, createdAt: -1 } },

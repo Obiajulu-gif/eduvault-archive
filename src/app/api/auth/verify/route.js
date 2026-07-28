@@ -19,6 +19,10 @@ export async function POST(request) {
         const address = normalizeWalletAddress(body?.address);
         const nonce = typeof body?.nonce === "string" ? body.nonce.trim() : "";
         const signedTransactionXdr = typeof body?.signedTransactionXdr === "string" ? body.signedTransactionXdr.trim() : "";
+        const action = typeof body?.action === "string" ? body.action.trim() : "default";
+        const origin = typeof body?.origin === "string" ? body.origin.trim() : undefined;
+        const network = typeof body?.network === "string" ? body.network.trim() : undefined;
+        const contract = typeof body?.contract === "string" ? body.contract.trim() : undefined;
 
         if (!address || !nonce || !signedTransactionXdr) {
           return errorResponse({
@@ -28,7 +32,12 @@ export async function POST(request) {
           });
         }
 
-        const result = await verifyChallenge(address, nonce, signedTransactionXdr);
+        const result = await verifyChallenge(address, nonce, signedTransactionXdr, {
+          action,
+          origin,
+          network,
+          contract,
+        });
 
         if (!result.valid) {
           auditLog({
@@ -67,11 +76,13 @@ export async function POST(request) {
           email: user?.email ?? "",
           name: user?.fullName ?? "",
           walletAddress: address,
+          action: result.sessionContext.action,
         };
 
         const accessToken = generateAccessToken(tokenPayload);
         const refreshToken = generateRefreshToken();
-        await storeRefreshToken(userId, refreshToken);
+        const sessionContext = result.sessionContext;
+        await storeRefreshToken(userId, refreshToken, sessionContext);
 
         const isProduction = process.env.NODE_ENV === "production";
         const response = NextResponse.json({
@@ -102,6 +113,7 @@ export async function POST(request) {
           method: "POST",
           status: 200,
           address,
+          action: result.sessionContext.action,
         });
 
         return response;

@@ -1,5 +1,9 @@
 [workspace]
-members = ["contracts/material-registry", "contracts/purchase-manager"]
+members = [
+    "contracts/material-registry",
+    "contracts/purchase-manager",
+    "contracts/shared-interface",
+]
 resolver = "2"
 
 [workspace.package]
@@ -10,6 +14,7 @@ version = "0.1.0"
 
 [workspace.dependencies]
 soroban-sdk = "25.3.1"
+shared-interface = { path = "contracts/shared-interface" }
 
 [profile.release]
 opt-level = "z"

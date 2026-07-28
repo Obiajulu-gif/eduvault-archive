@@ -298,7 +298,34 @@
           },
           "ext": "v0"
         },
-        "live_until": 4095
+        "live_until": 6311999
+      },
+      {
+        "entry": {
+          "last_modified_ledger_seq": 0,
+          "data": {
+            "contract_data": {
+              "ext": "v0",
+              "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
+              "key": {
+                "vec": [
+                  {
+                    "symbol": "AllowedAssetIndex"
+                  },
+                  {
+                    "u64": "0"
+                  }
+                ]
+              },
+              "durability": "persistent",
+              "val": {
+                "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAOLZM"
+              }
+            }
+          },
+          "ext": "v0"
+        },
+        "live_until": 6311999
       },
       {
         "entry": {
@@ -325,7 +352,7 @@
           },
           "ext": "v0"
         },
-        "live_until": 4095
+        "live_until": 6311999
       },
       {
         "entry": {
@@ -337,7 +364,7 @@
               "key": {
                 "vec": [
                   {
-                    "symbol": "Material"
+                    "symbol": "MaterialCore"
                   },
                   {
                     "bytes": "f258f52ef1fdcadc3bca37cb395dfa5a70f8ab04448f20d3a93149c94267ddb9"
@@ -365,14 +392,6 @@
                   },
                   {
                     "key": {
-                      "symbol": "material_id"
-                    },
-                    "val": {
-                      "bytes": "f258f52ef1fdcadc3bca37cb395dfa5a70f8ab04448f20d3a93149c94267ddb9"
-                    }
-                  },
-                  {
-                    "key": {
                       "symbol": "metadata_hash"
                     },
                     "val": {
@@ -387,6 +406,69 @@
                       "string": "ipfs://eduvault/material/intro-to-soroban"
                     }
                   },
+                  {
+                    "key": {
+                      "symbol": "rights_hash"
+                    },
+                    "val": {
+                      "bytes": "0505050505050505050505050505050505050505050505050505050505050505"
+                    }
+                  }
+                ]
+              }
+            }
+          },
+          "ext": "v0"
+        },
+        "live_until": 6311999
+      },
+      {
+        "entry": {
+          "last_modified_ledger_seq": 0,
+          "data": {
+            "contract_data": {
+              "ext": "v0",
+              "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
+              "key": {
+                "vec": [
+                  {
+                    "symbol": "MaterialIndex"
+                  },
+                  {
+                    "u64": "0"
+                  }
+                ]
+              },
+              "durability": "persistent",
+              "val": {
+                "bytes": "f258f52ef1fdcadc3bca37cb395dfa5a70f8ab04448f20d3a93149c94267ddb9"
+              }
+            }
+          },
+          "ext": "v0"
+        },
+        "live_until": 6311999
+      },
+      {
+        "entry": {
+          "last_modified_ledger_seq": 0,
+          "data": {
+            "contract_data": {
+              "ext": "v0",
+              "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
+              "key": {
+                "vec": [
+                  {
+                    "symbol": "MaterialSale"
+                  },
+                  {
+                    "bytes": "f258f52ef1fdcadc3bca37cb395dfa5a70f8ab04448f20d3a93149c94267ddb9"
+                  }
+                ]
+              },
+              "durability": "persistent",
+              "val": {
+                "map": [
                   {
                     "key": {
                       "symbol": "paused"
@@ -455,14 +537,6 @@
                   },
                   {
                     "key": {
-                      "symbol": "rights_hash"
-                    },
-                    "val": {
-                      "bytes": "0505050505050505050505050505050505050505050505050505050505050505"
-                    }
-                  },
-                  {
-                    "key": {
                       "symbol": "status"
                     },
                     "val": {
@@ -483,31 +557,7 @@
           },
           "ext": "v0"
         },
-        "live_until": 4095
-      },
-      {
-        "entry": {
-          "last_modified_ledger_seq": 0,
-          "data": {
-            "contract_data": {
-              "ext": "v0",
-              "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
-              "key": {
-                "vec": [
-                  {
-                    "symbol": "UpgradeAdmin"
-                  }
-                ]
-              },
-              "durability": "persistent",
-              "val": {
-                "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
-              }
-            }
-          },
-          "ext": "v0"
-        },
-        "live_until": 4095
+        "live_until": 6311999
       },
       {
         "entry": {
@@ -523,14 +573,51 @@
                   "executable": {
                     "wasm": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
                   },
-                  "storage": null
+                  "storage": [
+                    {
+                      "key": {
+                        "vec": [
+                          {
+                            "symbol": "AllowedAssetCount"
+                          }
+                        ]
+                      },
+                      "val": {
+                        "u64": "1"
+                      }
+                    },
+                    {
+                      "key": {
+                        "vec": [
+                          {
+                            "symbol": "MaterialCount"
+                          }
+                        ]
+                      },
+                      "val": {
+                        "u64": "1"
+                      }
+                    },
+                    {
+                      "key": {
+                        "vec": [
+                          {
+                            "symbol": "UpgradeAdmin"
+                          }
+                        ]
+                      },
+                      "val": {
+                        "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
+                      }
+                    }
+                  ]
                 }
               }
             }
           },
           "ext": "v0"
         },
-        "live_until": 4095
+        "live_until": 6311999
       },
       {
         "entry": {
@@ -624,7 +711,7 @@
           },
           "ext": "v0"
         },
-        "live_until": 4095
+        "live_until": 6311999
       }
     ]
   },
