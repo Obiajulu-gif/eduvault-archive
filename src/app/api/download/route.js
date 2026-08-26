@@ -150,6 +150,11 @@ export async function GET(request) {
   let material;
   try {
     db = await getDb();
+    // Deliberately unfiltered by `isDeleted` / `creatorSuspended`. Access here
+    // is granted by entitlement, not by catalog visibility: a buyer's download
+    // must keep working after the creator retires the listing or is suspended.
+    // Adding a catalog filter to this lookup would revoke access people paid
+    // for. Public discovery does the hiding — see lib/db/softDelete.js.
     material = await db.collection('materials').findOne({ materialId });
     if (!material && ObjectId.isValid(materialId)) {
       material = await db.collection('materials').findOne({ _id: new ObjectId(materialId) });

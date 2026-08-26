@@ -47,10 +47,16 @@ export async function GET(request) {
         return NextResponse.json({ error: "Invalid material ID" }, { status: 400 });
       }
       
-      const item = await db.collection("materials").findOne({ 
-        _id: new ObjectId(id), 
+      const item = await db.collection("materials").findOne({
+        _id: new ObjectId(id),
         visibility: "public",
-        moderationStatus: { $ne: "suspended" }
+        moderationStatus: { $ne: "suspended" },
+        // Same catalog rules as the list query: retired listings and listings
+        // by a suspended creator are not publicly reachable. Buyers who
+        // already own the material reach it through the download route, which
+        // authorizes on entitlement and deliberately skips these filters.
+        isDeleted: { $ne: true },
+        creatorSuspended: { $ne: true },
       });
 
       if (!item) {
