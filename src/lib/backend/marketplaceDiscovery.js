@@ -83,6 +83,15 @@ export function buildMarketplaceDiscoveryQuery(searchParams, { now = new Date() 
     visibility: "public",
     archived: { $ne: true },
     moderationStatus: { $ne: "suspended" },
+    // Soft-deleted listings stay in the collection so existing purchasers keep
+    // their download references, but they must not surface in public results.
+    // `$ne: true` rather than `false` so documents predating the field — which
+    // have no `isDeleted` at all — still match.
+    isDeleted: { $ne: true },
+    // Listings by a suspended creator are hidden for the duration of the
+    // suspension. Denormalised onto the material so discovery stays a single
+    // indexed query instead of a per-result lookup against users.
+    creatorSuspended: { $ne: true },
     $or: [
       { relevanceStatus: { $exists: false } },
       { relevanceStatus: { $ne: "low" } },

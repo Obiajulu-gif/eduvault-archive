@@ -44,6 +44,25 @@ export const ProfileSchema = {
           bsonType: "date",
           description: "Timestamp of the most recent profile update",
         },
+        isSuspended: {
+          bsonType: "bool",
+          description:
+            "True while the account is suspended for a guideline or copyright " +
+            "violation. Suspended sessions are rejected at the auth boundary " +
+            "and the creator's listings are hidden from public discovery.",
+        },
+        suspendedAt: {
+          bsonType: "date",
+          description: "When the suspension was applied (absent while active)",
+        },
+        suspendedBy: {
+          bsonType: "string",
+          description: "Identifier of the admin who applied the suspension",
+        },
+        suspensionReason: {
+          bsonType: "string",
+          description: "Reason shown to the user and recorded in the admin audit log",
+        },
       },
     },
   },

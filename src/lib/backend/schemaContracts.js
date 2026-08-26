@@ -1,3 +1,8 @@
+import {
+  ADMIN_AUDIT_COLLECTION,
+  ADMIN_AUDIT_INDEXES,
+} from "../db/schemas/auditLog.js";
+
 export const COLLECTIONS = {
   users: "users",
   materials: "materials",
@@ -12,6 +17,7 @@ export const COLLECTIONS = {
   savedMaterials: "saved_materials",
   refunds: "refunds",
   refundAuditLog: "refund_audit_log",
+  adminAuditLog: ADMIN_AUDIT_COLLECTION,
 };
 
 export const REQUIRED_INDEXES = {
@@ -41,6 +47,17 @@ export const REQUIRED_INDEXES = {
     {
       keys: { category: 1, price: 1, title: 1, description: 1 },
       options: { name: "materials_search_compound_idx", background: true },
+    },
+    // Public discovery filters on both of these on every request, so they are
+    // indexed to keep that query off a collection scan as soft-deleted and
+    // suspended-creator rows accumulate.
+    {
+      keys: { isDeleted: 1, visibility: 1, createdAt: -1 },
+      options: { name: "materials_active_catalog_idx", background: true },
+    },
+    {
+      keys: { creatorSuspended: 1, userAddress: 1 },
+      options: { name: "materials_creator_suspended_idx", background: true },
     },
   ],
   purchases: [
@@ -96,6 +113,21 @@ export const REQUIRED_INDEXES = {
     { keys: { refundId: 1, createdAt: 1 } },
     { keys: { correlationId: 1 } },
   ],
+  [ADMIN_AUDIT_COLLECTION]: ADMIN_AUDIT_INDEXES,
+};
+
+/**
+ * Collections holding transient rows that MongoDB should expire on its own.
+ *
+ * Declared here so the index verification suite can assert the TTL index is
+ * actually present: a missing `expireAfterSeconds` does not fail any query, it
+ * just quietly grows the collection forever.
+ */
+export const TTL_INDEXES = {
+  content_quarantine: {
+    keys: { expiresAt: 1 },
+    options: { expireAfterSeconds: 0, background: true },
+  },
 };
 
 export function applyTimestamps(record, now = new Date()) {
