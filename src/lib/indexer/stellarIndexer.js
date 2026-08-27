@@ -23,7 +23,14 @@ function duplicateKey(error) {
  */
 export function classifyIndexerError(error) {
   const code = error?.code;
-  if (code === "ECONNRESET" || code === "ECONNREFUSED" || code === "ETIMEDOUT" || code === 11600) {
+  if (
+    code === "ECONNRESET" ||
+    code === "ECONNREFUSED" ||
+    code === "ETIMEDOUT" ||
+    code === 11600 ||
+    code === "ENOTFOUND" ||
+    code === "EAI_AGAIN"
+  ) {
     return "transient";
   }
   // A bare numeric HTTP-style status code (whether surfaced as `.code` or
@@ -40,7 +47,11 @@ export function classifyIndexerError(error) {
     message.includes("network") ||
     message.includes("econnreset") ||
     message.includes("socket") ||
-    message.includes("topology was destroyed")
+    message.includes("topology was destroyed") ||
+    message.includes("fetch failed") ||
+    message.includes("failed to fetch") ||
+    message.includes("dns") ||
+    message.includes("getaddrinfo")
   ) {
     return "transient";
   }
