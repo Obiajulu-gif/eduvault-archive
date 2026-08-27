@@ -169,3 +169,7 @@ Concurrent approvals and concurrent worker instances cannot both submit the same
 Both `REFUND_SIGNING_DISABLED` and `REFUND_MAX_AMOUNT_PER_TX` are effectively enforced at the cryptographic boundary, inside `signRefundTransaction`. No alternate path to sign exists in the codebase. The integration tests prove both controls work in practice through the full real call chain.
 
 No gaps or vulnerabilities identified.
+
+## Signer versioning and rotation (#666)
+
+On top of the emergency kill switch and per-transaction cap, refund authorizations now carry a **signer version** and **expiry** (see `docs/refund-custody.md`). A compromised signer is disabled by bumping `RefundSignerVersion` on the purchase-manager contract - older versions are rejected (`RefundSignerDisabled`) while valid historical records remain intact, and replayed payloads are blocked by their expiry bound.

@@ -126,3 +126,13 @@ When a buyer requests a material download, the backend checks `entitlement_cache
 - [Soroban Contract Architecture](soroban-contract-architecture.md)
 - [Purchase Flow Architecture](purchase-flow-architecture.md)
 - [Stellar Integration Guide](stellar-integration.md)
+
+## Stale quote invalidation (#681)
+
+Every material carries a monotonic **sale-terms version** in the registry (`MaterialRegistry::get_sale_terms_version`), bumped on registration and on every `update_sale_terms`.
+
+- Buyers/UIs call `PurchaseManager::record_quote(buyer, material_id)` when a quote is rendered; the current version is stored for that `(buyer, material_id)`.
+- At purchase time the stored version is compared against the registry's current version; a mismatch rejects the attempt with `StaleSaleTermsQuote` so the buyer re-quotes and sees the refreshed price/asset before signing.
+- `PurchaseManager::verify_quote_version(material_id, quoted_version)` exposes the check directly for UI preflight.
+
+Price updates, asset changes, and stale-quote submissions are all rejected by the same version guard.

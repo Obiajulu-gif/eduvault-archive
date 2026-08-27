@@ -277,6 +277,18 @@ enum DataKey {
     Settlement(u64),
     Dispute(u64),
     PurchaseBuyer(u64),
+    /// Current refund signer version (#666): refund authorization payloads
+    /// carry the version they were signed under; bumping this key disables
+    /// all older signer versions without touching valid historical records.
+    RefundSignerVersion,
+    /// Pending mobile checkout attempt (#684): `(buyer, material_id)` ->
+    /// pending attempt state so an interrupted wallet signing can be resumed
+    /// or safely cancelled, and duplicates are blocked while pending.
+    PendingCheckout((Address, BytesN<32>)),
+    /// The sale-terms version a buyer's quote was rendered at (#681):
+    /// `(buyer, material_id)` -> u32. Compared against the registry's current
+    /// version at purchase time; a mismatch rejects the stale quote.
+    QuotedSaleTermsVersion((Address, BytesN<32>)),
     /// The admin address that called `transfer_admin`, so `accept_admin` can
     /// revoke that specific admin's role once the transfer completes (#463).
     PendingAdminFrom,
@@ -396,6 +408,23 @@ pub enum PurchaseError {
     RedemptionAlreadyExists = 98,
     InvalidExpiry = 99,
     TooManyActiveGrants = 100,
+
+    // Quote invalidation (#681)
+    StaleSaleTermsQuote = 110,
+    StaleQuoteAsset = 111,
+
+    // Refund signer versioning (#666)
+    RefundAuthorizationExpired = 120,
+    RefundSignerDisabled = 121,
+    RefundSignerVersionMismatch = 122,
+
+    // Entitlement reconciliation (#665)
+    EntitlementStale = 130,
+    EntitlementRevoked = 131,
+
+    // Mobile checkout recovery (#684)
+    CheckoutPending = 140,
+    CheckoutNotFound = 141,
 }
 
 /// Event: purchase.completed
@@ -684,6 +713,14 @@ pub trait MaterialRegistryInterface {
         env: &Env,
         material_id: &BytesN<32>,
     ) -> Result<MaterialRecord, PurchaseError>;
+
+    /// Sale-terms version (#681): bumped by the registry on every
+    /// `update_sale_terms`; used to reject stale buyer quotes.
+    fn get_sale_terms_version(
+        &self,
+        env: &Env,
+        material_id: &BytesN<32>,
+    ) -> Result<u32, PurchaseError>;
 }
 
 /// Interface implementation using cross-contract call
@@ -695,6 +732,20 @@ impl MaterialRegistryInterface for Address {
     ) -> Result<MaterialRecord, PurchaseError> {
         let func = Symbol::new(env, "get_material");
         let result: Result<MaterialRecord, PurchaseError> = env.invoke_contract(
+            self,
+            &func,
+            Vec::from_array(env, [material_id.into_val(env)]),
+        );
+        result.map_err(|_| PurchaseError::RegistryCallFailed)
+    }
+
+    fn get_sale_terms_version(
+        &self,
+        env: &Env,
+        material_id: &BytesN<32>,
+    ) -> Result<u32, PurchaseError> {
+        let func = Symbol::new(env, "get_sale_terms_version");
+        let result: Result<u32, PurchaseError> = env.invoke_contract(
             self,
             &func,
             Vec::from_array(env, [material_id.into_val(env)]),
@@ -776,6 +827,13 @@ impl PurchaseManager {
             return Err(PurchaseError::EntitlementAlreadyExists);
         }
 
+        // Mobile checkout recovery (#684): a pending attempt blocks duplicate
+        // submission until it is resumed or cancelled.
+        let checkout_key = DataKey::PendingCheckout((buyer.clone(), material_id.clone()));
+        if env.storage().instance().has(&checkout_key) {
+            return Err(PurchaseError::CheckoutPending);
+        }
+
         let material: MaterialRecord = config
             .registry
             .get_material(&env, &material_id)
@@ -793,6 +851,20 @@ impl PurchaseManager {
         }
         if quote.amount <= 0 {
             return Err(PurchaseError::InvalidQuoteAmount);
+        }
+
+        // Bind the purchase to the current sale-terms version (#681): if the
+        // creator changed price or asset since the buyer's quote was rendered,
+        // the version moved and this attempt is rejected.
+        let quoted_version: Option<u32> = env
+            .storage()
+            .instance()
+            .get(&DataKey::QuotedSaleTermsVersion((buyer.clone(), material_id.clone())));
+        if let Some(quoted) = quoted_version {
+            let current = config.registry.get_sale_terms_version(&env, &material_id)?;
+            if quoted != current {
+                return Err(PurchaseError::StaleSaleTermsQuote);
+            }
         }
 
         validate_payout_shares(&material.payout_shares)?;
@@ -894,6 +966,12 @@ impl PurchaseManager {
             transaction_id,
         }
         .publish(&env);
+
+        // A completed purchase clears any pending mobile checkout state (#684).
+        env.storage().instance().remove(&checkout_key);
+        env.storage()
+            .instance()
+            .remove(&DataKey::QuotedSaleTermsVersion((buyer, material_id)));
 
         Ok(purchase_id)
     }
@@ -1156,6 +1234,159 @@ impl PurchaseManager {
     /// Check if a buyer has an active entitlement for a material
     pub fn has_entitlement(env: Env, material_id: BytesN<32>, buyer: Address) -> bool {
         has_entitlement_internal(&env, &material_id, &buyer)
+    }
+
+    /// Reconcile a buyer's cached entitlement against on-contract purchase
+    /// state before a protected download (#665).
+    ///
+    /// A cached `active: true` entitlement can be stale: the settlement may
+    /// have been refunded (entitlement revoked) or the purchase may not exist
+    /// at all (missing indexer event). This returns the *safe* answer instead
+    /// of trusting the cache: `true` only when the settlement exists and is
+    /// still `Pending` with an active entitlement; otherwise a denied state
+    /// with a stable error so a stale cache can never grant access silently.
+    pub fn reconcile_entitlement(
+        env: Env,
+        material_id: BytesN<32>,
+        buyer: Address,
+    ) -> Result<bool, PurchaseError> {
+        let key = DataKey::Entitlement((material_id.clone(), buyer.clone()));
+        let entitlement: EntitlementRecord = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .ok_or(PurchaseError::EntitlementRevoked)?;
+
+        if !entitlement.active {
+            return Err(PurchaseError::EntitlementRevoked);
+        }
+
+        // Verify the purchase's settlement is still Pending (not refunded or
+        // released) — a revoked/refunded purchase must not authorize downloads.
+        let settlement = get_settlement_record_internal(&env, entitlement.purchase_id)
+            .ok_or(PurchaseError::EntitlementStale)?;
+        if settlement.state != SettlementState::Pending {
+            return Err(PurchaseError::EntitlementStale);
+        }
+
+        Ok(true)
+    }
+
+    /// Verify a refund authorization payload carrying a signer version and
+    /// expiry (#666). The current signer version lives in instance storage;
+    /// bumping it (via `set_refund_signer_version`) disables every older
+    /// signer without breaking valid historical records. Replayed payloads
+    /// are rejected by the expiry bound.
+    pub fn verify_refund_authorization(
+        env: Env,
+        signer_version: u32,
+        issued_at: u64,
+        expires_at: u64,
+    ) -> Result<(), PurchaseError> {
+        let current: u32 = env
+            .storage()
+            .instance()
+            .get::<_, u32>(&DataKey::RefundSignerVersion)
+            .unwrap_or(1);
+        if signer_version != current {
+            return Err(PurchaseError::RefundSignerVersionMismatch);
+        }
+        if signer_version < current {
+            return Err(PurchaseError::RefundSignerDisabled);
+        }
+        let ledger_ts: u64 = env.ledger().timestamp();
+        if ledger_ts < issued_at || ledger_ts > expires_at {
+            return Err(PurchaseError::RefundAuthorizationExpired);
+        }
+        Ok(())
+    }
+
+    /// Set (or bump) the refund signer version (#666). A bump disables all
+    /// authorizations signed with older versions — the compromise recovery
+    /// workflow. Returns the new active version.
+    pub fn set_refund_signer_version(env: Env, admin: Address, version: u32) -> Result<u32, PurchaseError> {
+        auth::require_admin(&env, &admin)?;
+        if version == 0 {
+            return Err(PurchaseError::NotAuthorized);
+        }
+        env.storage()
+            .instance()
+            .set(&DataKey::RefundSignerVersion, &version);
+        Ok(version)
+    }
+
+    /// Verify a buyer's quoted sale-terms version is still current (#681).
+    /// Pass the version the buyer saw when the quote was rendered; after the
+    /// creator updates price or asset, the registry's version is higher and
+    /// the pending purchase attempt is rejected so the buyer re-quotes.
+    pub fn verify_quote_version(
+        env: Env,
+        material_id: BytesN<32>,
+        quoted_version: u32,
+    ) -> Result<(), PurchaseError> {
+        let config = get_platform_config(&env)?;
+        let current: u32 = config
+            .registry
+            .get_sale_terms_version(&env, &material_id)
+            .map_err(|_| PurchaseError::MaterialNotFound)?;
+        if quoted_version != current {
+            return Err(PurchaseError::StaleSaleTermsQuote);
+        }
+        Ok(())
+    }
+
+    /// Record the sale-terms version a buyer's quote was rendered at (#681).
+    /// The buyer calls this (or the UI calls it) when a quote is shown; the
+    /// version is then checked at purchase time so a creator-side terms
+    /// update invalidates the pending purchase attempt.
+    pub fn record_quote(
+        env: Env,
+        buyer: Address,
+        material_id: BytesN<32>,
+    ) -> Result<u32, PurchaseError> {
+        buyer.require_auth();
+        let config = get_platform_config(&env)?;
+        let current = config
+            .registry
+            .get_sale_terms_version(&env, &material_id)
+            .map_err(|_| PurchaseError::MaterialNotFound)?;
+        env.storage().instance().set(
+            &DataKey::QuotedSaleTermsVersion((buyer.clone(), material_id.clone())),
+            &current,
+        );
+        Ok(current)
+    }
+
+    /// Begin a mobile checkout attempt (#684): records a pending state for
+    /// `(buyer, material_id)` so an interrupted wallet signing can be resumed
+    /// and duplicate submissions are blocked while pending.
+    pub fn begin_checkout(
+        env: Env,
+        buyer: Address,
+        material_id: BytesN<32>,
+    ) -> Result<(), PurchaseError> {
+        buyer.require_auth();
+        let key = DataKey::PendingCheckout((buyer.clone(), material_id.clone()));
+        if env.storage().instance().has(&key) {
+            return Err(PurchaseError::CheckoutPending);
+        }
+        let ledger_ts: u64 = env.ledger().timestamp();
+        env.storage().instance().set(&key, &ledger_ts);
+        Ok(())
+    }
+
+    /// Cancel a pending mobile checkout attempt (#684). Safe to call after an
+    /// interrupted wallet signing; a missing attempt is not an error (the
+    /// purchase may have completed and already cleared it).
+    pub fn cancel_checkout(
+        env: Env,
+        buyer: Address,
+        material_id: BytesN<32>,
+    ) -> Result<(), PurchaseError> {
+        buyer.require_auth();
+        let key = DataKey::PendingCheckout((buyer.clone(), material_id.clone()));
+        env.storage().instance().remove(&key);
+        Ok(())
     }
 
     /// Get entitlement details for a buyer and material
