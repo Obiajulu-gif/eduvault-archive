@@ -7,6 +7,7 @@ import { getDb } from '@/lib/mongodb';
 import { requireAdmin } from '@/lib/api/auth';
 import { proposeSanction, approveSanction, fileAppeal, resolveAppeal } from '@/lib/moderation/cases';
 import { auditLog } from '@/lib/api/audit';
+import { appendAuditRecord } from '@/lib/backend/auditLedger';
 
 export async function GET(request) {
   return withApiHardening(
@@ -42,10 +43,18 @@ export async function POST(request) {
         return NextResponse.json({ error: 'Unauthorized. Admin access required.' }, { status: 403 });
       }
 
+      let db;
+      let actorId;
+      let operationId;
+      let action;
+      let caseId;
       try {
         const data = await request.json();
-        const { action, caseId, sanction, decision, reason } = data;
-        const actorId = admin.walletAddress || admin.sub || data.actorId;
+        ({ action, caseId } = data);
+        const { sanction, decision, reason } = data;
+        actorId = admin.walletAddress || admin.sub || data.actorId;
+        operationId = request.headers.get('x-idempotency-key') || `${action}:${caseId}:${actorId}`;
+        db = await getDb();
 
         let result;
         switch (action) {
@@ -69,10 +78,33 @@ export async function POST(request) {
             return NextResponse.json({ error: 'Invalid action' }, { status: 400 });
         }
 
+        await appendAuditRecord({
+          db,
+          operationId,
+          actor: actorId,
+          action: `moderation.${action}`,
+          target: { type: 'moderation_case', id: String(caseId) },
+          intent: { action, sanction, decision, reason },
+          result: { success: true },
+          reason,
+        });
+
         return NextResponse.json(result);
       } catch (err) {
         console.error('Moderation action error:', err);
         auditLog({ event: 'moderation_action_error', status: 500, reason: err.message });
+        if (db && action && caseId && actorId) {
+          await appendAuditRecord({
+            db,
+            operationId: `${operationId}:failed`,
+            actor: actorId,
+            action: `moderation.${action}.failed`,
+            target: { type: 'moderation_case', id: String(caseId) },
+            intent: { action },
+            result: { success: false, error: err.message },
+            reason: err.message,
+          });
+        }
         return NextResponse.json({ error: err.message }, { status: 400 });
       }
     }

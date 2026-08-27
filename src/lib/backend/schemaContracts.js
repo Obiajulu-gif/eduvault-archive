@@ -12,6 +12,8 @@ export const COLLECTIONS = {
   savedMaterials: "saved_materials",
   refunds: "refunds",
   refundAuditLog: "refund_audit_log",
+  auditLedger: "audit_ledger",
+  auditCheckpoints: "audit_checkpoints",
 };
 
 export const REQUIRED_INDEXES = {
@@ -95,6 +97,15 @@ export const REQUIRED_INDEXES = {
   refund_audit_log: [
     { keys: { refundId: 1, createdAt: 1 } },
     { keys: { correlationId: 1 } },
+  ],
+  audit_ledger: [
+    { keys: { sequence: 1 }, options: { unique: true } },
+    { keys: { operationId: 1 }, options: { unique: true } },
+    { keys: { action: 1, createdAt: -1 } },
+    { keys: { "target.type": 1, "target.id": 1, sequence: 1 } },
+  ],
+  audit_checkpoints: [
+    { keys: { sequence: 1 }, options: { unique: true } },
   ],
 };
 

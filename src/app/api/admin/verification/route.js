@@ -5,6 +5,7 @@ import { NextResponse } from "next/server";
 import { getDb } from "@/lib/mongodb";
 import { getUserFromCookie } from "@/lib/api/auth";
 import { auditLog } from "@/lib/api/audit";
+import { appendAuditRecord } from "@/lib/backend/auditLedger";
 
 async function getAdminUser(request) {
   const user = await getUserFromCookie(request);
@@ -76,6 +77,16 @@ export async function POST(request) {
         }
       );
     }
+
+    await appendAuditRecord({
+      db,
+      operationId: request.headers.get("x-idempotency-key") || `verification:${applicationId}:${action}`,
+      actor: admin.sub || admin._id,
+      action: `verification.${action}`,
+      target: { type: "verification_application", id: String(applicationId) },
+      intent: { action, applicationId },
+      result: { status: newStatus },
+    });
 
     auditLog({
       event: `admin_verification_${action}`,

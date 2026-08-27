@@ -7,6 +7,7 @@ import { getDb } from '@/lib/mongodb'
 import { verifyDashboardToken } from '@/lib/auth/session'
 import { auditLog } from '@/lib/api/audit'
 import { sendSuspensionEmail, sendReactivationEmail } from '@/lib/email/suspensionNotifier'
+import { appendAuditRecord } from '@/lib/backend/auditLedger'
 
 async function getAdminUser(request) {
   const cookieHeader = request.headers.get('cookie') || ''
@@ -79,6 +80,17 @@ export async function POST(request) {
         },
       }
     )
+
+    await appendAuditRecord({
+      db,
+      operationId: request.headers.get('x-idempotency-key') || `${action}:${userId}:${targetUser.status || 'active'}:${admin.sub}`,
+      actor: admin.sub,
+      action: `user.${action}`,
+      target: { type: 'user', id: userId },
+      intent: { action, reason },
+      result: { status: newStatus },
+      reason,
+    })
 
     auditLog({
       event: isSuspending ? 'user_suspended' : 'user_reactivated',
