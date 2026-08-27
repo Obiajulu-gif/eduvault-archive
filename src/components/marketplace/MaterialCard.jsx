@@ -114,6 +114,11 @@ export default function MaterialCard({ material, isInCart, isInComparison, onAdd
                 {getFileIcon(material.fileType)}
                 <span className="uppercase font-medium">{material.fileType || "pdf"}</span>
               </span>
+              <span className="flex items-center gap-1" title={`Language: ${material.language || "English"}`}>
+                <span className="font-semibold px-1.5 py-0.2 bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-300 rounded text-[10px]">
+                  {material.language || "English"}
+                </span>
+              </span>
               <span className="flex items-center gap-1">
                 <FaHeart className="w-3 h-3" />
                 {material.likes || 0}

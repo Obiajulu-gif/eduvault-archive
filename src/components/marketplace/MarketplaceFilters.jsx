@@ -15,18 +15,28 @@ const LEVEL_OPTIONS = [
 
 const SORT_OPTIONS = ["Popular", "Price: Low to High", "Price: High to Low", "Newest", "Top Rated"];
 
+const LANGUAGE_OPTIONS = [
+  { id: "", label: "Any Language" },
+  { id: "English", label: "English" },
+  { id: "Spanish", label: "Spanish" },
+  { id: "French", label: "French" },
+  { id: "German", label: "German" },
+  { id: "Chinese", label: "Chinese" },
+  { id: "Arabic", label: "Arabic" },
+  { id: "Portuguese", label: "Portuguese" },
+  { id: "Japanese", label: "Japanese" },
+  { id: "Unknown", label: "Unknown" },
+];
+
 export default function MarketplaceFilters({
   subjects, categories, subjectsLoading,
-  searchQuery, activeSubject, activeCategory, activeLevel, sortBy,
-  onSearchChange, onSubjectChange, onCategoryChange, onLevelChange, onSortByChange,
+  searchQuery, activeSubject, activeCategory, activeLevel, activeLanguage = "", sortBy,
+  onSearchChange, onSubjectChange, onCategoryChange, onLevelChange, onLanguageChange = () => {}, onSortByChange,
   onPageReset,
 }) {
   const [searchInput, setSearchInput] = useState(searchQuery);
   const debounceRef = useRef(null);
 
-  // Keep the local input in sync when the query changes externally
-  // (URL restore, "clear filters", subject quick-search). Cancel any pending
-  // local-search debounce so the stale callback can't overwrite the new query.
   useEffect(() => {
     clearTimeout(debounceRef.current);
     debounceRef.current = null;
@@ -182,6 +192,20 @@ export default function MarketplaceFilters({
               className="bg-transparent text-sm focus-visible:ring-2 focus-visible:ring-blue-500"
             >
               {LEVEL_OPTIONS.map((opt) => (
+                <option key={opt.id} value={opt.id}>{opt.label}</option>
+              ))}
+            </select>
+          </div>
+
+          <div className="flex items-center bg-gray-50 dark:bg-surface-muted border border-gray-200 dark:border-border-strong rounded-lg px-3 py-2 hidden sm:flex">
+            <span className="text-gray-500 dark:text-muted-foreground text-sm mr-2">Lang:</span>
+            <select
+              value={activeLanguage}
+              onChange={(e) => { onLanguageChange(e.target.value); onPageReset(); }}
+              aria-label="Filter by language"
+              className="bg-transparent text-sm focus-visible:ring-2 focus-visible:ring-blue-500"
+            >
+              {LANGUAGE_OPTIONS.map((opt) => (
                 <option key={opt.id} value={opt.id}>{opt.label}</option>
               ))}
             </select>

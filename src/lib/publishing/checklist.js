@@ -83,6 +83,12 @@ export const PUBLISH_RECOMMENDED_FIELDS = [
     check: (m) => !!(m.level && String(m.level).trim().length > 0),
   },
   {
+    key: "language",
+    label: "Language",
+    description: "Specify the language of the material for international learners.",
+    check: (m) => !!(m.language && String(m.language).trim().length > 0),
+  },
+  {
     key: "learningOutcomes",
     label: "Learning outcomes",
     description: "List what learners will achieve — improves engagement and discoverability.",

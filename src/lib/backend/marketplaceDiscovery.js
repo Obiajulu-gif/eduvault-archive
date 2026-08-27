@@ -78,6 +78,18 @@ function buildContentTypeQuery(value) {
   };
 }
 
+export const LANGUAGE_OPTIONS = [
+  { id: "", label: "Any Language" },
+  { id: "English", label: "English" },
+  { id: "Spanish", label: "Spanish" },
+  { id: "French", label: "French" },
+  { id: "German", label: "German" },
+  { id: "Chinese", label: "Chinese" },
+  { id: "Arabic", label: "Arabic" },
+  { id: "Portuguese", label: "Portuguese" },
+  { id: "Japanese", label: "Japanese" },
+];
+
 export function buildMarketplaceDiscoveryQuery(searchParams, { now = new Date() } = {}) {
   const query = {
     visibility: "public",
@@ -116,6 +128,7 @@ export function buildMarketplaceDiscoveryQuery(searchParams, { now = new Date() 
   const subject = sanitizeString(searchParams.get("subject"), { maxLength: 80 });
   const category = sanitizeString(searchParams.get("category"), { maxLength: 80 });
   const level = sanitizeString(searchParams.get("level"), { maxLength: 80 });
+  const language = sanitizeString(searchParams.get("language"), { maxLength: 60 });
   const creator = sanitizeString(searchParams.get("creator"), { maxLength: 120 });
   const licenseType = getLicenseValue(searchParams.get("licenseType") || searchParams.get("usageRights"));
   const contentTypeQuery = buildContentTypeQuery(searchParams.get("contentType"));
@@ -127,6 +140,20 @@ export function buildMarketplaceDiscoveryQuery(searchParams, { now = new Date() 
   if (subject) query.subject = subject;
   if (category) query.category = category;
   if (level) query.level = level;
+  if (language) {
+    if (language.toLowerCase() === "unknown") {
+      andClauses.push({
+        $or: [
+          { language: { $exists: false } },
+          { language: null },
+          { language: "" },
+          { language: "Unknown" },
+        ],
+      });
+    } else {
+      query.language = new RegExp(`^${escapeRegExp(language)}$`, "i");
+    }
+  }
   if (creator) query.author = creator;
   if (licenseType) query.usageRights = licenseType;
   if (contentTypeQuery) andClauses.push(contentTypeQuery);

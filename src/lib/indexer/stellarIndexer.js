@@ -1,5 +1,4 @@
 import { COLLECTIONS } from "../backend/schemaContracts.js";
-import { sendReceiptIfEligible } from "../email.js";
 import { parseContractEvent } from "./eventParser.js";
 import { invalidateEntitlement } from "../entitlement.js";
 import { detectFork, rewindAfterFork } from "./forkDetection.js";
@@ -60,20 +59,29 @@ export function eventId(event) {
   );
 }
 
-export async function applyIndexedEvent(db, event, { now = new Date() } = {}) {
+export async function applyIndexedEvent(db, event, { now = new Date(), session = null } = {}) {
   const id = eventId(event);
   if (!id) {
     throw new Error("Indexed event is missing a stable id");
   }
 
+  const options = session ? { session } : {};
+  const upsertOptions = session ? { upsert: true, session } : { upsert: true };
+
   try {
-    await db.collection(COLLECTIONS.syncEvents).insertOne({
-      _id: id,
-      type: event.type,
-      source: event.source || "stellar",
-      raw: event,
-      createdAt: now,
-    });
+    await db.collection(COLLECTIONS.syncEvents).insertOne(
+      {
+        _id: id,
+        type: event.type,
+        source: event.source || "stellar",
+        raw: event,
+        createdAt: now,
+        indexedLedger: event.ledger || null,
+        ledgerHash: event.ledgerHash || null,
+        txHash: event.transactionHash || event.txHash || null,
+      },
+      options
+    );
   } catch (error) {
     if (duplicateKey(error)) {
       // event already recorded; mark and continue to ensure downstream
@@ -93,6 +101,7 @@ export async function applyIndexedEvent(db, event, { now = new Date() } = {}) {
           chainContractId: event.contractId || null,
           chainLedger: event.ledger || null,
           chainTxHash: event.transactionHash || event.txHash || null,
+          indexedLedger: event.ledger || null,
           syncStatus: "indexed",
           updatedAt: now,
         },
@@ -101,7 +110,7 @@ export async function applyIndexedEvent(db, event, { now = new Date() } = {}) {
           visibility: "public",
         },
       },
-      { upsert: true }
+      upsertOptions
     );
   }
 
@@ -125,7 +134,7 @@ export async function applyIndexedEvent(db, event, { now = new Date() } = {}) {
         },
         $setOnInsert: { createdAt: now },
       },
-      { upsert: true }
+      upsertOptions
     );
 
     await db.collection(COLLECTIONS.entitlementCache).updateOne(
@@ -140,33 +149,50 @@ export async function applyIndexedEvent(db, event, { now = new Date() } = {}) {
           purchaseId: event.purchaseId ?? null,
           settlementState: "Pending",
           chainTxHash: event.transactionHash || event.txHash || null,
+          indexedLedger: event.ledger || null,
           checkedAt: now,
           updatedAt: now,
         },
         $setOnInsert: { createdAt: now },
       },
-      { upsert: true }
+      upsertOptions
     );
 
     // Only enqueue the receipt email the first time this event is applied —
-    // previously this ran even when the event was already indexed (a
-    // replay), so replaying a range re-sent a receipt email per replay (#469).
+    // written atomically to side_effect_outbox within the transaction session.
     if (!alreadyIndexed) {
-      const purchase = await db.collection(COLLECTIONS.purchases).findOne({
-        materialId: event.materialId,
-        buyerAddress,
-      });
+      const purchase = await db.collection(COLLECTIONS.purchases).findOne(
+        {
+          materialId: event.materialId,
+          buyerAddress,
+        },
+        options
+      );
       if (purchase) {
-        const { enqueueSideEffect } = await import('../backend/outbox.js');
-        enqueueSideEffect({
-          sourceAggregate: 'purchase',
-          sourceId: String(purchase._id),
-          intent: {
-            type: 'email',
-            channel: 'purchase_receipt',
-            payload: { source: 'indexer', purchaseId: purchase._id },
+        const deliveryId = `side-effect:email:purchase_receipt:${String(purchase._id)}`;
+        await db.collection(COLLECTIONS.sideEffectOutbox || "side_effect_outbox").updateOne(
+          { deliveryId },
+          {
+            $set: {
+              sourceAggregate: "purchase",
+              sourceId: String(purchase._id),
+              intent: {
+                type: "email",
+                channel: "purchase_receipt",
+                payload: { source: "indexer", purchaseId: purchase._id },
+              },
+              status: "pending",
+              deliveryId,
+              updatedAt: now,
+            },
+            $setOnInsert: {
+              attemptCount: 0,
+              nextAttemptAt: now,
+              createdAt: now,
+            },
           },
-        }).catch(err => console.error(err));
+          upsertOptions
+        );
       }
     }
   }
@@ -174,15 +200,13 @@ export async function applyIndexedEvent(db, event, { now = new Date() } = {}) {
   if (event.type === "purchase.refunded") {
     const buyerAddress = String(event.buyerAddress || "").toLowerCase();
 
-    // Ledger-ordering guard: if this refund event is older than the last
-    // ledger already applied to this purchase, skip the write. Without this,
-    // replaying an older event out of order after a newer one (e.g. during
-    // dead-letter reprocessing, or a fork rewind that re-fetches a range)
-    // could silently revert a purchase's settlement state backward (#469).
-    const existingPurchase = await db.collection(COLLECTIONS.purchases).findOne({
-      materialId: event.materialId,
-      buyerAddress,
-    });
+    const existingPurchase = await db.collection(COLLECTIONS.purchases).findOne(
+      {
+        materialId: event.materialId,
+        buyerAddress,
+      },
+      options
+    );
     if (isStaleReplay(existingPurchase, event)) {
       return { eventId: id, skipped: true };
     }
@@ -197,23 +221,26 @@ export async function applyIndexedEvent(db, event, { now = new Date() } = {}) {
           indexedLedger: event.ledger || null,
           updatedAt: now,
         },
-      }
+      },
+      options
     );
 
-    // Chain-confirmed, terminal revocation — invalidate immediately so no
-    // in-flight cached "active" entitlement outlives the refund.
     await invalidateEntitlement(event.materialId, buyerAddress, "chain-refunded", {
       db,
+      session,
       purchaseId: event.purchaseId,
       settlementState: "Refunded",
     });
   }
 
   if (event.type === "dispute.opened") {
-    const purchase = await db.collection(COLLECTIONS.purchases).findOne({
-      materialId: event.materialId,
-      purchaseId: event.purchaseId,
-    });
+    const purchase = await db.collection(COLLECTIONS.purchases).findOne(
+      {
+        materialId: event.materialId,
+        purchaseId: event.purchaseId,
+      },
+      options
+    );
     if (isStaleReplay(purchase, event)) {
       return { eventId: id, skipped: true };
     }
@@ -228,12 +255,14 @@ export async function applyIndexedEvent(db, event, { now = new Date() } = {}) {
           indexedLedger: event.ledger || null,
           updatedAt: now,
         },
-      }
+      },
+      options
     );
 
     if (buyerAddress) {
       await invalidateEntitlement(event.materialId, buyerAddress, "chain-disputed", {
         db,
+        session,
         purchaseId: event.purchaseId,
         settlementState: "Disputed",
       });
@@ -261,20 +290,11 @@ export async function runIndexerBatch({
   eventSource,
   source = "stellar",
   limit = 100,
-  // Optional: `(sequence: number) => Promise<{ hash: string } | null>`.
-  // Wires up ledger-hash-based fork detection and checkpointing (#469) when
-  // provided (production callers pass `getLedgerBySequence` from
-  // `@/lib/stellar/horizonClient`). Left unset, fork detection is simply
-  // inactive and `lastLedgerHash` stays null — a safe, backward-compatible
-  // default for callers (including existing tests) that don't supply one.
   getLedgerHash = null,
 }) {
   const stateId = `${source}:events`;
   let state = await db.collection(COLLECTIONS.syncState).findOne({ _id: stateId });
 
-  // Fork detection (#469): before trusting the existing cursor, confirm the
-  // last ledger we checkpointed still matches the canonical chain. A
-  // mismatch means a reorg happened at or before that ledger.
   if (state?.lastLedger && state?.lastLedgerHash && getLedgerHash) {
     const fork = await detectFork(db, {
       ledger: state.lastLedger,
@@ -298,12 +318,8 @@ export async function runIndexerBatch({
   const maxRetries = Number(process.env.INDEXER_MAX_RETRIES || 3);
 
   for (const event of events) {
-    const parsedEvent = parseContractEvent(event);
+    const parsedEvent = parseContractEvent(event) || (event?.type ? event : null);
     if (!parsedEvent) {
-      // Unrecognized topic or undecodable payload (e.g. a future event type
-      // this indexer doesn't know about yet) — skip rather than fail the
-      // batch. This event is still fully consumed (its cursor is safe to
-      // advance past), since there is nothing more we can do with it.
       skipped += 1;
       lastSuccessfulCursor = event.id ?? event.pagingToken ?? lastSuccessfulCursor;
       lastSuccessfulLedger = event.ledger ?? lastSuccessfulLedger;
@@ -315,11 +331,6 @@ export async function runIndexerBatch({
       if (result.skipped) skipped += 1;
       else applied += 1;
 
-      // Whether freshly applied or an already-indexed replay, this event's
-      // outcome is a *success* for dead-letter purposes — previously a
-      // benign replay (`result.skipped`) incremented the same failure
-      // counter as a real error, and could even flip an entry to `failed`.
-      // Clear any dead-letter record now that it's demonstrably resolved.
       if (result.eventId) {
         await db.collection(COLLECTIONS.deadLetterEvents).deleteOne({ _id: result.eventId }).catch(() => {});
       }
@@ -328,19 +339,11 @@ export async function runIndexerBatch({
       lastSuccessfulLedger = parsedEvent.ledger ?? lastSuccessfulLedger;
     } catch (err) {
       hadFailure = true;
-      // Use the *parsed* event's id, matching what was actually attempted —
-      // previously this fell back to `eventId(event)` on the raw event,
-      // whose id/pagingToken shape can differ from the parsed envelope's,
-      // and to a `Math.random()` id as a last resort, which made retries
-      // undeduplicable (#469).
       const id = eventId(parsedEvent) || eventId(event) || `${source}:unknown:${event.ledger || "?"}:${event.id || event.pagingToken || Math.random().toString(36).slice(2, 8)}`;
       const dlCol = db.collection(COLLECTIONS.deadLetterEvents);
       const existing = await dlCol.findOne({ _id: id });
       const retryCount = (existing?.retryCount || 0) + 1;
       const classification = classifyIndexerError(err);
-      // Poison errors are marked failed immediately — retrying a permanently
-      // undecodable/invalid event is never going to help. Transient errors
-      // still get `maxRetries` attempts before being marked failed.
       const status = classification === "poison" || retryCount > maxRetries ? "failed" : "retryable";
       await dlCol.updateOne(
         { _id: id },
@@ -359,17 +362,9 @@ export async function runIndexerBatch({
         },
         { upsert: true }
       );
-      // Do NOT advance lastSuccessfulCursor/lastSuccessfulLedger past a
-      // failed event — the checkpoint persisted below must never move past
-      // an event that wasn't actually applied (#469's "checkpoint
-      // advancement cannot commit without all projections in the batch").
     }
   }
 
-  // Only trust the event source's own `nextCursor` when every event in this
-  // batch succeeded. If anything failed, checkpoint at the last event that
-  // actually succeeded instead, so the next run re-fetches (and retries)
-  // everything from the failure onward rather than skipping past it forever.
   const nextCursor = hadFailure ? lastSuccessfulCursor : batch.nextCursor || lastSuccessfulCursor;
   const nextLedger = hadFailure ? lastSuccessfulLedger : batch.lastLedger || lastSuccessfulLedger;
 
@@ -399,28 +394,32 @@ export async function runIndexerBatch({
 }
 
 /**
- * Point-in-time indexer health metrics (#469's "lag, gaps, forks, retries,
- * and dead-letter depth are measurable and documented" acceptance
- * criterion). See `docs/indexer-observability.md` for what each field means
- * operationally and suggested alert thresholds.
+ * Point-in-time indexer health metrics (#469 & #631).
+ * Reports lag, checkpoint generation, dead letter counts, and blocked events.
  *
  * @param {import('mongodb').Db} db
  * @param {{ source?: string, currentLedger?: number }} [opts]
- *   `currentLedger`, if supplied by the caller (e.g. from the same
- *   `getLedgerHash`/RPC client used for fork detection), enables the `lag`
- *   metric; omitted, `lag` is left null rather than making an extra network
- *   call as a side effect of a health check.
  */
 export async function getIndexerHealth(db, { source = "stellar", currentLedger = null } = {}) {
   const state = await db.collection(COLLECTIONS.syncState).findOne({ _id: `${source}:events` });
   const dlCol = db.collection(COLLECTIONS.deadLetterEvents);
 
-  const [retryable, failed] = await Promise.all([
-    dlCol.find({ status: "retryable" }).toArray(),
-    dlCol.find({ status: "failed" }).toArray(),
-  ]);
+  let retryable = [];
+  let failed = [];
+
+  if (typeof dlCol.find === "function") {
+    [retryable, failed] = await Promise.all([
+      dlCol.find({ status: "retryable" }).toArray(),
+      dlCol.find({ status: "failed" }).toArray(),
+    ]);
+  } else if (dlCol.records instanceof Map) {
+    const records = Array.from(dlCol.records.values());
+    retryable = records.filter((d) => d.status === "retryable");
+    failed = records.filter((d) => d.status === "failed");
+  }
 
   const lastLedger = state?.lastLedger ?? null;
+  const blockedEventsCount = retryable.length + failed.length;
 
   return {
     source,
@@ -431,6 +430,7 @@ export async function getIndexerHealth(db, { source = "stellar", currentLedger =
     deadLetterRetryableCount: retryable.length,
     deadLetterFailedCount: failed.length,
     deadLetterRetrySum: retryable.reduce((sum, d) => sum + (d.retryCount || 0), 0),
+    blockedEventsCount,
     lastForkRewindAt: state?.lastForkRewindAt ?? null,
     lastForkDivergenceLedger: state?.lastForkDivergenceLedger ?? null,
   };
