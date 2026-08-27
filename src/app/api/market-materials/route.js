@@ -6,6 +6,7 @@ import { auditLog } from "@/lib/api/audit";
 import { withApiHardening } from "@/lib/api/hardening";
 import { parsePagination } from "@/lib/api/validation";
 import { buildMarketplaceDiscoveryQuery, buildMarketplaceSort } from "@/lib/backend/marketplaceDiscovery";
+import { MATERIAL_SEARCH_COLLECTION } from "@/lib/backend/materialSearchProjection";
 import { getDb } from "@/lib/mongodb";
 import { ObjectId } from "mongodb";
 import { cacheGet, cacheSet } from "@/lib/cache/redis";
@@ -56,7 +57,10 @@ export async function GET(request) {
         // already own the material reach it through the download route, which
         // authorizes on entitlement and deliberately skips these filters.
         isDeleted: { $ne: true },
+        archived: { $ne: true },
         creatorSuspended: { $ne: true },
+        legalTombstone: { $ne: true },
+        legalRemovedAt: { $exists: false },
       });
 
       if (!item) {
@@ -78,9 +82,9 @@ export async function GET(request) {
     const query = buildMarketplaceDiscoveryQuery(url.searchParams);
     const sort = buildMarketplaceSort(url.searchParams.get("sortBy"));
 
-    const total = await db.collection("materials").countDocuments(query);
+    const total = await db.collection(MATERIAL_SEARCH_COLLECTION).countDocuments(query);
     const items = await db
-      .collection("materials")
+      .collection(MATERIAL_SEARCH_COLLECTION)
       .find(query)
       .sort(sort)
       .skip((page - 1) * pageSize)

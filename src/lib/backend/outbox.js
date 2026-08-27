@@ -1,4 +1,4 @@
-import { getDb } from '@/lib/mongodb';
+import { getDb } from '../mongodb.js';
 import { v4 as uuidv7 } from 'uuid';
 
 const OUTBOX_COLLECTION = 'side_effect_outbox';
@@ -23,9 +23,12 @@ export async function enqueueSideEffect({
   sourceAggregate,
   sourceId,
   intent,
+  db,
+  session,
+  deliveryId,
   config = DEFAULT_CONFIG,
 }) {
-  const db = await getDb();
+  const database = db || await getDb();
   const now = new Date();
 
   const entry = {
@@ -35,7 +38,7 @@ export async function enqueueSideEffect({
     status: 'pending',
     leasedBy: null,
     leaseExpiresAt: null,
-    deliveryId: uuidv7(),
+    deliveryId: deliveryId || uuidv7(),
     attemptCount: 0,
     nextAttemptAt: now,
     lastError: null,
@@ -44,7 +47,18 @@ export async function enqueueSideEffect({
     updatedAt: now,
   };
 
-  const result = await db.collection(OUTBOX_COLLECTION).insertOne(entry);
+  const options = session ? { session } : undefined;
+  if (deliveryId) {
+    const collection = database.collection(OUTBOX_COLLECTION);
+    await collection.updateOne(
+      { deliveryId },
+      { $setOnInsert: entry },
+      { ...options, upsert: true },
+    );
+    return collection.findOne({ deliveryId }, options);
+  }
+
+  const result = await database.collection(OUTBOX_COLLECTION).insertOne(entry, options);
   return { ...entry, _id: result.insertedId };
 }
 

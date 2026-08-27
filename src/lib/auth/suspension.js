@@ -81,10 +81,32 @@ export async function setCreatorSuspendedFlag({ db, user, suspended }) {
 
   if (identifiers.length === 0) return { matched: 0, modified: 0 };
 
-  const result = await db.collection("materials").updateMany(
+  const materials = db.collection("materials");
+  const now = new Date();
+  const updatedAt = now.toISOString();
+  const affected = await materials.find({
+    $or: [{ userAddress: { $in: identifiers } }, { creatorId: { $in: identifiers } }],
+  }).toArray();
+
+  const result = await materials.updateMany(
     { $or: [{ userAddress: { $in: identifiers } }, { creatorId: { $in: identifiers } }] },
-    { $set: { creatorSuspended: suspended === true, updatedAt: new Date().toISOString() } }
+    [
+      {
+        $set: {
+          creatorSuspended: suspended === true,
+          updatedAt,
+          searchVersion: { $add: [{ $ifNull: ["$searchVersion", { $ifNull: ["$version", 1] }] }, 1] },
+        },
+      },
+    ]
   );
 
-  return { matched: result.matchedCount ?? 0, modified: result.modifiedCount ?? 0 };
+  const updated = affected.map((material) => ({
+    ...material,
+    creatorSuspended: suspended === true,
+    updatedAt,
+    searchVersion: Number(material.searchVersion || material.version || 1) + 1,
+  }));
+
+  return { matched: result.matchedCount ?? 0, modified: result.modifiedCount ?? 0, materials: updated };
 }
