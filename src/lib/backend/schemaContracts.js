@@ -72,7 +72,15 @@ export const REQUIRED_INDEXES = {
     { keys: { buyerAddress: 1, materialId: 1 }, options: { unique: true } },
     { keys: { active: 1, updatedAt: -1 } },
   ],
-  sync_state: [{ keys: { source: 1 }, options: { unique: true } }],
+  sync_state: [
+    { keys: { source: 1 }, options: { unique: true, sparse: true } },
+    // Lease & fencing token support (#632): let workers poll only claimable
+    // rows by state + lease expiry, and trace a generation/owner quickly.
+    { keys: { state: 1, leaseExpiresAt: 1 }, options: { name: "sync_state_lease_idx", background: true } },
+    { keys: { generation: 1 }, options: { name: "sync_state_generation_idx", background: true } },
+    { keys: { fencingToken: 1 }, options: { name: "sync_state_fencing_idx", background: true, sparse: true } },
+    { keys: { poisoned: 1 }, options: { name: "sync_state_poisoned_idx", background: true, sparse: true } },
+  ],
   sync_events: [{ keys: { _id: 1 }, options: { unique: true } }],
   collections: [
     { keys: { creatorId: 1, createdAt: -1 } },
