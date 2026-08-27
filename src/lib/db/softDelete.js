@@ -45,12 +45,13 @@ export function isSoftDeleted(material) {
  * a bulk moderation action.
  */
 export function buildSoftDeletePatch({ deletedBy, reason, now = new Date() }) {
+  const timestamp = now instanceof Date ? now : new Date(now);
   return {
     isDeleted: true,
-    deletedAt: now instanceof Date ? now : new Date(now),
+    deletedAt: timestamp,
     deletedBy: deletedBy ? String(deletedBy).slice(0, 300) : null,
     deletionReason: reason ? String(reason).slice(0, 1000) : null,
-    updatedAt: now instanceof Date ? now : new Date(now),
+    updatedAt: timestamp,
   };
 }
 
@@ -62,12 +63,13 @@ export function buildSoftDeletePatch({ deletedBy, reason, now = new Date() }) {
  * inspecting those fields. The audit log keeps the history.
  */
 export function buildRestorePatch({ now = new Date() } = {}) {
+  const timestamp = now instanceof Date ? now : new Date(now);
   return {
     isDeleted: false,
     deletedAt: null,
     deletedBy: null,
     deletionReason: null,
-    updatedAt: now instanceof Date ? now : new Date(now),
+    updatedAt: timestamp,
   };
 }
 
@@ -90,11 +92,14 @@ export async function softDeleteMaterial({
   if (!existing) return { ok: false, reason: "not_found" };
   if (isSoftDeleted(existing)) return { ok: false, reason: "already_deleted", material: existing };
 
-  await materials.updateOne(filter, {
-    $set: buildSoftDeletePatch({ deletedBy, reason, now }),
-  });
+  const patch = {
+    ...buildSoftDeletePatch({ deletedBy, reason, now }),
+    searchVersion: Number(existing.searchVersion || existing.version || 1) + 1,
+  };
 
-  return { ok: true, material: existing };
+  await materials.updateOne(filter, { $set: patch });
+
+  return { ok: true, material: existing, updatedMaterial: { ...existing, ...patch } };
 }
 
 /** Restore a previously retired listing. */
@@ -105,7 +110,12 @@ export async function restoreMaterial({ db, filter, now = new Date() }) {
   if (!existing) return { ok: false, reason: "not_found" };
   if (!isSoftDeleted(existing)) return { ok: false, reason: "not_deleted", material: existing };
 
-  await materials.updateOne(filter, { $set: buildRestorePatch({ now }) });
+  const patch = {
+    ...buildRestorePatch({ now }),
+    searchVersion: Number(existing.searchVersion || existing.version || 1) + 1,
+  };
 
-  return { ok: true, material: existing };
+  await materials.updateOne(filter, { $set: patch });
+
+  return { ok: true, material: existing, updatedMaterial: { ...existing, ...patch } };
 }

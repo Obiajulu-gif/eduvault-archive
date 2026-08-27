@@ -10,6 +10,7 @@ import { requireActiveUser, requireAdmin } from '@/lib/api/auth'
 import { recordAdminAction } from '@/lib/db/adminAudit'
 import { ADMIN_AUDIT_ACTIONS } from '@/lib/db/schemas/auditLog'
 import { restoreMaterial, softDeleteMaterial } from '@/lib/db/softDelete'
+import { enqueueMaterialSearchProjection } from '@/lib/backend/materialSearchProjection'
 
 /**
  * POST /api/materials/delete
@@ -105,6 +106,12 @@ export async function POST(request) {
       }[result.reason]
       return NextResponse.json({ error: message }, { status })
     }
+
+    await enqueueMaterialSearchProjection({
+      db,
+      material: result.updatedMaterial,
+      reason: action === 'delete' ? 'material_soft_deleted' : 'material_restored',
+    })
 
     if (admin) {
       // Awaited before responding: an admin takedown that cannot be attributed

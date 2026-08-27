@@ -18,6 +18,9 @@ export const COLLECTIONS = {
   refunds: "refunds",
   refundAuditLog: "refund_audit_log",
   adminAuditLog: ADMIN_AUDIT_COLLECTION,
+  materialSearchDocuments: "material_search_documents",
+  materialSearchTombstones: "material_search_tombstones",
+  materialSearchReconciliationAudit: "material_search_reconciliation_audit",
 };
 
 export const REQUIRED_INDEXES = {
@@ -114,6 +117,18 @@ export const REQUIRED_INDEXES = {
     { keys: { correlationId: 1 } },
   ],
   [ADMIN_AUDIT_COLLECTION]: ADMIN_AUDIT_INDEXES,
+  material_search_documents: [
+    { keys: { projectionVersion: 1 } },
+    { keys: { category: 1, subject: 1, projectedAt: -1 } },
+    { keys: { title: "text", description: "text", shortSummary: "text" }, options: { name: "material_search_text_idx", background: true } },
+  ],
+  material_search_tombstones: [
+    { keys: { version: 1 } },
+    { keys: { permanent: 1, updatedAt: -1 } },
+  ],
+  material_search_reconciliation_audit: [
+    { keys: { runId: 1, createdAt: 1 } },
+  ],
 };
 
 /**

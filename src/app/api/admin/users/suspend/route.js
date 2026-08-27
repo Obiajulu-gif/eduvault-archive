@@ -14,6 +14,7 @@ import {
   setCreatorSuspendedFlag,
 } from '@/lib/auth/suspension'
 import { sendSuspensionEmail, sendReactivationEmail } from '@/lib/email/suspensionNotifier'
+import { enqueueMaterialSearchProjection } from '@/lib/backend/materialSearchProjection'
 
 async function getAdminUser(request) {
   const cookieHeader = request.headers.get('cookie') || ''
@@ -91,6 +92,13 @@ export async function POST(request) {
       user: targetUser,
       suspended: isSuspending,
     })
+    for (const material of listings.materials || []) {
+      await enqueueMaterialSearchProjection({
+        db,
+        material,
+        reason: isSuspending ? 'creator_suspended' : 'creator_reactivated',
+      })
+    }
 
     // Append the durable audit row before responding. Awaited on purpose: an
     // admin action that cannot be attributed must not be reported as success.
