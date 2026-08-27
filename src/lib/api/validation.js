@@ -202,6 +202,10 @@ export function validateMaterialPayload(body) {
       maxItems: 6,
       maxLength: 280,
     }),
+    previewImages: normalizeStringList(body?.previewImages, {
+      maxItems: 5,
+      maxLength: 2048,
+    }),
     storageKey,
     fileUrl: storageKey,
   };
@@ -275,6 +279,13 @@ export function validateMaterialUpdatePayload(body) {
     } else {
       allowed.level = null;
     }
+  }
+
+  if (body.previewImages !== undefined) {
+    allowed.previewImages = normalizeStringList(body.previewImages, {
+      maxItems: 5,
+      maxLength: 2048,
+    });
   }
 
   if (Object.keys(allowed).length === 0) {

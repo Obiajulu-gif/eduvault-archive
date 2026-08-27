@@ -36,6 +36,9 @@ function getFileIcon(type) {
   }
 }
 
+const BLUR_DATA_URL =
+  "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII=";
+
 function MaterialThumbnail({ material }) {
   const [src, setSrc] = useState(() => getPreviewImage(material));
   return (
@@ -43,6 +46,8 @@ function MaterialThumbnail({ material }) {
       src={src}
       alt={material.title}
       fill
+      placeholder="blur"
+      blurDataURL={material.blurDataURL || BLUR_DATA_URL}
       className="object-cover group-hover:scale-105 transition-transform duration-500"
       onError={() => setSrc(FALLBACK_IMAGE)}
       sizes="(max-width: 640px) 100vw, (max-width: 1024px) 50vw, 25vw"
