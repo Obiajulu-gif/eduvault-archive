@@ -222,3 +222,9 @@ Download authorization is tied to verified on-contract purchase state, not just 
 - **Revoked entitlement or non-`Pending` settlement (refunded/released)** -> denied (`EntitlementRevoked` / `EntitlementStale`) - a stale cache can never grant access silently.
 
 Delayed events, missing events, and revoked entitlements all resolve to safe denied states instead of cached allow decisions.
+
+## Signed download capabilities and access logging (#675)
+
+Once `authorizeMaterialAccess()` allows a request, `GET /api/download` (`app/api/download/route.js`) issues a short-lived **capability token** — bound to the buyer, material, and requested byte range — rather than handing back a bare, indefinitely-usable IPFS URL. The token is HMAC-SHA256 signed (`lib/downloads/capabilityToken.js`, `DOWNLOAD_CAPABILITY_SECRET`) so none of its fields (buyer, byte range, expiry) can be altered client-side without invalidating the signature, and it expires after `CAPABILITY_TTL_MS` (default 15s).
+
+Every issuance and every denial is written to the `download_access_log` collection (`lib/downloads/accessLog.js`) — who requested what, when, and the outcome. The raw capability token and the signed gateway URL it appears in are never persisted; only the token's `jti` (a correlation id, not a usable credential) is logged.
