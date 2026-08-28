@@ -5,9 +5,15 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { useMarketplaceMaterials } from "@/hooks/api/useMaterials";
 import { useCart } from "@/hooks/useCart";
 import { useComparison } from "@/hooks/useComparison";
+import dynamic from "next/dynamic";
 import MarketplaceFilters from "./MarketplaceFilters";
 import MarketplaceGrid from "./MarketplaceGrid";
 import { MarketplaceFiltersSkeleton } from "./MarketplaceFiltersSkeleton";
+
+const RecentlyViewedMaterials = dynamic(
+  () => import("@/components/materials/RecentlyViewedMaterials"),
+  { ssr: false }
+);
 
 const SUBJECTS_CACHE_KEY = "marketplace-subjects";
 const SUBJECTS_CACHE_DURATION = 1000 * 60 * 60; // 1 hour
@@ -324,6 +330,9 @@ export function MarketplaceContent() {
           totalPages={totalPages}
           onPageChange={handlePageChange}
         />
+        <div className="mt-12">
+          <RecentlyViewedMaterials />
+        </div>
       </main>
     </>
   );

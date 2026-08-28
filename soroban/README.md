@@ -333,6 +333,7 @@ When contributing to the MaterialRegistry contract:
 ## Resources
 
 - [Soroban Documentation](https://developers.stellar.org/learn/soroban)
+- [Scholarship Credit Subsystem Documentation](../docs/soroban-scholarship-credits.md)
 - [Stellar JavaScript SDK](https://github.com/stellar/js-stellar-sdk)
 - [Soroban CLI Docs](https://developers.stellar.org/tools/soroban-cli)
 - [Stellar Testnet](https://stellar.expert/explorer/testnet/)
