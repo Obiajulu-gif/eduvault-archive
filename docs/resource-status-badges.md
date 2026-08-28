@@ -14,6 +14,9 @@ Status badges appear on marketplace cards, the resource detail page, and the cre
 | **Draft** | Gray | `visibility === "private"` | Not published — only visible to the creator |
 | **Unlisted** | Orange | `visibility === "unlisted"` | Accessible by direct link but not discoverable |
 | **Published** | Green | `visibility === "public"` | Fully public and discoverable |
+| **Unavailable** | Red | `syncStatus === "orphaned"` (chain reorg) **or** `creatorSuspended === true` | Access is temporarily blocked pending re-verification |
+| **Restricted** | Red | `moderationStatus` is `suspended`, `removed`, or `rejected` | Access is restricted pending moderation review |
+| **Stale** | Yellow | `updatedAt` is older than 24 hours | The other badges may not reflect the material's current state |
 
 ## Logic Rules
 
@@ -21,6 +24,7 @@ Status badges appear on marketplace cards, the resource detail page, and the cre
 - **New** is shown only when there are zero feedback entries *or* when the score is absent/zero.
 - **Top Rated** replaces **New** once a qualifying score exists.
 - **Draft**, **Unlisted**, and **Published** are mutually exclusive — only one visibility badge shows at a time.
+- **Unavailable**, **Restricted**, and **Stale** (#676) are derived from fields the indexer (`lib/indexer/forkDetection.js`) and moderation pipeline already write onto the material document — `deriveBadges` never makes a network call itself. They only appear when the caller's query actually projected those fields onto the `material` object passed in; a caller whose query strips them simply won't show these badges, rather than erroring.
 - Up to three badges are shown on cards (via `max={3}`); the detail page shows all.
 
 ## Component Usage
