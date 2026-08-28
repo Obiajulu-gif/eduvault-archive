@@ -1,5 +1,7 @@
 import { getDb } from '../mongodb.js';
 import { v4 as uuidv7 } from 'uuid';
+import { auditLog } from '../api/audit.js';
+import { slidingWindowRateLimit } from '../rateLimit.js';
 
 const OUTBOX_COLLECTION = 'side_effect_outbox';
 
@@ -36,6 +38,22 @@ export async function enqueueSideEffect({
 
   const stableDeliveryId = deliveryId || uuidv7();
 
+  // If the predecessor was already delivered before this successor was even
+  // enqueued (issue #635 — e.g. a very fast worker delivers effect N before
+  // effect N+1's caller finishes building it), `markDelivered`'s "unblock
+  // waiting successors" update ran too early to reach this row, since it
+  // didn't exist yet. Checking the predecessor's current status here closes
+  // that gap — without it, a successor enqueued after its predecessor
+  // already delivered would stay gated (`predecessorDelivered: false`)
+  // forever, since no future delivery re-triggers the unblock.
+  let predecessorDelivered = !previousDeliveryId;
+  if (previousDeliveryId) {
+    const predecessor = await database
+      .collection(OUTBOX_COLLECTION)
+      .findOne({ deliveryId: previousDeliveryId }, { projection: { status: 1 } });
+    predecessorDelivered = predecessor?.status === 'delivered';
+  }
+
   const entry = {
     sourceAggregate,
     sourceId,
@@ -46,7 +64,7 @@ export async function enqueueSideEffect({
     // a successor is never delivered before its predecessor.
     sourceVersion: typeof sourceVersion === 'number' ? sourceVersion : null,
     previousDeliveryId: previousDeliveryId || null,
-    predecessorDelivered: previousDeliveryId ? false : true,
+    predecessorDelivered,
     idempotencyKey: idempotencyKey || stableDeliveryId,
     status: 'pending',
     leasedBy: null,
@@ -81,17 +99,33 @@ export async function leaseNextIntent(workerId, config = DEFAULT_CONFIG) {
 
   const claimed = await db.collection(OUTBOX_COLLECTION).findOneAndUpdate(
     {
-      status: 'pending',
       nextAttemptAt: { $lte: now },
-      $or: [
-        { leaseExpiresAt: { $lte: now } },
-        { leaseExpiresAt: null },
-      ],
-      // Causal gating: never lease an effect before its predecessor has been
-      // delivered, so effects for one source stay in version order.
-      $or: [
-        { previousDeliveryId: null },
-        { predecessorDelivered: true },
+      // Two independent $or conditions can't both be object keys named
+      // "$or" (the second silently overwrote the first) — combined under
+      // $and so both the lease-availability check and the causal-ordering
+      // gate actually apply.
+      //
+      // Lease-availability also has to match `status: 'pending'` OR
+      // (`status: 'leased'` AND its lease has expired) — a lease that
+      // expired without an explicit reset stays `status: 'leased'`
+      // forever, so requiring `status: 'pending'` unconditionally (as a
+      // top-level field alongside this $and, rather than inside it) meant
+      // an expired lease could never actually be reclaimed.
+      $and: [
+        {
+          $or: [
+            { status: 'pending' },
+            { status: 'leased', leaseExpiresAt: { $lte: now } },
+          ],
+        },
+        // Causal gating: never lease an effect before its predecessor has
+        // been delivered, so effects for one source stay in version order.
+        {
+          $or: [
+            { previousDeliveryId: null },
+            { predecessorDelivered: true },
+          ],
+        },
       ],
     },
     {
@@ -109,9 +143,13 @@ export async function leaseNextIntent(workerId, config = DEFAULT_CONFIG) {
     }
   );
 
-  if (!claimed.value) return null;
+  // MongoDB Node driver v6 returns the matched document directly from
+  // findOneAndUpdate (or null) unless `includeResultMetadata: true` is
+  // passed — it no longer wraps the result in a `{ value }` envelope by
+  // default (that was the v4/v5 behavior). `claimed` here IS the document.
+  if (!claimed) return null;
 
-  const intent = claimed.value;
+  const intent = claimed;
   if (intent.attemptCount >= config.maxAttempts) {
     await db.collection(OUTBOX_COLLECTION).updateOne(
       { _id: intent._id },
@@ -133,8 +171,14 @@ export async function markDelivered(deliveryId, intentId) {
   const db = await getDb();
   const now = new Date();
 
+  // Filtering on `status: { $ne: 'delivered' }` (not just matching on
+  // _id/deliveryId) is what actually makes this idempotent: without it, a
+  // duplicate acknowledgement still matches (same _id/deliveryId) and the
+  // caller can't tell a fresh delivery from a no-op replay apart just from
+  // the return value (issue #635 — receivers need to be able to detect
+  // deduplication, not just "the write didn't error").
   const result = await db.collection(OUTBOX_COLLECTION).updateOne(
-    { _id: intentId, deliveryId },
+    { _id: intentId, deliveryId, status: { $ne: 'delivered' } },
     {
       $set: {
         status: 'delivered',
@@ -145,9 +189,10 @@ export async function markDelivered(deliveryId, intentId) {
   );
 
   if (result.matchedCount === 0) {
-    // A duplicate acknowledgement (e.g. crash after send) must be a no-op and
-    // not silently flip state. Return without error so the caller can treat it
-    // as idempotent.
+    // Either no such intent exists, or it was already delivered — a
+    // duplicate acknowledgement (e.g. crash after send) must be a no-op and
+    // not silently flip state. Return without error so the caller can treat
+    // it as idempotent.
     return null;
   }
 
@@ -208,19 +253,116 @@ export async function traceSourceEffects(sourceAggregate, sourceId) {
 }
 
 /**
- * Replay controls (issue #633): re-enqueue dead-letter effects. Causal gating
- * is preserved because `previousDeliveryId`/`predecessorDelivered` are left
- * intact — a successor only becomes claimable after its predecessor replays.
+ * Compute the next causal-chain link for a new effect on a source aggregate
+ * (issue #635): the next monotonic `sourceVersion` and the `deliveryId` of
+ * the most recently enqueued effect for the same source, to pass through as
+ * `previousDeliveryId` so the new effect can't be leased ahead of it.
+ *
+ * Callers that don't need cross-event ordering for a given aggregate (e.g. a
+ * one-off, non-webhook side effect) can skip this and call
+ * `enqueueSideEffect` without version/predecessor fields, as before.
  */
-export async function replayDeadLetters(limit = 100) {
+export async function getNextCausalLink(sourceAggregate, sourceId) {
+  const db = await getDb();
+  const latest = await db
+    .collection(OUTBOX_COLLECTION)
+    .find({ sourceAggregate, sourceId })
+    .sort({ sourceVersion: -1, createdAt: -1 })
+    .limit(1)
+    .toArray();
+
+  const previous = latest[0];
+  const previousVersion = typeof previous?.sourceVersion === 'number' ? previous.sourceVersion : 0;
+
+  return {
+    sourceVersion: previousVersion + 1,
+    previousDeliveryId: previous?.deliveryId || null,
+  };
+}
+
+/**
+ * Report the highest contiguously-delivered sourceVersion for an aggregate
+ * and any gap in the sequence (issue #635): a receiver that only sees
+ * `traceSourceEffects` output has to reconstruct this itself; this computes
+ * it directly so a subscriber-facing "what's missing" check is cheap.
+ *
+ * Only versioned effects (`sourceVersion` not null) are considered — legacy
+ * unversioned effects predate ordering support and can't be sequenced.
+ */
+export async function findSequenceGap(sourceAggregate, sourceId) {
+  const effects = await traceSourceEffects(sourceAggregate, sourceId);
+  const versioned = effects.filter((e) => typeof e.sourceVersion === 'number');
+
+  if (versioned.length === 0) {
+    return { highestContiguousVersion: null, gapAt: null, deliveredCount: 0 };
+  }
+
+  let highestContiguousVersion = null;
+  let gapAt = null;
+  let deliveredCount = 0;
+  let expected = versioned[0].sourceVersion;
+
+  for (const effect of versioned) {
+    if (effect.sourceVersion !== expected) {
+      gapAt = expected;
+      break;
+    }
+    if (effect.status === 'delivered') {
+      highestContiguousVersion = effect.sourceVersion;
+      deliveredCount += 1;
+    } else {
+      // Not yet delivered — the contiguous-delivered run stops here, but
+      // this isn't a "gap" (a missing version), it's pending delivery.
+      break;
+    }
+    expected += 1;
+  }
+
+  return { highestContiguousVersion, gapAt, deliveredCount };
+}
+
+const REPLAY_RATE_LIMIT = { limit: 10, windowMs: 60_000 };
+
+function assertReplayAuthorized(authorizedBy) {
+  if (!authorizedBy || typeof authorizedBy !== 'string') {
+    throw new Error('Replay requires an authorizedBy identifier for audit purposes');
+  }
+
+  const { allowed, retryAfter } = slidingWindowRateLimit(`outbox-replay:${authorizedBy}`, REPLAY_RATE_LIMIT);
+  if (!allowed) {
+    throw new Error(`Replay rate limit exceeded for ${authorizedBy}; retry after ${retryAfter}s`);
+  }
+}
+
+/**
+ * Replay controls (issue #633, hardened for #635): re-enqueue dead-letter
+ * effects. Causal gating is preserved because `previousDeliveryId`/
+ * `predecessorDelivered` are left intact — a successor only becomes
+ * claimable after its predecessor replays. `sourceVersion` is never
+ * modified, so replay cannot renumber events.
+ *
+ * Requires `authorizedBy` (the operator/system identity triggering the
+ * replay) — this is audited and rate-limited per identity.
+ */
+export async function replayDeadLetters(limit = 100, authorizedBy) {
+  assertReplayAuthorized(authorizedBy);
+
   const db = await getDb();
   const now = new Date();
 
+  const candidates = await db
+    .collection(OUTBOX_COLLECTION)
+    .find({ status: 'dead_letter', deliveredAt: null })
+    .limit(limit)
+    .toArray();
+
+  if (candidates.length === 0) {
+    auditLog({ event: 'outbox_replay_dead_letters', actor: authorizedBy, reason: 'no_candidates' });
+    return 0;
+  }
+
   const result = await db.collection(OUTBOX_COLLECTION).updateMany(
-    {
-      status: 'dead_letter',
-      deliveredAt: null,
-    },
+    { _id: { $in: candidates.map((c) => c._id) } },
     {
       $set: {
         status: 'pending',
@@ -232,6 +374,11 @@ export async function replayDeadLetters(limit = 100) {
     }
   );
 
+  auditLog({
+    event: 'outbox_replay_dead_letters',
+    actor: authorizedBy,
+    reason: `replayed_${result.modifiedCount}`,
+  });
   return result.modifiedCount;
 }
 
@@ -239,9 +386,15 @@ export async function replayDeadLetters(limit = 100) {
  * Replay every effect for a single source in version order. Used when an
  * operator needs to re-derive the full side-effect chain for one
  * purchase/material after a partial outage. Ordering is preserved by the
- * causal gate, not by the replay loop itself.
+ * causal gate, not by the replay loop itself — `sourceVersion` is left
+ * untouched, so replay cannot renumber events.
+ *
+ * Requires `authorizedBy` — audited and rate-limited per identity, same as
+ * `replayDeadLetters`.
  */
-export async function replaySource(sourceAggregate, sourceId) {
+export async function replaySource(sourceAggregate, sourceId, authorizedBy) {
+  assertReplayAuthorized(authorizedBy);
+
   const db = await getDb();
   const effects = await traceSourceEffects(sourceAggregate, sourceId);
   const now = new Date();
@@ -261,6 +414,13 @@ export async function replaySource(sourceAggregate, sourceId) {
       }
     );
   }
+
+  auditLog({
+    event: 'outbox_replay_source',
+    actor: authorizedBy,
+    reason: `replayed_${effects.length}`,
+    correlationId: `${sourceAggregate}:${sourceId}`,
+  });
 
   return effects.length;
 }
