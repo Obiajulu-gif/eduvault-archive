@@ -1,5 +1,4 @@
 // Resolves: Implement the endpoint to retrieve and paginate the list of available educational materials.
-export const dynamic = "force-dynamic";
 
 import { NextResponse } from "next/server";
 import { auditLog } from "@/lib/api/audit";
@@ -71,7 +70,8 @@ export async function GET(request) {
     }
 
     // 2️⃣ Handle list fetch
-    const { page, pageSize } = parsePagination(url.searchParams);
+    const pagination = parsePagination(url.searchParams);
+    const { pageSize, paginationType } = pagination;
 
     const cacheKey = `market-materials:${url.searchParams.toString()}`;
     const cached = await cacheGet(cacheKey);
@@ -82,20 +82,143 @@ export async function GET(request) {
     const query = buildMarketplaceDiscoveryQuery(url.searchParams);
     const sort = buildMarketplaceSort(url.searchParams.get("sortBy"));
 
-    const total = await db.collection(MATERIAL_SEARCH_COLLECTION).countDocuments(query);
-    const items = await db
-      .collection(MATERIAL_SEARCH_COLLECTION)
-      .find(query)
-      .sort(sort)
-      .skip((page - 1) * pageSize)
-      .limit(pageSize)
-      .toArray();
+    let items;
+    let hasNextPage = false;
+    let nextCursor = null;
+    let totalPages = null;
+    let total = null;
+
+    if (paginationType === "cursor") {
+      // Cursor-based pagination
+      const { cursor } = pagination;
+      
+      // Add cursor filter to query if provided
+      if (cursor) {
+        try {
+          // Decode the cursor - it contains the _id and sort field values
+          const cursorData = JSON.parse(Buffer.from(cursor, 'base64').toString('utf8'));
+          
+          // Build cursor query based on sort field
+          if (sort.createdAt) {
+            // For createdAt sort (newest first), we want documents older than cursor
+            if (sort.createdAt === -1) {
+              query.$and = query.$and || [];
+              query.$and.push({
+                $or: [
+                  { createdAt: { $lt: new Date(cursorData.createdAt) } },
+                  { 
+                    createdAt: new Date(cursorData.createdAt),
+                    _id: { $lt: new ObjectId(cursorData._id) }
+                  }
+                ]
+              });
+            }
+          } else if (sort.price) {
+            // For price sort, handle price + _id compound cursor
+            const priceOperator = sort.price === 1 ? '$gt' : '$lt';
+            const idOperator = sort.price === 1 ? '$gt' : '$lt';
+            
+            query.$and = query.$and || [];
+            query.$and.push({
+              $or: [
+                { price: { [priceOperator]: cursorData.price } },
+                { 
+                  price: cursorData.price,
+                  _id: { [idOperator]: new ObjectId(cursorData._id) }
+                }
+              ]
+            });
+          } else if (sort.rating || sort.likes) {
+            // For rating/popularity sort
+            const sortField = sort.rating ? 'rating' : 'likes';
+            const sortOrder = sort[sortField];
+            const operator = sortOrder === -1 ? '$lt' : '$gt';
+            const idOperator = sortOrder === -1 ? '$lt' : '$gt';
+            
+            query.$and = query.$and || [];
+            query.$and.push({
+              $or: [
+                { [sortField]: { [operator]: cursorData[sortField] } },
+                { 
+                  [sortField]: cursorData[sortField],
+                  _id: { [idOperator]: new ObjectId(cursorData._id) }
+                }
+              ]
+            });
+          }
+        } catch (e) {
+          // Invalid cursor - ignore and start from beginning
+          console.warn('Invalid cursor provided:', cursor);
+        }
+      }
+
+      // Fetch pageSize + 1 to determine if there's a next page
+      items = await db
+        .collection(MATERIAL_SEARCH_COLLECTION)
+        .find(query)
+        .sort(sort)
+        .limit(pageSize + 1)
+        .toArray();
+
+      // Check if there's a next page
+      hasNextPage = items.length > pageSize;
+      if (hasNextPage) {
+        items = items.slice(0, pageSize); // Remove the extra item
+      }
+
+      // Generate next cursor if there are more items
+      if (hasNextPage && items.length > 0) {
+        const lastItem = items[items.length - 1];
+        const cursorData = { _id: lastItem._id.toString() };
+        
+        // Add sort field to cursor
+        if (sort.createdAt) {
+          cursorData.createdAt = lastItem.createdAt.toISOString();
+        } else if (sort.price) {
+          cursorData.price = lastItem.price;
+        } else if (sort.rating) {
+          cursorData.rating = lastItem.rating || lastItem.averageScore || 0;
+        } else if (sort.likes) {
+          cursorData.likes = lastItem.likes || 0;
+        }
+        
+        nextCursor = Buffer.from(JSON.stringify(cursorData)).toString('base64');
+      }
+    } else {
+      // Legacy offset-based pagination
+      const { page } = pagination;
+      
+      total = await db.collection(MATERIAL_SEARCH_COLLECTION).countDocuments(query);
+      items = await db
+        .collection(MATERIAL_SEARCH_COLLECTION)
+        .find(query)
+        .sort(sort)
+        .skip((page - 1) * pageSize)
+        .limit(pageSize)
+        .toArray();
+
+      totalPages = Math.max(1, Math.ceil(total / pageSize));
+    }
 
     const normalized = items.map(sanitizeMaterial);
 
-    const totalPages = Math.max(1, Math.ceil(total / pageSize));
+    const payload = paginationType === "cursor" 
+      ? { 
+          items: normalized, 
+          pageSize, 
+          hasNextPage, 
+          nextCursor,
+          paginationType: "cursor"
+        }
+      : { 
+          items: normalized, 
+          page: pagination.page, 
+          pageSize, 
+          total, 
+          totalPages,
+          paginationType: "offset"
+        };
 
-    const payload = { items: normalized, page, pageSize, total, totalPages };
     await cacheSet(cacheKey, payload, 600);
 
     return NextResponse.json(payload, { status: 200 });
