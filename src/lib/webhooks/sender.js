@@ -1,6 +1,70 @@
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { getDb } from '@/lib/mongodb';
 import { logger } from '@/lib/logger';
+import { validateWebhookDestination, safeFetch, SsrfError } from './ssrfGuard';
+
+const replayCache = new Map();
+const DEFAULT_REPLAY_TTL_SECONDS = 300;
+const DEFAULT_ROTATION_GRACE_SECONDS = 86400;
+
+function replayCacheKey(signatureHeader) {
+  return signatureHeader;
+}
+
+function pruneReplayCache(nowSeconds) {
+  for (const [key, expiresAt] of replayCache.entries()) {
+    if (expiresAt <= nowSeconds) replayCache.delete(key);
+  }
+}
+
+function rememberSignature(signatureHeader, timestamp, ttlSeconds = DEFAULT_REPLAY_TTL_SECONDS) {
+  const expiresAt = timestamp + ttlSeconds;
+  replayCache.set(replayCacheKey(signatureHeader), expiresAt);
+  pruneReplayCache(timestamp);
+}
+
+function isReplayedSignature(signatureHeader, nowSeconds) {
+  const expiresAt = replayCache.get(replayCacheKey(signatureHeader));
+  return typeof expiresAt === 'number' && expiresAt > nowSeconds;
+}
+
+export function verifyWebhookSignatureWithRotation(
+  body,
+  signatureHeader,
+  {
+    currentSecret,
+    previousSecret = null,
+    previousSecretRotatedAt = null,
+    toleranceSeconds = 300,
+    now = Math.floor(Date.now() / 1000),
+    rotationGraceSeconds = DEFAULT_ROTATION_GRACE_SECONDS,
+  } = {},
+) {
+  if (!currentSecret) return false;
+  if (isReplayedSignature(signatureHeader, now)) return false;
+
+  const verifyOptions = { toleranceSeconds, now, replayCacheEnabled: false };
+  if (verifyWebhookSignature(body, signatureHeader, currentSecret, verifyOptions)) {
+    rememberSignature(signatureHeader, now, toleranceSeconds);
+    return true;
+  }
+
+  if (
+    previousSecret &&
+    previousSecretRotatedAt &&
+    now <= Math.floor(new Date(previousSecretRotatedAt).getTime() / 1000) + rotationGraceSeconds &&
+    verifyWebhookSignature(body, signatureHeader, previousSecret, verifyOptions)
+  ) {
+    rememberSignature(signatureHeader, now, toleranceSeconds);
+    return true;
+  }
+
+  return false;
+}
+
+export function clearWebhookReplayCache() {
+  replayCache.clear();
+}
 
 export async function getDailyStats(db) {
   const now = new Date();
@@ -60,18 +124,26 @@ export function createWebhookSignatureHeader(body, secret, timestamp = Math.floo
   return `t=${timestamp},v1=${signature}`;
 }
 
-export function verifyWebhookSignature(body, signatureHeader, secret, { toleranceSeconds = 300, now = Math.floor(Date.now() / 1000) } = {}) {
+export function verifyWebhookSignature(body, signatureHeader, secret, { toleranceSeconds = 300, now = Math.floor(Date.now() / 1000), replayCacheEnabled = true } = {}) {
   if (!body || !signatureHeader || !secret) return false;
   const parts = Object.fromEntries(signatureHeader.split(',').map((part) => part.split('=')));
   const timestamp = Number(parts.t);
   const signature = parts.v1;
   if (!Number.isFinite(timestamp) || !signature) return false;
   if (Math.abs(now - timestamp) > toleranceSeconds) return false;
+  if (replayCacheEnabled && isReplayedSignature(signatureHeader, now)) return false;
 
   const expected = createWebhookSignatureHeader(body, secret, timestamp).split('v1=')[1];
   const expectedBuffer = Buffer.from(expected, 'hex');
   const receivedBuffer = Buffer.from(signature, 'hex');
-  return expectedBuffer.length === receivedBuffer.length && timingSafeEqual(expectedBuffer, receivedBuffer);
+  const valid =
+    expectedBuffer.length === receivedBuffer.length && timingSafeEqual(expectedBuffer, receivedBuffer);
+
+  if (valid && replayCacheEnabled) {
+    rememberSignature(signatureHeader, now, toleranceSeconds);
+  }
+
+  return valid;
 }
 
 async function ensureWebhookSigningSecret(db, creator) {
@@ -92,13 +164,25 @@ async function ensureWebhookSigningSecret(db, creator) {
 
 export async function sendWebhookWithRetry(url, payload, retries = 3, { signingSecret } = {}) {
   const body = JSON.stringify(payload);
+
+  // Validate the destination against the SSRF/DNS-rebinding policy every time
+  // we attempt delivery (delivery-time enforcement of issue #634). A host that
+  // rebinds between registration and delivery is still caught here.
+  try {
+    await validateWebhookDestination(url);
+  } catch (error) {
+    if (error instanceof SsrfError) {
+      logger.error(`Webhook destination rejected by SSRF policy (${error.code}): ${url}`);
+      return false;
+    }
+    throw error;
+  }
+
   for (let attempt = 1; attempt <= retries; attempt++) {
     try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 5000);
       const signature = createWebhookSignatureHeader(body, signingSecret);
 
-      const response = await fetch(url, {
+      const response = await safeFetch(url, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -106,10 +190,7 @@ export async function sendWebhookWithRetry(url, payload, retries = 3, { signingS
           ...(signature ? { 'X-EduVault-Signature': signature } : {}),
         },
         body,
-        signal: controller.signal,
       });
-
-      clearTimeout(timeoutId);
 
       if (response.ok) {
         logger.info(`Webhook sent successfully to ${url}`);
@@ -118,17 +199,17 @@ export async function sendWebhookWithRetry(url, payload, retries = 3, { signingS
         logger.warn(`Webhook failed (Attempt ${attempt}/${retries}): ${response.status} ${response.statusText}`);
       }
     } catch (error) {
-      if (error.name === 'AbortError') {
-        logger.warn(`Webhook timeout (Attempt ${attempt}/${retries}) for ${url}`);
-      } else {
-        logger.error(`Webhook error (Attempt ${attempt}/${retries}) for ${url}: ${error.message}`);
+      if (error instanceof SsrfError) {
+        logger.error(`Webhook blocked by SSRF policy (${error.code}) for ${url}`);
+        return false;
       }
+      logger.error(`Webhook error (Attempt ${attempt}/${retries}) for ${url}: ${error.message}`);
     }
 
     if (attempt < retries) {
       // Exponential backoff: 1s, 2s, 4s...
       const delay = Math.pow(2, attempt - 1) * 1000;
-      await new Promise(resolve => setTimeout(resolve, delay));
+      await new Promise((resolve) => setTimeout(resolve, delay));
     }
   }
 

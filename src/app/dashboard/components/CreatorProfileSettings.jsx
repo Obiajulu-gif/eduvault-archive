@@ -41,6 +41,8 @@ export default function CreatorProfileSettings({ initialUser }) {
     twitterUrl: initialUser?.twitterUrl || "",
     githubUrl: initialUser?.githubUrl || "",
     websiteUrl: initialUser?.websiteUrl || "",
+    discordUrl: initialUser?.discordUrl || "",
+    telegramUrl: initialUser?.telegramUrl || "",
   }));
   const [errors, setErrors] = useState({});
   const [error, setError] = useState(null);
@@ -56,6 +58,8 @@ export default function CreatorProfileSettings({ initialUser }) {
       twitterUrl: initialUser?.twitterUrl || "",
       githubUrl: initialUser?.githubUrl || "",
       websiteUrl: initialUser?.websiteUrl || "",
+      discordUrl: initialUser?.discordUrl || "",
+      telegramUrl: initialUser?.telegramUrl || "",
     });
   }, [initialUser]);
 
@@ -77,6 +81,8 @@ export default function CreatorProfileSettings({ initialUser }) {
       if (form.twitterUrl.trim()) payload.twitterUrl = form.twitterUrl.trim();
       if (form.githubUrl.trim()) payload.githubUrl = form.githubUrl.trim();
       if (form.websiteUrl.trim()) payload.websiteUrl = form.websiteUrl.trim();
+      if (form.discordUrl.trim()) payload.discordUrl = form.discordUrl.trim();
+      if (form.telegramUrl.trim()) payload.telegramUrl = form.telegramUrl.trim();
 
       await updateProfile(payload);
       setSuccess("Profile settings saved.");
@@ -261,6 +267,28 @@ export default function CreatorProfileSettings({ initialUser }) {
                 value={form.websiteUrl}
                 onChange={set("websiteUrl")}
                 placeholder="https://example.com"
+                className="w-full rounded-2xl border border-slate-200 bg-slate-50 py-3 px-4 text-sm text-slate-900 outline-none transition focus:border-slate-400 focus:bg-white"
+              />
+            </label>
+          </div>
+          <div className="grid gap-5 md:grid-cols-2">
+            <label className="block">
+              <span className="mb-2 block text-sm font-medium text-slate-500">Discord</span>
+              <input
+                type="url"
+                value={form.discordUrl}
+                onChange={set("discordUrl")}
+                placeholder="https://discord.gg/invite"
+                className="w-full rounded-2xl border border-slate-200 bg-slate-50 py-3 px-4 text-sm text-slate-900 outline-none transition focus:border-slate-400 focus:bg-white"
+              />
+            </label>
+            <label className="block">
+              <span className="mb-2 block text-sm font-medium text-slate-500">Telegram</span>
+              <input
+                type="url"
+                value={form.telegramUrl}
+                onChange={set("telegramUrl")}
+                placeholder="https://t.me/username"
                 className="w-full rounded-2xl border border-slate-200 bg-slate-50 py-3 px-4 text-sm text-slate-900 outline-none transition focus:border-slate-400 focus:bg-white"
               />
             </label>

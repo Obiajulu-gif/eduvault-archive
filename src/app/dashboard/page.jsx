@@ -24,6 +24,8 @@ const getCachedUser = unstable_cache(
     { revalidate: 60 }
 );
 
+import QuickActions from "./components/QuickActions";
+
 export default async function DashboardPage() {
     const cookieStore = await cookies();
     const token = cookieStore.get("auth_token")?.value;
@@ -52,23 +54,11 @@ export default async function DashboardPage() {
             {/* Top Row: Welcome & Call to Action */}
             <WelcomeBanner user={user} />
 
+            {/* Quick Actions Cards */}
+            <QuickActions />
+
             {/* Second Row: Integrated Metrics Spread */}
             <EarningsSection />
-
-            <div className="grid gap-4 md:grid-cols-3">
-                <Link href="/dashboard/upload" className="rounded-2xl border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-900 p-5 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md">
-                    <p className="text-sm font-semibold text-slate-900 dark:text-gray-100">Upload material</p>
-                    <p className="mt-2 text-sm text-slate-600 dark:text-gray-400">Publish a new lesson, guide, or worksheet with a title, description, price, and category.</p>
-                </Link>
-                <Link href="/dashboard/my-materials" className="rounded-2xl border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-900 p-5 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md">
-                    <p className="text-sm font-semibold text-slate-900 dark:text-gray-100">Manage listings</p>
-                    <p className="mt-2 text-sm text-slate-600 dark:text-gray-400">Review your uploaded materials, update pricing, and keep your catalog fresh.</p>
-                </Link>
-                <Link href="/dashboard/profile" className="rounded-2xl border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-900 p-5 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md">
-                    <p className="text-sm font-semibold text-slate-900 dark:text-gray-100">Profile setup</p>
-                    <p className="mt-2 text-sm text-slate-600 dark:text-gray-400">Refine your creator story with your institution, bio, and public links.</p>
-                </Link>
-            </div>
 
             {/* Main Content Split: Creator Focus vs Discovery */}
             <div className="grid lg:grid-cols-3 gap-8 items-start">

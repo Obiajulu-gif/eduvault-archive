@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { FaSearch, FaTimes } from "react-icons/fa";
+import { FaHistory, FaSearch, FaTimes } from "react-icons/fa";
 
 const STORAGE_KEY = "eduvault.searchHistory";
 const MAX_HISTORY = 8;
@@ -72,6 +72,11 @@ export default function SearchBox({ onSearch, placeholder = "Search materials…
     writeSearchHistory(next);
   }
 
+  function clearHistory() {
+    setHistory([]);
+    writeSearchHistory([]);
+  }
+
   return (
     <div ref={rootRef} className="relative w-full max-w-md">
       <form
@@ -93,11 +98,12 @@ export default function SearchBox({ onSearch, placeholder = "Search materials…
       </form>
 
       {open && history.length > 0 && (
-        <ul
-          role="listbox"
-          aria-label="Recent searches"
-          className="absolute z-20 mt-1 w-full bg-white border border-gray-200 rounded-lg shadow-lg py-1 max-h-64 overflow-auto"
-        >
+        <div className="absolute z-20 mt-1 w-full overflow-hidden rounded-lg border border-gray-200 bg-white shadow-lg">
+          <div className="flex items-center justify-between border-b border-gray-100 px-3 py-2">
+            <span className="flex items-center gap-2 text-xs font-semibold text-gray-500"><FaHistory /> Recent searches</span>
+            <button type="button" onClick={clearHistory} className="text-xs font-semibold text-blue-600 hover:text-blue-700">Clear history</button>
+          </div>
+          <ul role="listbox" aria-label="Recent searches" className="max-h-56 overflow-auto py-1">
           {history.map((entry) => (
             <li
               key={entry}
@@ -120,7 +126,8 @@ export default function SearchBox({ onSearch, placeholder = "Search materials…
               </button>
             </li>
           ))}
-        </ul>
+          </ul>
+        </div>
       )}
     </div>
   );

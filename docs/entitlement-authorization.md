@@ -170,9 +170,61 @@ Step 5: Remediation
 
 ---
 
+## 6b. Backend ↔ Contract Authorization Matrix (Issue #683)
+
+The API layer must prove that unauthorized creators and buyers **cannot**
+publish, update, purchase, refund, or access resources — and must map contract
+auth failures onto stable HTTP shapes instead of leaking raw contract codes.
+
+`src/lib/api/authorizationBoundary.js` centralizes that boundary:
+
+- `assertResourceOwner({ caller, owner, upgradeAdmin, action })` — fails closed
+  (401 missing wallet, 403 not-the-owner) unless the caller is the resource
+  owner or the platform upgrade admin.
+- `assertBuyer({ caller, buyer, action })` — fails closed unless the caller is
+  the recorded buyer for the resource.
+- `mapContractAuthError({ code, action })` — maps contract denial codes
+  (`NotAuthorized`, `MaterialNotFound`, `NotInitialized`, `AlreadyInitialized`,
+  …) onto stable `{ error, statusCode }` shapes (403/409/503) so raw contract
+  errors never leak to clients.
+
+### Authorization matrix
+
+| Action | Owner/Creator | Platform admin | Purchasing buyer | Anyone else |
+|:---|:---:|:---:|:---:|:---:|
+| Publish / register material | ✅ | ✅ | ❌ | ❌ 403 |
+| Update sale terms / price | ✅ | ✅ | ❌ | ❌ 403 |
+| Pause / disable a material | ✅ | ✅ | ❌ | ❌ 403 |
+| Purchase a material | ✅ | ✅ | ✅ | ✅ (payer) |
+| Access / download purchased content | ✅ | ✅ | ✅ (own purchase) | ❌ 403 |
+| Open a dispute on a purchase | ✅ | ✅ | ✅ (own purchase) | ❌ 403 |
+| Refund a purchase | admin only | ✅ | ❌ (requests) | ❌ 403 |
+| Allowlist assets | admin only | ✅ | ❌ | ❌ 403 |
+
+Every denial is fail-closed: missing wallet returns **401**, an authorized-role
+mismatch returns **403**, and an un-exported/not-found contract resource returns
+**403** (never a leaky 200). Unauthorized creator/buyer negative tests live in
+`tests/backend/authorization-boundary.test.mjs`.
+
 ## 7. Related Documents
 
 * [`docs/architecture.md`](file:///home/abujulaybeeb/Documents/Drips/Drips%2013/eduvault-archive/docs/architecture.md) — System goals, boundaries, and high-level architecture.
 * [`docs/purchased-content-and-entitlements.md`](file:///home/abujulaybeeb/Documents/Drips/Drips%2013/eduvault-archive/docs/purchased-content-and-entitlements.md) — Buyer library overview and contract access points.
 * [`docs/purchase-flow-architecture.md`](file:///home/abujulaybeeb/Documents/Drips/Drips%2013/eduvault-archive/docs/purchase-flow-architecture.md) — Hybrid on-chain/off-chain transaction flow.
 * [`docs/soroban-contract-architecture.md`](file:///home/abujulaybeeb/Documents/Drips/Drips%2013/eduvault-archive/docs/soroban-contract-architecture.md) — Detailed Soroban smart contract invariants and storage schema.
+
+## Entitlement reconciliation before protected downloads (#665)
+
+Download authorization is tied to verified on-contract purchase state, not just cached entitlement data. `PurchaseManager::reconcile_entitlement(material_id, buyer)` re-checks the cached entitlement against the purchase settlement before a protected download is allowed:
+
+- **Settlement still `Pending` with an active entitlement** -> authorized (`Ok(true)`).
+- **Missing entitlement record** -> denied (`EntitlementRevoked`) - the indexer event never landed or the record was removed.
+- **Revoked entitlement or non-`Pending` settlement (refunded/released)** -> denied (`EntitlementRevoked` / `EntitlementStale`) - a stale cache can never grant access silently.
+
+Delayed events, missing events, and revoked entitlements all resolve to safe denied states instead of cached allow decisions.
+
+## Signed download capabilities and access logging (#675)
+
+Once `authorizeMaterialAccess()` allows a request, `GET /api/download` (`app/api/download/route.js`) issues a short-lived **capability token** — bound to the buyer, material, and requested byte range — rather than handing back a bare, indefinitely-usable IPFS URL. The token is HMAC-SHA256 signed (`lib/downloads/capabilityToken.js`, `DOWNLOAD_CAPABILITY_SECRET`) so none of its fields (buyer, byte range, expiry) can be altered client-side without invalidating the signature, and it expires after `CAPABILITY_TTL_MS` (default 15s).
+
+Every issuance and every denial is written to the `download_access_log` collection (`lib/downloads/accessLog.js`) — who requested what, when, and the outcome. The raw capability token and the signed gateway URL it appears in are never persisted; only the token's `jti` (a correlation id, not a usable credential) is logged.

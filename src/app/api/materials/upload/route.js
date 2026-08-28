@@ -30,6 +30,7 @@ const ALLOWED_FILE_TYPES = [
 
 const ALLOWED_IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/webp']
 
+import { createHash } from 'node:crypto';
 import { getDb } from '@/lib/mongodb';
 import { createQuarantineRecord, QUARANTINE_STATES } from '@/lib/publishing/quarantine';
 import { enqueueSideEffect } from '@/lib/backend/outbox';
@@ -116,6 +117,8 @@ export async function POST(request) {
         }
 
         // 7. Stream upload into quarantine and create scan record
+        const fileBytes = Buffer.from(await file.arrayBuffer());
+        const byteHash = createHash('sha256').update(fileBytes).digest('hex');
         const uploadedFile = await pinata.upload.public.file(file);
         const fileUrl = await pinata.gateways.public.convert(uploadedFile.cid);
 
@@ -131,6 +134,7 @@ export async function POST(request) {
         const quarantine = await createQuarantineRecord({
           db,
           contentHash: uploadedFile.cid,
+          byteHash,
           fileName: title,
           mimeType: file.type,
           sizeBytes: file.size,
@@ -153,6 +157,25 @@ export async function POST(request) {
             },
           },
         });
+
+        // #638: generate a sandboxed structural preview off the request path.
+        // Independent of quarantine — a preview failure never affects the file's
+        // gating.
+        if (process.env.PREVIEW_PIPELINE_ENABLED !== 'false') {
+          await enqueueSideEffect({
+            sourceAggregate: 'preview',
+            sourceId: quarantine.contentHash,
+            intent: {
+              type: 'preview',
+              channel: 'generate_preview',
+              payload: {
+                contentHash: quarantine.contentHash,
+                mimeType: quarantine.mimeType,
+                sizeBytes: quarantine.sizeBytes,
+              },
+            },
+          });
+        }
 
         auditLog({
           event: 'upload_quarantined',

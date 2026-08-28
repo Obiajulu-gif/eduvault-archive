@@ -36,6 +36,9 @@ function getFileIcon(type) {
   }
 }
 
+const BLUR_DATA_URL =
+  "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII=";
+
 function MaterialThumbnail({ material }) {
   const [src, setSrc] = useState(() => getPreviewImage(material));
   return (
@@ -43,6 +46,8 @@ function MaterialThumbnail({ material }) {
       src={src}
       alt={material.title}
       fill
+      placeholder="blur"
+      blurDataURL={material.blurDataURL || BLUR_DATA_URL}
       className="object-cover group-hover:scale-105 transition-transform duration-500"
       onError={() => setSrc(FALLBACK_IMAGE)}
       sizes="(max-width: 640px) 100vw, (max-width: 1024px) 50vw, 25vw"
@@ -113,6 +118,11 @@ export default function MaterialCard({ material, isInCart, isInComparison, onAdd
               <span className="flex items-center gap-1">
                 {getFileIcon(material.fileType)}
                 <span className="uppercase font-medium">{material.fileType || "pdf"}</span>
+              </span>
+              <span className="flex items-center gap-1" title={`Language: ${material.language || "English"}`}>
+                <span className="font-semibold px-1.5 py-0.2 bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-300 rounded text-[10px]">
+                  {material.language || "English"}
+                </span>
               </span>
               <span className="flex items-center gap-1">
                 <FaHeart className="w-3 h-3" />

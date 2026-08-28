@@ -274,9 +274,10 @@ async function getCacheEntry(db, materialId, buyerAddress) {
   return db.collection('entitlement_cache').findOne({ materialId, buyerAddress });
 }
 
-async function writeCacheEntry(db, { materialId, buyerAddress, state, source, purchaseId, settlementState, network, contractId, contentHash }) {
+async function writeCacheEntry(db, { materialId, buyerAddress, state, source, purchaseId, settlementState, network, contractId, contentHash }, session = null) {
   const timestamp = now();
   const active = ALLOWING_STATES.has(state);
+  const options = session ? { upsert: true, session } : { upsert: true };
   const version = CACHE_VERSION;
 
   await db.collection('entitlement_cache').updateOne(
@@ -286,8 +287,6 @@ async function writeCacheEntry(db, { materialId, buyerAddress, state, source, pu
         materialId,
         buyerAddress,
         state,
-        // `active` is kept for backward compatibility with older readers
-        // (e.g. the fast-path lookup in /api/materials/access).
         active,
         source,
         purchaseId: purchaseId ?? null,
@@ -303,7 +302,7 @@ async function writeCacheEntry(db, { materialId, buyerAddress, state, source, pu
       },
       $setOnInsert: { createdAt: timestamp },
     },
-    { upsert: true }
+    options
   );
 
   return { state, active, source };
@@ -324,8 +323,6 @@ function isFresh(entry) {
 function bindingMatches(entry, { contentHash }) {
   if (entry.contractId && CURRENT_CONTRACT && entry.contractId !== CURRENT_CONTRACT) return false;
   if (entry.network && CURRENT_NETWORK && entry.network !== CURRENT_NETWORK) return false;
-  // Only compare content hash when both sides know one; missing metadata on
-  // either side shouldn't itself invalidate an otherwise-valid decision.
   if (entry.contentHash && contentHash && entry.contentHash !== contentHash) return false;
   return true;
 }
@@ -334,29 +331,27 @@ function logDisagreement(context, detail) {
   try {
     logger.warn({ event: 'entitlement_disagreement', ...context, ...detail }, 'entitlement source disagreement detected');
   } catch {
-    // logging must never break the authorization decision
   }
 }
 
-/**
- * Immediately invalidate (revoke) a cached entitlement decision. Used both
- * by direct API actions (refund approval) and by chain-event processing in
- * the indexer, so revocations propagate without waiting for TTL expiry.
- */
 export async function invalidateEntitlement(materialId, buyerAddress, reason = 'revoked', extra = {}) {
   if (!materialId || !buyerAddress) return { success: false };
 
   const db = extra.db || (await getDb());
   const normalised = normalizeBuyerAddress(buyerAddress);
 
-  await writeCacheEntry(db, {
-    materialId,
-    buyerAddress: normalised,
-    state: ENTITLEMENT_STATE.REVOKED,
-    source: reason,
-    purchaseId: extra.purchaseId ?? null,
-    settlementState: extra.settlementState ?? null,
-  });
+  await writeCacheEntry(
+    db,
+    {
+      materialId,
+      buyerAddress: normalised,
+      state: ENTITLEMENT_STATE.REVOKED,
+      source: reason,
+      purchaseId: extra.purchaseId ?? null,
+      settlementState: extra.settlementState ?? null,
+    },
+    extra.session || null
+  );
 
   return { success: true };
 }

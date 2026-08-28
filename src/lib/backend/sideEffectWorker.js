@@ -14,6 +14,8 @@ import {
   rescheduleIntent,
   releaseLease,
 } from './outbox';
+import { applyMaterialSearchProjection } from './materialSearchProjection.js';
+import { runPreviewPipeline } from './previewPipeline.js';
 
 const WORKER_ID = process.env.WORKER_ID || `worker-${process.pid}`;
 const POLL_INTERVAL_MS = parseInt(process.env.SIDE_EFFECT_POLL_MS || '5000', 10);
@@ -47,6 +49,27 @@ async function processWebhookIntent(intent) {
   }
 }
 
+async function processIndexerIntent(intent) {
+  if (intent.intent?.action !== 'material_search_sync') {
+    console.log(`[SideEffectWorker] Indexer intent not yet implemented: ${intent._id}`);
+    await new Promise(resolve => setTimeout(resolve, 100));
+    return;
+  }
+
+  const db = await getDb();
+  await applyMaterialSearchProjection(db, intent.intent.payload);
+}
+
+export async function processPreviewIntent(intent) {
+  // #638: generate the preview in the disposable sandbox. `runPreviewPipeline`
+  // records the outcome on `material_previews` and never throws, so a preview
+  // failure does not fail (or retry) the intent and never affects the original
+  // file's gating.
+  const { contentHash, mimeType, sizeBytes, materialId } = intent.intent.payload || {};
+  const result = await runPreviewPipeline({ contentHash, mimeType, sizeBytes, materialId });
+  console.log(`[SideEffectWorker] Preview ${contentHash} -> ${result.state}${result.reason ? ` (${result.reason})` : ''}`);
+}
+
 export async function processSideEffectIntent(intent) {
   const type = intent.intent?.type;
 
@@ -58,9 +81,10 @@ export async function processSideEffectIntent(intent) {
       await processWebhookIntent(intent);
       break;
     case 'indexer':
-      // Placeholder for indexer side effects (e.g., reindex request, cache warming).
-      console.log(`[SideEffectWorker] Indexer intent not yet implemented: ${intent._id}`);
-      await new Promise(resolve => setTimeout(resolve, 100));
+      await processIndexerIntent(intent);
+      break;
+    case 'preview':
+      await processPreviewIntent(intent);
       break;
     default:
       throw new Error(`Unknown side effect type: ${type}`);

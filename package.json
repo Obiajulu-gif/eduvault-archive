@@ -1,6 +1,7 @@
 {
   "name": "eduvault",
   "version": "0.1.0",
+  "type": "module",
   "description": "Stellar-aligned educational content marketplace prototype for creator payments, licensing, and discovery.",
   "license": "MIT",
   "keywords": [
@@ -21,14 +22,15 @@
     "test:all": "npm run test:contracts && npm run test:backend",
     "test:contracts": "hardhat test",
     "test:integration": "vitest run test/integration",
-    "test:backend": "node --test tests/backend/*.test.mjs",
+    "test:backend": "npx tsx --test tests/backend/*.test.mjs",
     "audit:deps": "npm audit --audit-level=critical",
     "audit:deps:high": "npm audit --audit-level=high",
     "audit:deps:critical": "npm audit --audit-level=critical",
     "scan:secrets": "node scripts/scan-secrets.mjs",
     "indexer:stellar": "node scripts/run-stellar-indexer.mjs",
     "clean:intents": "node scripts/clean-stale-intents.mjs",
-    "clean:intents:dry": "DRY_RUN=true node scripts/clean-stale-intents.mjs"
+    "clean:intents:dry": "DRY_RUN=true node scripts/clean-stale-intents.mjs",
+    "indexer:deadletter": "node scripts/indexer-deadletter.mjs"
   },
   "dependencies": {
     "@creit-tech/stellar-wallets-kit": "npm:@jsr/creit-tech__stellar-wallets-kit@^2.1.0",
@@ -45,6 +47,7 @@
     "mongodb": "^6.21.0",
     "next": "^16.2.7",
     "nodemailer": "^8.0.7",
+    "pdfkit": "^0.20.1",
     "pinata": "^2.5.5",
     "pino": "^10.3.1",
     "pino-pretty": "^13.1.3",

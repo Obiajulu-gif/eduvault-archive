@@ -2,7 +2,7 @@
 
 import { createContext, useContext, useState, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { FaCheckCircle, FaTimesCircle, FaInfoCircle, FaTimes } from 'react-icons/fa';
+import { FaCheckCircle, FaExclamationTriangle, FaTimesCircle, FaInfoCircle, FaTimes } from 'react-icons/fa';
 
 export const ToastContext = createContext(null);
 
@@ -13,7 +13,7 @@ export function ToastProvider({ children }) {
     setToasts((prev) => prev.filter((t) => t.id !== id));
   }, []);
 
-  const show = useCallback(({ id, title, message, type = 'info', duration = 5000 }) => {
+  const show = useCallback(({ id, title, message, type = 'info', duration = 4000 }) => {
     const toastId = id || Math.random().toString(36).substring(7);
     
     setToasts((prev) => {
@@ -47,7 +47,7 @@ export function ToastProvider({ children }) {
     }
   }, [dismiss]);
 
-  const value = { show, update, dismiss, toasts };
+  const value = { show, showToast: show, update, dismiss, toasts };
 
   const getToastStyles = (type) => {
     switch (type) {
@@ -60,6 +60,11 @@ export function ToastProvider({ children }) {
         return {
           bg: 'bg-rose-50/90 dark:bg-rose-950/40 border-rose-200/60 dark:border-rose-800/30 text-rose-800 dark:text-rose-300',
           icon: <FaTimesCircle className="text-rose-500 dark:text-rose-400 w-5 h-5 shrink-0" />,
+        };
+      case 'warning':
+        return {
+          bg: 'bg-amber-50/90 dark:bg-amber-950/40 border-amber-200/60 dark:border-amber-800/30 text-amber-800 dark:text-amber-300',
+          icon: <FaExclamationTriangle className="text-amber-500 dark:text-amber-400 w-5 h-5 shrink-0" />,
         };
       case 'loading':
         return {

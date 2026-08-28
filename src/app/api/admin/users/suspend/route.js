@@ -6,8 +6,16 @@ import { ObjectId } from 'mongodb'
 import { getDb } from '@/lib/mongodb'
 import { verifyDashboardToken } from '@/lib/auth/session'
 import { auditLog } from '@/lib/api/audit'
+import { recordAdminAction } from '@/lib/db/adminAudit'
+import { ADMIN_AUDIT_ACTIONS } from '@/lib/db/schemas/auditLog'
+import {
+  buildReactivationPatch,
+  buildSuspensionPatch,
+  setCreatorSuspendedFlag,
+} from '@/lib/auth/suspension'
 import { sendSuspensionEmail, sendReactivationEmail } from '@/lib/email/suspensionNotifier'
 import { appendAuditRecord } from '@/lib/backend/auditLedger'
+import { enqueueMaterialSearchProjection } from '@/lib/backend/materialSearchProjection'
 
 async function getAdminUser(request) {
   const cookieHeader = request.headers.get('cookie') || ''
@@ -71,15 +79,40 @@ export async function POST(request) {
     await users.updateOne(
       { _id: new ObjectId(userId) },
       {
-        $set: {
-          status: newStatus,
-          ...(isSuspending
-            ? { suspendedAt: new Date().toISOString(), suspensionReason: reason, suspendedBy: admin.sub }
-            : { reactivatedAt: new Date().toISOString(), reactivatedBy: admin.sub, suspensionReason: null }),
-          updatedAt: new Date().toISOString(),
-        },
+        $set: isSuspending
+          ? buildSuspensionPatch({ suspendedBy: admin.sub, reason })
+          : buildReactivationPatch({ reactivatedBy: admin.sub }),
       }
     )
+
+    // Hide (or restore) the creator's listings. Denormalised onto each material
+    // so public discovery stays one indexed query instead of a per-result
+    // lookup against users.
+    const listings = await setCreatorSuspendedFlag({
+      db,
+      user: targetUser,
+      suspended: isSuspending,
+    })
+    for (const material of listings.materials || []) {
+      await enqueueMaterialSearchProjection({
+        db,
+        material,
+        reason: isSuspending ? 'creator_suspended' : 'creator_reactivated',
+      })
+    }
+
+    // Append the durable audit row before responding. Awaited on purpose: an
+    // admin action that cannot be attributed must not be reported as success.
+    await recordAdminAction({
+      db,
+      adminId: admin.sub,
+      targetUser: userId,
+      action: isSuspending
+        ? ADMIN_AUDIT_ACTIONS.USER_SUSPENDED
+        : ADMIN_AUDIT_ACTIONS.USER_REACTIVATED,
+      reason,
+      metadata: { listingsUpdated: listings.modified, previousStatus: targetUser.status ?? null },
+    })
 
     await appendAuditRecord({
       db,
@@ -88,7 +121,7 @@ export async function POST(request) {
       action: `user.${action}`,
       target: { type: 'user', id: userId },
       intent: { action, reason },
-      result: { status: newStatus },
+      result: { status: newStatus, listingsUpdated: listings.modified },
       reason,
     })
 
@@ -121,7 +154,13 @@ export async function POST(request) {
       }
     }
 
-    return NextResponse.json({ success: true, status: newStatus, emailSent })
+    return NextResponse.json({
+      success: true,
+      status: newStatus,
+      isSuspended: isSuspending,
+      listingsUpdated: listings.modified,
+      emailSent,
+    })
   } catch (err) {
     auditLog({ event: 'user_suspend_error', route: 'admin/users/suspend', method: 'POST', status: 500, reason: err.message })
     return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 })

@@ -7,8 +7,10 @@ import { auditLog } from "@/lib/api/audit";
 import {
   validatePublishRequest,
   getPublishingChecklist,
+  validateContentManifestBinding,
 } from "@/lib/publishing/checklist";
 import { pinMaterialMetadata } from "@/lib/ipfs/metadata";
+import { enqueueMaterialSearchProjection } from "@/lib/backend/materialSearchProjection";
 
 /**
  * POST /api/materials/[id]/publish
@@ -87,6 +89,32 @@ export async function POST(request, { params }) {
       );
     }
 
+    const contentHash = material.storageKey || material.ipfsCid || material.cid || material.contentHash;
+    const quarantineRecord = contentHash
+      ? await db.collection("quarantine").findOne({ contentHash })
+      : null;
+    const latestManifest = contentHash
+      ? await db
+          .collection("content_manifests")
+          .findOne({ contentHash }, { sort: { generation: -1 } })
+      : null;
+    const manifestBinding = validateContentManifestBinding(material, quarantineRecord, latestManifest);
+    if (!manifestBinding.valid) {
+      auditLog({
+        event: "publish_binding_failed",
+        route: "material-publish",
+        method: "POST",
+        status: 409,
+        actor: user.sub,
+        materialId,
+        reason: manifestBinding.error,
+      });
+      return NextResponse.json(
+        { error: manifestBinding.error, code: "CONTENT_BINDING_MISMATCH" },
+        { status: 409 }
+      );
+    }
+
     // ── Persist published status ──────────────────────────────────────────
     const body = await request.json().catch(() => ({}));
     const contractId = typeof body.contractId === "string" ? body.contractId.trim() : undefined;
@@ -95,6 +123,8 @@ export async function POST(request, { params }) {
       status: "published",
       publishedAt: new Date(),
       updatedAt: new Date(),
+      contentManifestHash: manifestBinding.manifestHash,
+      contentManifestGeneration: latestManifest?.generation ?? null,
     };
 
     if (contractId) {
@@ -118,10 +148,18 @@ export async function POST(request, { params }) {
       });
     }
 
+    const nextSearchVersion = Number(material.searchVersion || material.version || 1) + 1;
+    updatePayload.searchVersion = nextSearchVersion;
+
     await db.collection("materials").updateOne(
       { _id: materialId },
       { $set: updatePayload }
     );
+    await enqueueMaterialSearchProjection({
+      db,
+      material: { ...material, ...updatePayload },
+      reason: "material_published",
+    });
 
     auditLog({
       event: "publish_success",

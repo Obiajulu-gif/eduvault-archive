@@ -1,5 +1,6 @@
 import nodemailer from "nodemailer";
 import { ObjectId } from "mongodb";
+import logger from "./logger.js";
 
 function createTransporter() {
   // Prefer explicit SMTP settings; fallback to Gmail using EMAIL_USER/PASS
@@ -128,7 +129,8 @@ export async function sendPurchaseReceiptEmail(to, purchase, material) {
   const from = process.env.EMAIL_FROM || defaultFrom;
   const transporter = createTransporter();
 
-  const title = material.title || "Study Material";
+  const snapshot = purchase.purchaseSnapshot || null;
+  const title = material.title || snapshot?.metadataUri || "Study Material";
   const amount = purchase.amount || "0";
   const asset = purchase.asset || "XLM";
   const purchaseId = String(purchase._id || purchase.purchaseId || "N/A");
@@ -183,7 +185,7 @@ export async function sendPurchaseReceiptEmail(to, purchase, material) {
   await transporter.sendMail({ from, to, subject, text, html });
 }
 
-import { enqueueSideEffect } from "@/lib/backend/outbox";
+import { enqueueSideEffect } from "./backend/outbox.js";
 
 /**
  * Send a purchase receipt if:
@@ -247,8 +249,6 @@ export async function sendReceiptIfEligible(db, purchaseId) {
       .collection("purchases")
       .updateOne({ _id: purchase._id }, { $set: { receiptSent: true } });
   } catch (err) {
-    console.error("Failed to enqueue receipt email:", err);
+    logger.error({ err, purchaseId: String(purchaseId) }, "Failed to enqueue receipt email");
   }
 }
-
-// Issue 426: Email notifications implemented

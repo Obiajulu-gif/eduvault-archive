@@ -61,3 +61,13 @@ Use this when:
 
 Rotate on a regular schedule (e.g. quarterly) and immediately on suspected
 compromise.
+
+## Refund signer versioning, rotation, and compromise recovery (#666)
+
+Refund authorization payloads carry a **signer version** and an **expiry** bound:
+
+- `PurchaseManager::verify_refund_authorization(signer_version, issued_at, expires_at)` requires the payload version to match the contract's active `RefundSignerVersion` (instance storage, default 1) and the current ledger timestamp to be within `[issued_at, expires_at]`.
+- `PurchaseManager::set_refund_signer_version(admin, version)` bumps the active version. **Compromise recovery:** bump the version and every authorization signed with an older version is disabled (`RefundSignerDisabled`) without touching valid historical records.
+- Replayed payloads are rejected by the expiry bound (`RefundAuthorizationExpired`); version mismatches are rejected distinctly (`RefundSignerVersionMismatch`).
+
+Rotation procedure: issue new payloads under the new version, bump the contract version, then rotate the signing key per the existing custody guidance below.

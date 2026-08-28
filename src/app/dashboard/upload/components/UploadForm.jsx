@@ -412,6 +412,8 @@ export default function UploadForm() {
                 alt="Final Cover Preview"
                 width={160}
                 height={90}
+                placeholder="blur"
+                blurDataURL="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII="
                 className="rounded object-cover border"
               />
               <button

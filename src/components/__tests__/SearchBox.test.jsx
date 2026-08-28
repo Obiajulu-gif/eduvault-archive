@@ -94,4 +94,15 @@ describe("SearchBox history removal", () => {
 
     expect(readSearchHistory()).toEqual(["escrow"]);
   });
+
+  it("clears all entries from the visible list and localStorage", () => {
+    seedHistory(["soroban", "wallets"]);
+    render(<SearchBox />);
+    fireEvent.focus(screen.getByLabelText("Search"));
+
+    fireEvent.click(screen.getByRole("button", { name: "Clear history" }));
+
+    expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
+    expect(readSearchHistory()).toEqual([]);
+  });
 });

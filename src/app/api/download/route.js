@@ -1,11 +1,16 @@
-﻿/**
- * GET /api/download — Issue #63 + #640
+/**
+ * GET /api/download — Issue #63 + #640 + #675
  *
  * Protected file delivery endpoint. Verifies the caller holds an active
- * on-chain entitlement for the requested material before releasing the
- * IPFS CID or proxying the file stream. Capability tokens are bound to
- * the buyer, material version, byte range policy, and a nonce to prevent
- * copying, replay, or unbounded range downloads.
+ * on-chain entitlement for the requested material before releasing a
+ * short-lived, HMAC-signed capability URL for the IPFS gateway. Capability
+ * tokens are bound to the buyer, material, byte range policy, and a nonce
+ * to prevent copying, replay, or unbounded range downloads (#640) — and
+ * are now cryptographically signed rather than plain base64(JSON) (#675),
+ * so a client can no longer tamper with the byte range, buyer, or expiry
+ * fields undetected. Every issuance and denial is written to a persisted,
+ * audit-safe access log (lib/downloads/accessLog.js) — never containing
+ * the raw token or the signed URL itself.
  *
  * Query params:
  *   - materialId  : The material identifier
@@ -17,9 +22,10 @@
  *  1. Validate params
  *  2. authorizeMaterialAccess() — the single entitlement policy boundary
  *  3. Fetch material record to get the IPFS CID
- *  4. Generate a capability token bound to buyer, material version,
- *     byte range quota, and nonce; return a time-limited redirect to
- *     the IPFS gateway (or stream the file through the Next.js edge)
+ *  4. Generate a signed capability token bound to buyer, material, byte
+ *     range quota, and nonce; return a time-limited capability URL for the
+ *     IPFS gateway
+ *  5. Record the issuance (or denial) in the persisted access log
  */
 
 import { NextResponse } from 'next/server';
@@ -30,85 +36,20 @@ import { getIpfsUrl } from '@/lib/config/chain';
 import { ObjectId } from 'mongodb';
 import { getUserFromCookie } from '@/lib/api/auth';
 import { normalizeBuyerAddress } from '@/lib/purchases/access';
+import {
+  generateCapabilityToken,
+  CAPABILITY_TTL_MS,
+  CAPABILITY_MAX_BYTES,
+} from '@/lib/downloads/capabilityToken';
+import { recordDownloadAccess } from '@/lib/downloads/accessLog';
 
-// Capability TTL — 15 minutes, after which a fresh check is required
-export const CAPABILITY_TTL_MS = Number(process.env.CAPABILITY_TTL_MS || 15_000_000);
-
-// Maximum bytes a single capability can serve (prevents quota bypass)
-export const CAPABILITY_MAX_BYTES = Number(process.env.CAPABILITY_MAX_BYTES || 10_000_000); // 10MB
-
-
-// Generate a capability token bound to buyer, material, and byte range quota.
-function generateCapabilityToken({
-  buyer,
-  material,
-  byteRangeStart,
-  byteRangeEnd,
-  nonce,
-}) {
-  const payload = {
-    // Identity binding
-    buyer,
-    material,
-    // Byte range quota (prevents amplification/bypass)
-    byteRangeStart,
-    byteRangeEnd,
-    byteRangeQuota: byteRangeEnd !== null ? byteRangeEnd - byteRangeStart + 1 : undefined,
-    // One-time nonce (prevents replay)
-    nonce: nonce || uuidv4(),
-    // Issuance time (for TTL enforcement)
-    iat: Math.floor(Date.now() / 1000),
-    // Expiration time (CAPABILITY_TTL_MS from issuance)
-    exp: Math.floor(Date.now() / 1000) + 15,
-    // Token identifier
-    jti: uuidv4(),
-  };
-
-  // Sign with a per-material secret derived from material ID + buyer
-  // In production this would use a JWS/JWT with a server-side secret;
-  // here we base64-encode the structured payload for transparency.
-  const token = Buffer.from(JSON.stringify(payload)).toString('base64');
-  return token;
-}
-
-// Verify a capability token and return its bounds, or null if invalid.
-function verifyCapabilityToken(token, buyerAddress, materialId) {
-  if (!token) return null;
-  try {
-    const raw = Buffer.from(token, 'base64').toString('utf-8');
-    const payload = JSON.parse(raw);
-
-    // Validate identity binding
-    if (payload.buyer !== buyerAddress) return null;
-    if (payload.material !== materialId) return null;
-
-    // Validate nonce is present (replay protection)
-    if (!payload.nonce) return null;
-
-    // Validate byte range quota hasn't been exceeded
-    const requestedBytes = (payload.byteRangeEnd || 0) - (payload.byteRangeStart || 0) + 1;
-    if (requestedBytes > (payload.byteRangeQuota || 0)) return null;
-    if (requestedBytes > CAPABILITY_MAX_BYTES) return null;
-
-    // Validate issuance/exp timestamps (simple TTL check)
-    const now = Math.floor(Date.now() / 1000);
-    if (payload.iat > now + 60) return null; // future-dated
-    if (payload.exp < now) return null; // expired
-
-    return {
-      byteRangeStart: payload.byteRangeStart,
-      byteRangeEnd: payload.byteRangeEnd,
-      byteRangeQuota: payload.byteRangeQuota,
-      nonce: payload.nonce,
-      jti: payload.jti,
-    };
-  } catch {
-    return null;
-  }
-}
-
+export { CAPABILITY_TTL_MS, CAPABILITY_MAX_BYTES };
 
 export const dynamic = 'force-dynamic';
+
+function clientIpFrom(request) {
+  return request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || request.headers.get('x-real-ip') || null;
+}
 
 export async function GET(request) {
   const { searchParams } = new URL(request.url);
@@ -116,6 +57,7 @@ export async function GET(request) {
   const buyerAddressParam = searchParams.get('buyerAddress') ?? '';
   const rangeParam = searchParams.get('range') ?? '';
   const nonce = searchParams.get('nonce') || uuidv4();
+  const ipAddress = clientIpFrom(request);
 
   // ── 1. Validate params
 
@@ -150,6 +92,11 @@ export async function GET(request) {
   let material;
   try {
     db = await getDb();
+    // Deliberately unfiltered by `isDeleted` / `creatorSuspended`. Access here
+    // is granted by entitlement, not by catalog visibility: a buyer's download
+    // must keep working after the creator retires the listing or is suspended.
+    // Adding a catalog filter to this lookup would revoke access people paid
+    // for. Public discovery does the hiding — see lib/db/softDelete.js.
     material = await db.collection('materials').findOne({ materialId });
     if (!material && ObjectId.isValid(materialId)) {
       material = await db.collection('materials').findOne({ _id: new ObjectId(materialId) });
@@ -168,6 +115,14 @@ export async function GET(request) {
   const decision = await authorizeMaterialAccess({ db, material, buyerAddress });
 
   if (!decision.allowed) {
+    await recordDownloadAccess(db, {
+      event: 'access_denied',
+      materialId,
+      buyerAddress,
+      denialReason: decision.state,
+      ipAddress,
+    });
+
     return NextResponse.json(
       {
         error: decision.state === 'unavailable' ? 'Entitlement verification unavailable' : 'Unlicensed Access',
@@ -191,7 +146,7 @@ export async function GET(request) {
     );
   }
 
-  // ── 5. Generate capability token and return capability-bound URL
+  // ── 5. Generate a signed capability token and return the capability URL
 
   // Parse byte range if provided (e.g. "0-1023")
   let byteRangeStart = 0;
@@ -211,7 +166,7 @@ export async function GET(request) {
   let effectiveByteRangeQuota = CAPABILITY_MAX_BYTES;
   if (rangeSize && rangeSize > CAPABILITY_MAX_BYTES) {
     return NextResponse.json(
-      { error: Requested byte range exceeds maximum capability quota of MB },
+      { error: `Requested byte range exceeds maximum capability quota of ${CAPABILITY_MAX_BYTES / 1_000_000}MB` },
       { status: 413 }
     );
   }
@@ -219,8 +174,10 @@ export async function GET(request) {
     effectiveByteRangeQuota = rangeSize;
   }
 
-  // Generate capability token bound to buyer, material, byte range, and nonce
-  const capabilityToken = generateCapabilityToken({
+  // Generate a signed capability token bound to buyer, material, byte
+  // range, and nonce — the signature covers every field, so none of them
+  // can be tampered with once issued (#675).
+  const { token: capabilityToken, payload: capabilityPayload } = generateCapabilityToken({
     buyer: buyerAddress,
     material: materialId,
     byteRangeStart,
@@ -231,18 +188,29 @@ export async function GET(request) {
   // Build the IPFS gateway URL with capability parameters
   const baseGatewayUrl = getIpfsUrl(cid);
   const capabilityQuery = new URLSearchParams({
-    // Capability token (signed JWT-like token)
+    // Signed capability token
     cap: capabilityToken,
     // Byte range start and end
-    start: byteRangeStart,
-    end: byteRangeEnd !== null ? byteRangeEnd : '',
+    start: String(byteRangeStart),
+    end: byteRangeEnd !== null ? String(byteRangeEnd) : '',
     // One-time nonce to prevent replay
     nonce,
     // Material identifier
     material: materialId,
   }).toString();
 
-  const fileUrl = ${baseGatewayUrl}?;
+  const fileUrl = `${baseGatewayUrl}?${capabilityQuery}`;
+
+  await recordDownloadAccess(db, {
+    event: 'capability_issued',
+    materialId,
+    buyerAddress,
+    decisionSource: accessSource,
+    byteRangeStart,
+    byteRangeEnd,
+    capabilityId: capabilityPayload.jti,
+    ipAddress,
+  });
 
   return NextResponse.json(
     {
@@ -254,7 +222,6 @@ export async function GET(request) {
       source: accessSource,
       // Capability metadata (client-side use only; not forwarded to gateway)
       capability: {
-        token: capabilityToken,
         byteRangeStart,
         byteRangeEnd: byteRangeEnd !== null ? byteRangeEnd : null,
         nonce,
@@ -268,8 +235,8 @@ export async function GET(request) {
         'X-Entitlement-Source': accessSource,
         // Do NOT forward the raw capability token or buyer address to the gateway;
         // only the derived byte-range parameters are passed through.
-        'X-Capability-Byte-Range-Start': byteRangeStart,
-        'X-Capability-Byte-Range-End': byteRangeEnd !== null ? byteRangeEnd : '',
+        'X-Capability-Byte-Range-Start': String(byteRangeStart),
+        'X-Capability-Byte-Range-End': byteRangeEnd !== null ? String(byteRangeEnd) : '',
       },
     }
   );

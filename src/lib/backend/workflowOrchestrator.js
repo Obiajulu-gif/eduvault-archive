@@ -5,6 +5,7 @@
  * blockchain operations, including retry logic, reconciliation, and idempotency.
  */
 
+import { randomUUID } from "node:crypto";
 import { getDb } from "@/lib/mongodb";
 import { COLLECTIONS, applyTimestamps } from "./schemaContracts";
 
@@ -257,4 +258,313 @@ export async function persistMaterialRecord(workflowId, materialData) {
   });
 
   return materialRecord;
+}
+
+/**
+ * Leases & Fencing Token support (Stellar Wave issue #632)
+ *
+ * Multiple workers can otherwise select the same pending workflow, or a slow
+ * worker can commit after its lease has been reassigned. We make every unit of
+ * work claimable with an atomic lease that records the owner, a monotonic
+ * generation, a lease expiry, and a fencing token. Every state transition and
+ * heartbeat must present the *current* fencing token or it is rejected, which
+ * prevents a stale worker from committing work that was already reassigned.
+ */
+
+// Default lease window. Short enough that a crashed/partitioned worker is
+// reclaimed quickly, long enough for a healthy worker to finish a unit of work.
+export const WORKFLOW_LEASE_DEFAULT_TTL_MS = 2 * 60 * 1000; // 2 minutes
+export const WORKFLOW_POISONED_STATE = "poisoned";
+
+export class FencingTokenMismatchError extends Error {
+  constructor(workflowId) {
+    super(
+      `Fencing token rejected for workflow ${workflowId}. ` +
+        `The lease was reassigned to another worker; this unit of work is stale.`
+    );
+    this.name = "FencingTokenMismatchError";
+    this.workflowId = workflowId;
+  }
+}
+
+function newFencingToken() {
+  // The fencing token is globally unique per claim. Combined with the monotonic
+  // `generation` counter (incremented on every claim/transition), operators get
+  // a stable ordering while the token itself guarantees that only the current
+  // lease owner can drive a state transition.
+  return randomUUID();
+}
+
+/**
+ * Atomically claim the next workflow needing work, assigning an owner,
+ * generation, lease expiry, and fencing token. Returns the claimed workflow
+ * (with the active `fencingToken`) or `null` when nothing is claimable.
+ *
+ * Two workers can never own the same generation: the claim uses a single
+ * atomic findOneAndUpdate, so the winner overwrites `fencingToken` and bumps
+ * `generation`; the loser simply finds no matching document.
+ */
+export async function claimWorkflowForProcessing(
+  workerId,
+  { leaseTtlMs = WORKFLOW_LEASE_DEFAULT_TTL_MS, now = new Date() } = {}
+) {
+  const db = await getDb();
+  const collection = db.collection(COLLECTIONS.syncState);
+
+  const query = {
+    poisoned: { $ne: true },
+    $and: [
+      {
+        $or: [
+          { state: WORKFLOW_STATES.NEEDS_RECONCILIATION },
+          {
+            state: WORKFLOW_STATES.SUBMITTED,
+            lastRetryAt: { $lt: new Date(now.getTime() - 15 * 60 * 1000) },
+          },
+        ],
+      },
+      {
+        $or: [{ leaseExpiresAt: { $lte: now } }, { leaseExpiresAt: null }],
+      },
+    ],
+  };
+
+  const claimed = await collection.findOneAndUpdate(
+    query,
+    {
+      $set: {
+        leaseOwner: workerId,
+        leaseExpiresAt: new Date(now.getTime() + leaseTtlMs),
+        fencingToken: newFencingToken(),
+        updatedAt: now,
+      },
+      $inc: { generation: 1, claimCount: 1 },
+    },
+    { sort: { updatedAt: 1 }, returnDocument: "after" }
+  );
+
+  if (!claimed) return null;
+  const doc = claimed.value || claimed;
+  return doc;
+}
+
+/**
+ * Renew the lease (heartbeat) for work in progress. Requires the active
+ * fencing token and owner, so a reassigned lease cannot be kept alive by a
+ * partitioned worker.
+ */
+export async function renewWorkflowLease(
+  workflowId,
+  fencingToken,
+  workerId,
+  { leaseTtlMs = WORKFLOW_LEASE_DEFAULT_TTL_MS, now = new Date() } = {}
+) {
+  const db = await getDb();
+  const collection = db.collection(COLLECTIONS.syncState);
+
+  const result = await collection.findOneAndUpdate(
+    {
+      _id: workflowId,
+      fencingToken,
+      leaseOwner: workerId,
+      leaseExpiresAt: { $gt: now },
+    },
+    {
+      $set: {
+        leaseExpiresAt: new Date(now.getTime() + leaseTtlMs),
+        updatedAt: now,
+      },
+    },
+    { returnDocument: "after" }
+  );
+
+  if (!result) {
+    throw new FencingTokenMismatchError(workflowId);
+  }
+  return result;
+}
+
+/**
+ * Transition a workflow's state. Requires the active fencing token, owner, and
+ * a live lease. On success the lease is released, the generation is advanced,
+ * and the fencing token is cleared so the token can never be reused.
+ */
+export async function transitionWorkflow(
+  workflowId,
+  fencingToken,
+  newState,
+  updates = {},
+  { now = new Date() } = {}
+) {
+  const db = await getDb();
+  const collection = db.collection(COLLECTIONS.syncState);
+
+  const result = await collection.findOneAndUpdate(
+    {
+      _id: workflowId,
+      fencingToken,
+      leaseExpiresAt: { $gt: now },
+    },
+    {
+      $set: applyTimestamps(
+        {
+          state: newState,
+          ...updates,
+          leaseOwner: null,
+          leaseExpiresAt: null,
+          fencingToken: null,
+        },
+        now
+      ),
+      $inc: { generation: 1 },
+    },
+    { returnDocument: "after" }
+  );
+
+  if (!result) {
+    throw new FencingTokenMismatchError(workflowId);
+  }
+  return result;
+}
+
+/**
+ * Mark a workflow as poisoned after repeated failed attempts. The lease is
+ * released so nothing else can pick it up until an operator recovers it.
+ */
+export async function poisonWorkflow(workflowId, reason, { now = new Date() } = {}) {
+  const db = await getDb();
+  const collection = db.collection(COLLECTIONS.syncState);
+
+  return collection.findOneAndUpdate(
+    { _id: workflowId },
+    {
+      $set: applyTimestamps(
+        {
+          state: WORKFLOW_POISONED_STATE,
+          poisoned: true,
+          poisonReason: reason,
+          leaseOwner: null,
+          leaseExpiresAt: null,
+          fencingToken: null,
+        },
+        now
+      ),
+    },
+    { returnDocument: "after" }
+  );
+}
+
+/**
+ * Operator recovery: return a poisoned/abandoned workflow to the queue. A new
+ * generation is minted and the lease cleared so a fresh claim can pick it up.
+ */
+export async function recoverWorkflow(workflowId, { reason, now = new Date() } = {}) {
+  const db = await getDb();
+  const collection = db.collection(COLLECTIONS.syncState);
+
+  return collection.findOneAndUpdate(
+    { _id: workflowId },
+    {
+      $set: applyTimestamps(
+        {
+          state: WORKFLOW_STATES.NEEDS_RECONCILIATION,
+          poisoned: false,
+          poisonReason: null,
+          leaseOwner: null,
+          leaseExpiresAt: null,
+          fencingToken: null,
+          retries: 0,
+          recoveryNote: reason || "Recovered by operator",
+          recoveredAt: now,
+        },
+        now
+      ),
+      $inc: { generation: 1 },
+    },
+    { returnDocument: "after" }
+  );
+}
+
+/**
+ * Confirm a workflow, optionally gated by the active fencing token. When a
+ * fencing token is supplied the transition is rejected if the lease has been
+ * reassigned, preventing a stale worker from committing after reassignment.
+ */
+export async function confirmWorkflow(workflowId, txDetails, { fencingToken } = {}) {
+  const updates = {
+    txHash: txDetails.txHash,
+    blockNumber: txDetails.blockNumber,
+    tokenId: txDetails.tokenId,
+    confirmedAt: new Date(),
+  };
+
+  if (fencingToken) {
+    return transitionWorkflow(workflowId, fencingToken, WORKFLOW_STATES.CONFIRMED, updates);
+  }
+
+  return updateWorkflowState(workflowId, WORKFLOW_STATES.CONFIRMED, updates);
+}
+
+/**
+ * Fail a workflow, optionally gated by the active fencing token.
+ */
+export async function failWorkflow(workflowId, errorReason, { fencingToken } = {}) {
+  const updates = {
+    errorReason,
+    failedAt: new Date(),
+  };
+
+  if (fencingToken) {
+    return transitionWorkflow(workflowId, fencingToken, WORKFLOW_STATES.FAILED, updates);
+  }
+
+  return updateWorkflowState(workflowId, WORKFLOW_STATES.FAILED, updates);
+}
+
+/**
+ * Record a retry against a fenced workflow. Uses the fencing token so a
+ * reassigned worker cannot clobber retry bookkeeping. When retries are
+ * exhausted the workflow becomes poisoned.
+ */
+export async function addRetryAttempt(workflowId, errorReason, { fencingToken, now = new Date() } = {}) {
+  const db = await getDb();
+  const collection = db.collection(COLLECTIONS.syncState);
+
+  const workflow = await collection.findOne({ _id: workflowId });
+  if (!workflow) return null;
+
+  const maxRetries = workflow.maxRetries || 5;
+  const newRetries = (workflow.retries || 0) + 1;
+
+  if (newRetries >= maxRetries) {
+    if (fencingToken) {
+      return transitionWorkflow(workflowId, fencingToken, WORKFLOW_POISONED_STATE, {
+        poisoned: true,
+        poisonReason: `Max retries (${maxRetries}) exceeded: ${errorReason}`,
+        retryError: errorReason,
+        lastRetryAt: now,
+        retries: newRetries,
+      });
+    }
+    return updateWorkflowState(workflowId, WORKFLOW_POISONED_STATE, {
+      poisoned: true,
+      poisonReason: `Max retries (${maxRetries}) exceeded: ${errorReason}`,
+      retryError: errorReason,
+      lastRetryAt: now,
+      retries: newRetries,
+    });
+  }
+
+  if (fencingToken) {
+    return transitionWorkflow(workflowId, fencingToken, workflow.state, {
+      retryError: errorReason,
+      lastRetryAt: now,
+      retries: newRetries,
+    });
+  }
+  return updateWorkflowState(workflowId, workflow.state, {
+    retryError: errorReason,
+    lastRetryAt: now,
+    retries: newRetries,
+  });
 }

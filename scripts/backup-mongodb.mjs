@@ -159,12 +159,50 @@ function cleanupLocal() {
 }
 
 // ---------------------------------------------------------------------------
+// Step 4: Discord webhook notification on failure
+// ---------------------------------------------------------------------------
+async function notifyDiscord(message, isError = true) {
+  const webhookUrl = process.env.DISCORD_BACKUP_WEBHOOK_URL;
+  if (!webhookUrl) return;
+
+  const payload = {
+    embeds: [
+      {
+        title: isError ? "❌ EduVault Backup Failed" : "✅ EduVault Backup Succeeded",
+        description: message,
+        color: isError ? 0xed4245 : 0x57f287,
+        timestamp: new Date().toISOString(),
+        footer: { text: "EduVault Backup Script" },
+      },
+    ],
+  };
+
+  try {
+    await fetch(webhookUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    log("info", "Discord notification sent", { isError });
+  } catch (err) {
+    log("warn", "Failed to send Discord notification", { error: err.message });
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
 (async () => {
   log("info", "EduVault backup started", { datestamp });
-  await runMongodump();
-  await uploadToS3();
-  cleanupLocal();
-  log("info", "EduVault backup finished successfully");
+  try {
+    await runMongodump();
+    await uploadToS3();
+    cleanupLocal();
+    log("info", "EduVault backup finished successfully");
+    await notifyDiscord(`Backup completed successfully at ${datestamp}. Archive: ${archiveName}`, false);
+  } catch (err) {
+    log("error", "EduVault backup failed", { error: err.message });
+    await notifyDiscord(`Backup failed at ${datestamp}: ${err.message}`);
+    process.exit(1);
+  }
 })();

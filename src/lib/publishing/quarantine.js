@@ -68,12 +68,76 @@ export function createIpfsFetchScanner({ fetchImpl = globalThis.fetch } = {}) {
   };
 }
 
+import {
+  attestManifest,
+  buildContentManifest,
+  getManifestSecret,
+} from '@/lib/backend/contentManifest';
+
+/**
+ * Persist an append-only manifest generation after a clean scan.
+ */
+export async function recordContentManifest({
+  db,
+  contentHash,
+  byteHash,
+  mimeType,
+  sizeBytes,
+  uploaderAddress,
+  scanner,
+  scanResult = null,
+}) {
+  const manifests = db.collection('content_manifests');
+  const latest = await manifests.findOne({ contentHash }, { sort: { generation: -1 } });
+  const generation = (latest?.generation || 0) + 1;
+  const manifest = buildContentManifest({
+    byteHash,
+    sizeBytes,
+    mediaType: mimeType,
+    cid: contentHash,
+    creator: uploaderAddress,
+    scanner,
+    scannerVersion: scanResult?.engineVersion || null,
+    generation,
+  });
+
+  const secret = getManifestSecret();
+  const { manifestHash, attestation } = secret
+    ? attestManifest(manifest, secret)
+    : { manifestHash: null, attestation: null };
+
+  const now = new Date();
+  await manifests.insertOne({
+    contentHash,
+    generation,
+    manifest,
+    manifestHash,
+    attestation,
+    createdAt: now,
+  });
+
+  await db.collection('quarantine').updateOne(
+    { contentHash },
+    {
+      $set: {
+        byteHash,
+        manifestHash,
+        manifestGeneration: generation,
+        updatedAt: now,
+      },
+    }
+  );
+
+  return { manifest, manifestHash, generation, attestation };
+}
+
 /**
  * Create a quarantine record for an uploaded file/content.
  */
 export async function createQuarantineRecord({
   db,
   contentHash,
+  byteHash = null,
   fileName,
   mimeType,
   sizeBytes,
@@ -87,6 +151,7 @@ export async function createQuarantineRecord({
 
   const record = {
     contentHash,
+    byteHash,
     fileName,
     mimeType,
     sizeBytes,
@@ -96,6 +161,8 @@ export async function createQuarantineRecord({
     reason: null,
     scanner: null,
     scanResult: null,
+    manifestHash: null,
+    manifestGeneration: null,
     attemptCount: 0,
     lastAttemptAt: null,
     expiresAt,
@@ -207,13 +274,28 @@ export async function runScanner({
         });
       }
 
-      return finalizeQuarantine({
+      const finalized = await finalizeQuarantine({
         db,
         contentHash,
         state: QUARANTINE_STATES.CLEAN,
         scanner: scanOutput.scannerName || scannerImpl.name,
         scanResult: { verdict: 'clean', engineVersion: scanOutput.engineVersion || null },
       });
+
+      if (finalized?.byteHash) {
+        await recordContentManifest({
+          db,
+          contentHash,
+          byteHash: finalized.byteHash,
+          mimeType,
+          sizeBytes,
+          uploaderAddress: quarantine.uploaderAddress,
+          scanner: scanOutput.scannerName || scannerImpl.name,
+          scanResult: { engineVersion: scanOutput.engineVersion || null },
+        });
+      }
+
+      return finalized;
     } catch (error) {
       return finalizeQuarantine({
         db,

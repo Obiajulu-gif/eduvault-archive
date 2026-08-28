@@ -10,9 +10,30 @@
  *   Draft       — visibility is "private"
  *   Unlisted    — visibility is "unlisted"
  *   Published   — visibility is "public"
+ *   Unavailable — the indexer marked this material orphaned by a chain
+ *                 reorg (material.syncStatus === "orphaned"), or the
+ *                 creator was suspended (material.creatorSuspended)
+ *   Restricted  — moderation removed/suspended/rejected this material
+ *                 (material.moderationStatus)
+ *   Stale       — material.updatedAt is older than STALE_AFTER_MS; the
+ *                 badges above may not reflect the live record
+ *
+ * The three live-state badges (Unavailable/Restricted/Stale) are derived
+ * from fields the indexer/moderation pipeline already write onto the
+ * material document (lib/indexer/forkDetection.js, materialSearchProjection.js)
+ * rather than a new per-badge network call — see #676. They're a no-op
+ * (badge simply doesn't appear) when a caller's query doesn't project
+ * those fields, so this is purely additive for callers that do.
  *
  * See docs/resource-status-badges.md for full reference.
  */
+
+// A material whose document hasn't been touched in longer than this is
+// flagged Stale — the other badges (rating, availability, moderation) were
+// computed from a record this old and may no longer reflect reality.
+const STALE_AFTER_MS = 24 * 60 * 60 * 1000; // 24 hours
+
+const RESTRICTED_MODERATION_STATUSES = new Set(["suspended", "removed", "rejected"]);
 
 const BADGE_STYLES = {
   Free: "bg-emerald-50 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800",
@@ -23,6 +44,9 @@ const BADGE_STYLES = {
   Draft: "bg-gray-100 dark:bg-surface-muted text-gray-600 dark:text-muted-foreground border border-gray-200 dark:border-border-strong",
   Unlisted: "bg-orange-50 dark:bg-orange-900/30 text-orange-700 dark:text-orange-300 border border-orange-200 dark:border-orange-800",
   Published: "bg-green-50 dark:bg-green-900/30 text-green-700 dark:text-green-300 border border-green-200 dark:border-green-800",
+  Unavailable: "bg-red-50 dark:bg-red-900/30 text-red-700 dark:text-red-300 border border-red-200 dark:border-red-800",
+  Restricted: "bg-red-50 dark:bg-red-900/30 text-red-700 dark:text-red-300 border border-red-200 dark:border-red-800",
+  Stale: "bg-yellow-50 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-300 border border-yellow-200 dark:border-yellow-800",
 };
 
 const BADGE_TOOLTIPS = {
@@ -34,6 +58,9 @@ const BADGE_TOOLTIPS = {
   Draft: "Private draft — not publicly listed",
   Unlisted: "Accessible by link only",
   Published: "Publicly listed in the marketplace",
+  Unavailable: "Temporarily unavailable — verifying on-chain state after a network event",
+  Restricted: "Access restricted pending moderation review",
+  Stale: "This information may be out of date",
 };
 
 export function deriveBadges(material) {
@@ -70,6 +97,21 @@ export function deriveBadges(material) {
     badges.push("Unlisted");
   } else if (visibility === "public") {
     badges.push("Published");
+  }
+
+  // Live-ish signals already projected onto the material document by the
+  // indexer (forkDetection.js) and moderation pipeline — no new network
+  // call needed here, only present when the caller's query included them (#676).
+  if (material.syncStatus === "orphaned" || material.creatorSuspended === true) {
+    badges.push("Unavailable");
+  }
+  if (RESTRICTED_MODERATION_STATUSES.has(material.moderationStatus)) {
+    badges.push("Restricted");
+  }
+
+  const updatedAtMs = material.updatedAt ? new Date(material.updatedAt).getTime() : NaN;
+  if (Number.isFinite(updatedAtMs) && Date.now() - updatedAtMs > STALE_AFTER_MS) {
+    badges.push("Stale");
   }
 
   return badges;

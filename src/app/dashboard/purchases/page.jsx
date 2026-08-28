@@ -6,6 +6,7 @@ import { useEffect, useState, useCallback } from "react";
 import { FaDownload, FaExternalLinkAlt, FaShoppingBag, FaSpinner, FaCheckCircle } from "react-icons/fa";
 import { MdOutlineSchool } from "react-icons/md";
 import { getExplorerTxUrl } from "@/lib/config/chain";
+import CopyButton from "@/components/CopyButton";
 
 function formatDate(dateStr) {
   if (!dateStr) return "—";
@@ -208,15 +209,18 @@ function PurchasedMaterialCard({ item }) {
             <span className="font-medium text-gray-500">Tx:</span>
             <span className="font-mono">{truncateHash(item.transactionHash)}</span>
             {item.transactionHash && (
-              <a
-                href={getExplorerTxUrl(item.transactionHash)}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="ml-1 text-blue-400 hover:text-blue-600"
-                title="View on Stellar Explorer"
-              >
-                <FaExternalLinkAlt size={10} />
-              </a>
+              <>
+                <CopyButton text={item.transactionHash} className="ml-1" />
+                <a
+                  href={getExplorerTxUrl(item.transactionHash)}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="ml-1 text-blue-400 hover:text-blue-600"
+                  title="View on Stellar Explorer"
+                >
+                  <FaExternalLinkAlt size={10} />
+                </a>
+              </>
             )}
           </div>
 

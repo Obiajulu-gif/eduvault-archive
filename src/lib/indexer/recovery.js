@@ -59,15 +59,21 @@ export async function findMissingTransactions({ db, accountId, limit = 200 }) {
  * Convert a Horizon payment operation record into the normalised event shape
  * expected by `applyIndexedEvent`.
  *
- * @param {object} op  - Horizon payment operation record
- * @returns {object}   - Normalised event object
+ * @param {object} op         - Horizon payment operation record
+ * @param {string} [network]  - Canonical network passphrase, for a network-scoped event id (#630)
+ * @returns {object}          - Normalised event object
  */
-function operationToEvent(op) {
+function operationToEvent(op, network = null) {
   return {
-    id: op.transaction_hash,
+    // #630: the Horizon *operation* id is a unique per-operation TOID; the
+    // transaction hash is not (two payments in one transaction share it).
+    // Using it as the event position keeps distinct operations in the same
+    // transaction from collapsing to one id and de-duping against each other.
+    id: op.id || op.transaction_hash,
     type: 'purchase.completed',
     ledger: op.ledger_attr ?? null,
     transactionHash: op.transaction_hash,
+    network,
     buyerAddress: op.from,
     sellerAddress: op.to,
     amount: op.amount,
@@ -83,15 +89,16 @@ function operationToEvent(op) {
  * @param {object} params
  * @param {import('mongodb').Db} params.db
  * @param {Array<object>} params.operations  - Missing Horizon operation records
+ * @param {string} [params.network]          - Canonical network passphrase (#630)
  * @returns {Promise<{ recovered: number, skipped: number, errors: string[] }>}
  */
-export async function reprocessMissingTransactions({ db, operations }) {
+export async function reprocessMissingTransactions({ db, operations, network = null }) {
   let recovered = 0;
   let skipped = 0;
   const errors = [];
 
   for (const op of operations) {
-    const event = operationToEvent(op);
+    const event = operationToEvent(op, network);
 
     try {
       const result = await applyIndexedEvent(db, event);
@@ -119,9 +126,10 @@ export async function reprocessMissingTransactions({ db, operations }) {
  * @param {import('mongodb').Db} params.db
  * @param {string} [params.accountId]  - Stellar address to audit (defaults to STELLAR_ADMIN_PUBLIC_KEY)
  * @param {number} [params.limit]      - Horizon scan limit
+ * @param {string} [params.network]    - Canonical network passphrase, forwarded to event id derivation (#630)
  * @returns {Promise<{ recovered: number, skipped: number, errors: string[] }>}
  */
-export async function runRecovery({ db, accountId = DEFAULT_ACCOUNT, limit = DEFAULT_LOOKBACK_LEDGERS }) {
+export async function runRecovery({ db, accountId = DEFAULT_ACCOUNT, limit = DEFAULT_LOOKBACK_LEDGERS, network = null }) {
   logger.info({ accountId, limit }, 'Starting Stellar indexer recovery run');
 
   const missing = await findMissingTransactions({ db, accountId, limit });
@@ -131,7 +139,7 @@ export async function runRecovery({ db, accountId = DEFAULT_ACCOUNT, limit = DEF
     return { recovered: 0, skipped: 0, errors: [] };
   }
 
-  const result = await reprocessMissingTransactions({ db, operations: missing });
+  const result = await reprocessMissingTransactions({ db, operations: missing, network });
 
   logger.info(result, 'Recovery run complete');
   return result;

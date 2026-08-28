@@ -1,4 +1,5 @@
 import { logger } from '@/lib/logger';
+import { validateWebhookDestination, safeFetch, SsrfError } from './ssrfGuard';
 
 export function createStatsEmbed(stats) {
   return {
@@ -38,21 +39,25 @@ export function createStatsEmbed(stats) {
 }
 
 export async function sendDiscordWebhook(url, payload, retries = 3) {
+  try {
+    await validateWebhookDestination(url, { requireHttps: true });
+  } catch (error) {
+    if (error instanceof SsrfError) {
+      logger.error(`Discord webhook destination rejected by SSRF policy (${error.code})`);
+      return false;
+    }
+    throw error;
+  }
+
   for (let attempt = 1; attempt <= retries; attempt++) {
     try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 10000);
-
-      const response = await fetch(url, {
+      const response = await safeFetch(url, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify(payload),
-        signal: controller.signal,
       });
-
-      clearTimeout(timeoutId);
 
       if (response.ok) {
         logger.info('Discord webhook sent successfully');
@@ -61,16 +66,16 @@ export async function sendDiscordWebhook(url, payload, retries = 3) {
 
       logger.warn(`Discord webhook failed (Attempt ${attempt}/${retries}): ${response.status} ${response.statusText}`);
     } catch (error) {
-      if (error.name === 'AbortError') {
-        logger.warn(`Discord webhook timeout (Attempt ${attempt}/${retries})`);
-      } else {
-        logger.error(`Discord webhook error (Attempt ${attempt}/${retries}): ${error.message}`);
+      if (error instanceof SsrfError) {
+        logger.error(`Discord webhook blocked by SSRF policy (${error.code})`);
+        return false;
       }
+      logger.error(`Discord webhook error (Attempt ${attempt}/${retries}): ${error.message}`);
     }
 
     if (attempt < retries) {
       const delay = Math.pow(2, attempt - 1) * 1000;
-      await new Promise(resolve => setTimeout(resolve, delay));
+      await new Promise((resolve) => setTimeout(resolve, delay));
     }
   }
 

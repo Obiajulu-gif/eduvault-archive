@@ -13,6 +13,7 @@ import {
   PURCHASE_MANAGER_CONTRACT_ID,
   MATERIAL_REGISTRY_CONTRACT_ID,
   STELLAR_RPC_URL,
+  NETWORK_PASSPHRASE,
 } from "@/lib/config/chain";
 
 const INDEXER_SECRET = process.env.INDEXER_SECRET ?? "";
@@ -64,16 +65,19 @@ export async function POST(request) {
       limit: BATCH_LIMIT,
       // Enables ledger-hash-based fork detection and checkpointing (#469).
       getLedgerHash: getLedgerBySequence,
+      // Enables deterministic, network-scoped event ids (#630).
+      network: NETWORK_PASSPHRASE,
     });
 
     console.log(
-      `[indexer] batch complete — applied:${result.applied} skipped:${result.skipped} cursor:${result.nextCursor}`
+      `[indexer] batch complete — applied:${result.applied} skipped:${result.skipped} quarantined:${result.quarantined} cursor:${result.nextCursor}`
     );
 
     return NextResponse.json({
       ok: true,
       applied: result.applied,
       skipped: result.skipped,
+      quarantined: result.quarantined,
       nextCursor: result.nextCursor,
     });
   } catch (err) {

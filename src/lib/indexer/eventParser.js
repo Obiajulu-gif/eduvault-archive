@@ -113,6 +113,9 @@ export function parseContractEvent(rawEvent) {
     id: rawEvent.id ?? rawEvent.pagingToken ?? undefined,
     ledger: rawEvent.ledger ?? null,
     transactionHash: rawEvent.txHash ?? rawEvent.transactionHash ?? null,
+    // Operation index within the transaction — part of Soroban RPC's own
+    // `getEvents` event shape; a canonical component of the event id (#630).
+    operationIndex: Number.isInteger(rawEvent.operationIndex) ? rawEvent.operationIndex : null,
     contractId: rawEvent.contractId ?? null,
     timestamp: rawEvent.ledgerClosedAt ?? null,
     topic: rawEvent.topic ?? rawEvent.topics ?? null,
