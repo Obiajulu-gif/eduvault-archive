@@ -1,121 +1,116 @@
-# PR Description
+# 🧪 Add Comprehensive Test Coverage for Scholarship Credit System
 
-## Overview
-This PR resolves four critical platform issues across UI accessibility, database indexing transactions, discovery filtering, and dashboard navigation:
-- **#342**: Adds interface review checklist & UI accessibility compliance for resource pages.
-- **#631**: Guarantees single-transaction atomic updates across raw events, projections, side-effect outbox intents, and indexer checkpoints.
-- **#339**: Adds resource language metadata, card badge displays, fallback logic, and discovery query filters.
-- **#341**: Implements responsive Quick Action cards on the main dashboard for creating, browsing, and accessing saved resources.
+## Problem Statement
+The scholarship credit system in `soroban/contracts/purchase-manager/src/lib.rs` implements a complete credit-based learning material access system with complex business logic including:
+- Earliest-expiry-first deterministic consumption across multiple grants
+- Time-based grant expiry with ledger-sequence precision  
+- Active grant limits (MAX_ACTIVE_SCHOLARSHIP_GRANTS = 50)
+- Complex error handling for edge cases
+
+**However, `src/test.rs` had ZERO test coverage for scholarship functionality**, leaving critical business logic untested.
+
+## Solution Overview
+Added **21 comprehensive tests** covering all scholarship credit code paths, error variants, and edge cases, including a performance stress test with maximum grants.
+
+## 📋 Test Coverage Checklist: Error Variants → Tests
+
+### ✅ Scholarship Error Coverage Complete
+
+| Error Variant | Test Function(s) | Scenario Tested |
+|---|---|---|
+| `InsufficientScholarshipCredits` | `test_insufficient_scholarship_credits`<br/>`test_expired_grant_rejection`<br/>`test_revoked_grant_rejection` | Insufficient balance<br/>All grants expired<br/>All grants revoked |
+| `ContentNotScholarshipEligible` | `test_content_not_scholarship_eligible` | Material has no scholarship cost configured |
+| `RedemptionAlreadyExists` | `test_redemption_already_exists` | Duplicate (learner, material) redemption |
+| `TooManyActiveGrants` | `test_too_many_active_grants_boundary` | Exceeding MAX_ACTIVE_SCHOLARSHIP_GRANTS=50 |
+| `ScholarshipGrantExpired` | `test_scholarship_grant_expired_error` | Operations on expired grants |
+| `ScholarshipGrantInactive` | `test_scholarship_grant_inactive_error` | Operations on revoked grants |
+| `ScholarshipGrantNotFound` | `test_scholarship_grant_not_found` | Non-existent grant ID access |
+| `InvalidCreditAmount` | `test_invalid_credit_amount` | Zero/negative credit amounts |
+| `InvalidCreditCost` | `test_invalid_credit_cost` | Zero/negative cost setting |
+| `InvalidExpiry` | `test_invalid_expiry` | Past expiry dates |
+| `GrantAlreadyProcessed` | `test_grant_already_processed_error` | Fully consumed grants |
+| `NotAuthorized` | `test_unauthorized_scholarship_operations` | Access control violations |
+
+## 🎯 Critical Business Logic Tests
+
+### **Earliest-Expiry-First Consumption** ✅
+- **`test_earliest_expiry_first_consumption_order`**: 3 grants, different expiries → consumes from earliest first
+- **`test_mixed_expiry_grants_consumption`**: Mix of expiring/non-expiring grants → correct ordering
+- **`test_max_grants_consumption_performance`**: Consumption across all 50 maximum grants
+- **Validates**: Deterministic consumption per contract docblock requirements
+
+### **Multi-Grant Edge Cases** ✅  
+- **`test_redemption_exactly_exhausting_one_grant_spillover`**: 120 credits needed, grants of 50+100 → exhausts first, takes 70 from second
+- **`test_scholarship_balance_computation_across_grants`**: Balance computation excludes expired grants
+- **Validates**: Complex arithmetic across grant boundaries
+
+### **Time-Based Expiry Logic** ✅
+- **`test_time_based_expiry_edge_case`**: Grant expires at exactly `current_ledger + 1` → tests boundary condition
+- **`test_expired_grant_rejection`**: Expired grants are excluded from consumption
+- **Validates**: Soroban ledger time integration (`expires_at <= current_ledger`)
+
+### **Resource Limits & Authorization** ✅
+- **`test_too_many_active_grants_boundary`**: Exactly 50 grants pass, 51st fails
+- **`test_unauthorized_scholarship_operations`**: Comprehensive auth testing
+- **`test_max_grants_consumption_performance`**: Stress test with maximum 50 active grants
+- **Validates**: DoS prevention, access control, and performance under load
+
+## 🔧 Implementation Quality
+
+### **Test Infrastructure**
+- **`setup_scholarship_test()`**: Standardized environment with admin, issuer, learner, materials
+- **Integration**: Uses existing `MockRegistry`, `MockAsset` patterns  
+- **Soroban-native**: Proper `env.ledger().set_sequence_number()` usage for time testing
+
+### **Coverage Methodology**
+- **Error path testing**: Every `PurchaseError` variant triggered and verified
+- **Boundary testing**: Exact limits, expiry times, consumption amounts
+- **Integration testing**: Scholarship system + entitlements + settlements
+- **Authorization testing**: Admin/issuer role separation
+- **Performance testing**: Maximum grant scenario validation
+
+## 🧪 Test Execution
+
+### **Local Testing**
+```bash
+cd soroban
+./run-tests.sh
+# OR
+cargo test --lib -- --nocapture
+```
+
+### **Expected Results**
+- All 21 new scholarship tests pass
+- All existing tests continue to pass
+- No compilation errors or warnings
+
+## 📊 Impact
+
+### **Before**: ❌ 
+- 0 scholarship tests
+- Complex business logic untested
+- High risk of regression bugs
+- No confidence in edge case handling
+
+### **After**: ✅
+- 21 comprehensive tests
+- 100% scholarship error variant coverage  
+- All critical business logic tested
+- Edge cases, boundaries, and performance validated
+
+## 🔍 Review Focus Areas
+
+1. **Business Logic Accuracy**: Verify earliest-expiry-first logic matches contract implementation
+2. **Error Mapping**: Confirm each test triggers the correct `PurchaseError` variant
+3. **Edge Case Coverage**: Review boundary conditions and arithmetic edge cases
+4. **Integration**: Ensure scholarship system doesn't break existing functionality
+5. **Performance**: Validate maximum grants scenario handles resource limits properly
+
+## Next Steps After Merge
+
+1. Monitor test execution in CI/CD pipeline
+2. Consider adding fuzzing tests for extreme edge cases
+3. Validate against actual Soroban test network deployment
 
 ---
-
-## Changes
-
-### Task 1: Add interface review checklist (#342)
-**Files:**
-- `docs/tasks/resource-pages-interface-review.md` (new)
-- `src/components/marketplace/MaterialCard.jsx`
-- `src/components/marketplace/MarketplaceFilters.jsx`
-- `src/components/materials/ResourceStatusBadge.jsx`
-
-**Details:**
-- Performed a WCAG 2.1 Level AA accessibility evaluation for resource pages (`/marketplace`, `/marketplace/[id]`, `/dashboard/upload`, `/library`).
-- Documented audit findings covering heading hierarchy (`<h1>`-`<h3>`), form field labels (`aria-label`, `<label htmlFor>`), keyboard navigation (tab order, focus rings, Enter/Space activation), and color contrast ratios in light/dark themes.
-- Enforced `focus-visible:ring-2 focus-visible:ring-blue-500` focus indicators on interactive buttons, input fields, and tab controls.
-
-**Acceptance Criteria:**
-- ✅ Check headings and labels
-- ✅ Check keyboard access
-- ✅ Check color contrast
-- ✅ Document results
-
----
-
-### Task 2: Commit indexed events, derived writes, and checkpoints atomically (#631)
-**Files:**
-- `src/lib/indexer/stellarIndexer.js`
-- `src/lib/entitlement.js`
-- `tests/backend/indexer-atomic.test.mjs` (new)
-
-**Details:**
-- Refactored `applyIndexedEvent` and `runIndexerBatch` in `stellarIndexer.js` to execute raw event persistence (`syncEvents`), aggregate projections (`materials`, `purchases`, `entitlementCache`), side-effect outbox writes (`side_effect_outbox`), and cursor checkpoints (`syncState`) inside single atomic transaction sessions.
-- Enforced deterministic idempotency keys across all projections (`materialId`, `materialId:buyerAddress`, `deliveryId`).
-- Recorded complete ledger identity metadata (`indexedLedger`, `ledgerHash`, `txHash`) across projection records for replay and rollback safety.
-- Updated `getIndexerHealth` to track `blockedEventsCount` alongside lag and dead-letter metrics.
-- Added comprehensive unit test coverage in `tests/backend/indexer-atomic.test.mjs` for crash boundary behavior and state convergence.
-
-**Acceptance Criteria:**
-- ✅ Crash injection at each boundary creates no gap or double effect
-- ✅ Restart and overlapping-worker tests converge to one state
-- ✅ Health reports lag, active checkpoint generation, and blocked events
-
----
-
-### Task 3: Add resource language filter (#339)
-**Files:**
-- `src/lib/backend/marketplaceDiscovery.js`
-- `src/components/marketplace/MarketplaceFilters.jsx`
-- `src/components/marketplace/MaterialCard.jsx`
-- `src/lib/publishing/checklist.js`
-- `tests/backend/marketplace-discovery.test.mjs`
-
-**Details:**
-- Added `LANGUAGE_OPTIONS` array and regex/unknown fallback query matching in `marketplaceDiscovery.js`.
-- Integrated Language dropdown filter into `MarketplaceFilters.jsx` with full keyboard and aria accessibility.
-- Displayed language tag on resource cards in `MaterialCard.jsx`, falling back to `"English"` (or `"Unknown"`) for materials without explicit language metadata.
-- Added language field check in recommended publishing checklist in `checklist.js`.
-- Added unit tests verifying language query construction and fallback handling in `marketplace-discovery.test.mjs`.
-
-**Acceptance Criteria:**
-- ✅ Add language field
-- ✅ Show language on cards
-- ✅ Add language filter
-- ✅ Add fallback for unknown language
-
----
-
-### Task 4: Add dashboard quick actions (#341)
-**Files:**
-- `src/app/dashboard/components/QuickActions.jsx` (new)
-- `src/app/dashboard/page.jsx`
-
-**Details:**
-- Created dedicated `QuickActions.jsx` component featuring responsive action cards:
-  1. **Create Resource**: Direct shortcut to resource upload flow (`/dashboard/upload`).
-  2. **Browse Resources**: Direct shortcut to marketplace discovery (`/marketplace`).
-  3. **Saved Resources**: Direct shortcut to bookmarked/saved items (`/dashboard/library`).
-- Styled cards with custom gradient icons, badges, hover micro-animations, and light/dark theme support (`grid-cols-1 sm:grid-cols-2 lg:grid-cols-3`).
-- Replaced static placeholder links in `src/app/dashboard/page.jsx` with the interactive `QuickActions` component.
-
-**Acceptance Criteria:**
-- ✅ Add create resource action
-- ✅ Add browse resources action
-- ✅ Add saved resources action
-- ✅ Keep cards responsive
-
----
-
-## Testing Recommendations
-
-### Backend & Indexer Tests
-- Run `node --test tests/backend/indexer-atomic.test.mjs` to verify atomic transaction semantics, outbox idempotency, and health metrics.
-- Run `node --test tests/backend/marketplace-discovery.test.mjs` to verify language filtering and unknown language fallback logic.
-- Run `node --test tests/backend/publishing-checklist.test.mjs` to verify publishing readiness rules.
-
-### UI & Accessibility Verification
-- Test focus rings and Tab key navigation on `/marketplace` filter bar and `MaterialCard` buttons.
-- Verify responsive card grid scaling on `/dashboard` across mobile (`320px`), tablet (`768px`), and desktop (`1024px+`) viewports.
-
----
-
-## Security Considerations
-- Outbox intents use deterministic delivery IDs to prevent duplicate email receipts or webhook side-effects on event replays.
-- Sanitized language query parameters prevent regex pattern injection.
-- Atomic indexer checkpoints prevent partial uncommitted projections on unexpected worker terminations.
-
----
-
-## Breaking Changes
-None. All API and database schema changes are additive and backward-compatible.
-
-Closes #342, #631, #339, #341
+**Fixes**: Scholarship credit system now has comprehensive test coverage addressing all identified untested code paths per issue requirements.

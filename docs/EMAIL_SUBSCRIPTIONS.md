@@ -135,6 +135,42 @@ When adding a new email notification type:
    - Marketing emails respect subscription preferences
    - Unsubscribe link works and updates preferences
 
+## Idempotency & Spoof-Resistant Webhook Handling (Issue #680)
+
+`src/lib/email/subscriptionGuard.js` hardens the subscription workflow against
+duplicate opt-ins and provider-webhook spoofing.
+
+### Idempotent subscribe/unsubscribe
+
+`applySubscriptionTransition({ db, email, preferenceKey, action, source, origin, verified })`
+upserts a single canonical record keyed on `email::preferenceKey` (email
+lower-cased). Duplicate opt-ins collapse into one document:
+
+- **subscribe** stamps `consentAt` (never re-minted on a retry) and clears any
+  `unsubscribedAt`.
+- **unsubscribe** stamps `unsubscribedAt`/`unsubscribedSource` and clears
+  `consentAt`.
+- Every record records `source` and `origin`, so consent can be audited.
+
+### Provider webhook signature verification
+
+`verifyProviderWebhook({ body, signatureHeader, secret, toleranceSeconds })`
+validates inbound provider events with an HMAC-SHA256 signature over
+`"<timestamp>.<rawBody>"` (same wire format as the outbound webhook sender).
+Rejects:
+
+- Missing body / header / secret
+- Non-numeric or stale timestamps (outside `toleranceSeconds`, default 300 s)
+- Signature mismatches (constant-time comparison)
+
+`signProviderWebhook(body, secret, timestamp)` is provided for parity/testing.
+
+### Tests
+
+`tests/backend/subscription-guard.test.mjs` covers duplicate-opt-in collapse,
+subscribe→unsubscribe single-doc semantics, invalid signature rejection, valid
+signature acceptance, stale-signature rejection, and canonical key handling.
+
 ## CAN-SPAM Compliance
 
 This system supports CAN-SPAM and similar regulations by:

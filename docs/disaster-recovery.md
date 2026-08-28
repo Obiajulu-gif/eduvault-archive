@@ -134,20 +134,56 @@ No obvious secrets or placeholder production values found.
 
 ---
 
-## Dead-letter event recovery (#668)
+## 5. Entitlement Cache Rebuild Verification (Issue #682)
 
-If specific events failed during replay, inspect and manage them with the operator CLI:
+The entitlement cache is a **derived** view of on-chain purchases — when it is
+restored from a stale snapshot it can silently grant or deny access that no
+longer matches the source of truth. `scripts/rebuild-entitlement-cache.mjs`
+makes the rebuild executable and verifiable.
+
+### Verification-only run (compare current cache against source of truth)
 
 ```bash
-node scripts/indexer-deadletter.mjs list --status=failed
-node scripts/indexer-deadletter.mjs retry <eventId>
-node scripts/indexer-deadletter.mjs quarantine <eventId> --reason="Permanent decode failure"
+MONGODB_URI="$MONGODB_URI" node scripts/rebuild-entitlement-cache.mjs
 ```
 
-Permanent failures must include an explicit quarantine reason. Retry and quarantine
-actions are recorded in `indexer_operator_audit`.
+Reports **missing** (should be active but not cached), **extra** (active in cache
+but no completed purchase — likely refunded), and **mismatched** entitlements
+alongside the totals. Exit code `0` = every protected download matches
+source-of-truth purchases; exit code `1` = discrepancies found (and emits the
+remediation hint).
 
----
+### Full DR rebuild (drop + repopulate cache from purchases)
+
+```bash
+MONGODB_URI="$MONGODB_URI" node scripts/rebuild-entitlement-cache.mjs --rebuild
+```
+
+Clears `entitlement_cache` and repopulates it from completed `purchases`
+records (`confirmed` / `settled` / `completed`). Add `DRY_RUN=true` to compute
+the report without writing.
+
+### RPO / RTO targets
+
+| Metric | EditalVault target | Notes |
+|---|---|---|
+| **RPO** (Recovery Point Objective) | ≤ 15 minutes of purchases | Daily mongodump snapshots plus the indexer replay keep lost confirmations ≤ 15 min |
+| **RTO** (Recovery Time Objective) | ≤ 60 minutes | Cache rebuild + verification typically completes in minutes for normal collection sizes |
+| **Backup schedule** | Daily snapshot (mongodump archive) | Retain at least 7 backups; off-site copy recommended |
+
+### Operator checklist (post-restore)
+
+1. Restore Mongo from snapshot (`mongorestore … --drop --archive=…`).
+2. Run `restore-verification.mjs` against the restored archive and confirm exit `0`.
+3. Run `npm run indexer:stellar` to replay on-chain events (materials/events).
+4. Run `scripts/rebuild-entitlement-cache.mjs` (verification-only). Confirm **no**
+   missing/extra/mismatched. If discrepancies exist, run `--rebuild`.
+5. Re-run verification; expect exit `0`.
+6. Run `npm run scan:secrets` and confirm a clean result.
+7. Spot-check protected downloads for a creator-owned and a purchased material.
+
+Mismatches are the highest-signal failure: they mean the cache and the chain
+disagree on who *should* have access — resolve before reopening traffic.
 
 ## Recovery Completion Criteria
 

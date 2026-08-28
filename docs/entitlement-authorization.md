@@ -170,6 +170,42 @@ Step 5: Remediation
 
 ---
 
+## 6b. Backend ↔ Contract Authorization Matrix (Issue #683)
+
+The API layer must prove that unauthorized creators and buyers **cannot**
+publish, update, purchase, refund, or access resources — and must map contract
+auth failures onto stable HTTP shapes instead of leaking raw contract codes.
+
+`src/lib/api/authorizationBoundary.js` centralizes that boundary:
+
+- `assertResourceOwner({ caller, owner, upgradeAdmin, action })` — fails closed
+  (401 missing wallet, 403 not-the-owner) unless the caller is the resource
+  owner or the platform upgrade admin.
+- `assertBuyer({ caller, buyer, action })` — fails closed unless the caller is
+  the recorded buyer for the resource.
+- `mapContractAuthError({ code, action })` — maps contract denial codes
+  (`NotAuthorized`, `MaterialNotFound`, `NotInitialized`, `AlreadyInitialized`,
+  …) onto stable `{ error, statusCode }` shapes (403/409/503) so raw contract
+  errors never leak to clients.
+
+### Authorization matrix
+
+| Action | Owner/Creator | Platform admin | Purchasing buyer | Anyone else |
+|:---|:---:|:---:|:---:|:---:|
+| Publish / register material | ✅ | ✅ | ❌ | ❌ 403 |
+| Update sale terms / price | ✅ | ✅ | ❌ | ❌ 403 |
+| Pause / disable a material | ✅ | ✅ | ❌ | ❌ 403 |
+| Purchase a material | ✅ | ✅ | ✅ | ✅ (payer) |
+| Access / download purchased content | ✅ | ✅ | ✅ (own purchase) | ❌ 403 |
+| Open a dispute on a purchase | ✅ | ✅ | ✅ (own purchase) | ❌ 403 |
+| Refund a purchase | admin only | ✅ | ❌ (requests) | ❌ 403 |
+| Allowlist assets | admin only | ✅ | ❌ | ❌ 403 |
+
+Every denial is fail-closed: missing wallet returns **401**, an authorized-role
+mismatch returns **403**, and an un-exported/not-found contract resource returns
+**403** (never a leaky 200). Unauthorized creator/buyer negative tests live in
+`tests/backend/authorization-boundary.test.mjs`.
+
 ## 7. Related Documents
 
 * [`docs/architecture.md`](file:///home/abujulaybeeb/Documents/Drips/Drips%2013/eduvault-archive/docs/architecture.md) — System goals, boundaries, and high-level architecture.

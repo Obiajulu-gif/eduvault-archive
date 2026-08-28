@@ -43,6 +43,28 @@ export function useUserMaterials() {
   });
 }
 
+/**
+ * Hook for cursor-based infinite loading of marketplace materials
+ * Provides better performance for large result sets
+ */
+export function useInfiniteMarketplaceMaterials(params = {}) {
+  return useQuery({
+    queryKey: ['materials', 'infinite', params],
+    queryFn: async ({ pageParam = null }) => {
+      const queryParams = { 
+        ...params, 
+        cursor: pageParam,
+        page: undefined // Remove page param for cursor-based pagination
+      };
+      return materialService.getMarketplaceMaterials(queryParams);
+    },
+    getNextPageParam: (lastPage) => {
+      return lastPage?.nextCursor || null;
+    },
+    staleTime: 5 * 60 * 1000,
+  });
+}
+
 export function useUploadFile() {
   return useMutation({
     mutationFn: materialService.uploadFile,
