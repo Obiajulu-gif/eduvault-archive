@@ -39,6 +39,7 @@
     "@react-native-async-storage/async-storage": "^3.0.2",
     "@stellar/stellar-sdk": "^13.3.0",
     "@tanstack/react-query": "^5.99.2",
+    "@types/yauzl": "^2.10.3",
     "@vercel/blob": "^2.3.3",
     "@web3modal/ethereum": "^2.7.1",
     "@web3modal/wagmi": "^5.1.11",
@@ -58,7 +59,8 @@
     "redis": "^4.7.0",
     "swagger-ui-react": "^5.32.6",
     "viem": "^2.48.2",
-    "wagmi": "^2.19.5"
+    "wagmi": "^2.19.5",
+    "yauzl": "^3.4.0"
   },
   "devDependencies": {
     "@nomicfoundation/hardhat-ethers": "^3.1.2",
@@ -79,7 +81,8 @@
     "mongodb-memory-server": "^11.2.0",
     "tailwindcss": "^4.2.3",
     "typescript": "^6.0.3",
-    "vitest": "^4.1.8"
+    "vitest": "^4.1.8",
+    "yazl": "^3.3.1"
   },
   "overrides": {
     "undici": "^6.13.0",
