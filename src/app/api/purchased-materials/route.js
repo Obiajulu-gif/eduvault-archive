@@ -62,27 +62,40 @@ export async function GET(request) {
         materials.map((m) => [m._id.toString(), m])
       );
 
-      // Merge purchase record with material metadata; strip sensitive storage fields
+      // Merge purchase record with immutable snapshot metadata when present.
       const result = purchases.map((purchase) => {
         const material = materialMap[purchase.materialId] || null;
+        const snapshot = purchase.purchaseSnapshot || null;
         if (!material) {
           return {
             purchaseId: purchase._id,
             materialId: purchase.materialId,
             purchasedAt: purchase.purchasedAt,
             transactionHash: purchase.transactionHash,
+            purchaseSnapshot: snapshot,
             material: null,
           };
         }
 
         const { storageKey, fileUrl, metadataUrl, ...safeMaterial } = material;
+        const receiptMaterial = snapshot
+          ? {
+              ...safeMaterial,
+              title: safeMaterial.title,
+              metadataHash: snapshot.metadataHash,
+              rightsHash: snapshot.rightsHash,
+              saleTermsVersion: snapshot.saleTermsVersion,
+              metadataUri: snapshot.metadataUri,
+            }
+          : safeMaterial;
 
         return {
           purchaseId: purchase._id,
           materialId: purchase.materialId,
           purchasedAt: purchase.purchasedAt,
           transactionHash: purchase.transactionHash,
-          material: safeMaterial,
+          purchaseSnapshot: snapshot,
+          material: receiptMaterial,
         };
       });
 

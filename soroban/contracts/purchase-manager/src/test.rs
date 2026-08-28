@@ -8,21 +8,45 @@ use soroban_sdk::testutils::{Address as _, Events as _, Ledger};
 use soroban_sdk::{contract, contractimpl, contracttype};
 use soroban_sdk::{vec, Bytes, Event};
 
+#[contract]
+struct MockRegistry;
+
 #[contracttype]
 #[derive(Clone)]
 enum MockRegistryKey {
     Material(BytesN<32>),
+    Immutable(BytesN<32>),
+    SaleTermsVersion(BytesN<32>),
 }
 
-#[contract]
-struct MockRegistry;
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct MockImmutableSnapshot {
+    metadata_uri: soroban_sdk::String,
+    metadata_hash: BytesN<32>,
+    rights_hash: BytesN<32>,
+}
 
 #[contractimpl]
 impl MockRegistry {
     pub fn set_material(env: Env, material_id: BytesN<32>, material: MaterialRecord) {
         env.storage()
             .persistent()
-            .set(&MockRegistryKey::Material(material_id), &material);
+            .set(&MockRegistryKey::Material(material_id.clone()), &material);
+    }
+
+    pub fn set_material_immutable(
+        env: Env,
+        material_id: BytesN<32>,
+        snapshot: MockImmutableSnapshot,
+        sale_terms_version: u32,
+    ) {
+        env.storage()
+            .persistent()
+            .set(&MockRegistryKey::Immutable(material_id.clone()), &snapshot);
+        env.storage()
+            .persistent()
+            .set(&MockRegistryKey::SaleTermsVersion(material_id), &sale_terms_version);
     }
 
     pub fn get_material(
@@ -33,6 +57,33 @@ impl MockRegistry {
             .persistent()
             .get(&MockRegistryKey::Material(material_id))
             .ok_or(PurchaseError::MaterialNotFound)
+    }
+
+    pub fn get_material_immutable(
+        env: Env,
+        material_id: BytesN<32>,
+    ) -> Result<MaterialImmutableSnapshot, PurchaseError> {
+        let snapshot: MockImmutableSnapshot = env
+            .storage()
+            .persistent()
+            .get(&MockRegistryKey::Immutable(material_id.clone()))
+            .ok_or(PurchaseError::MaterialNotFound)?;
+        Ok(MaterialImmutableSnapshot {
+            metadata_uri: snapshot.metadata_uri,
+            metadata_hash: snapshot.metadata_hash,
+            rights_hash: snapshot.rights_hash,
+        })
+    }
+
+    pub fn get_sale_terms_version(
+        env: Env,
+        material_id: BytesN<32>,
+    ) -> Result<u32, PurchaseError> {
+        Ok(env
+            .storage()
+            .persistent()
+            .get(&MockRegistryKey::SaleTermsVersion(material_id))
+            .unwrap_or(1))
     }
 }
 
@@ -194,6 +245,15 @@ fn setup_purchase(
     };
     let registry_client = MockRegistryClient::new(env, &registry);
     registry_client.set_material(&material_id, &material);
+    registry_client.set_material_immutable(
+        &material_id,
+        &MockImmutableSnapshot {
+            metadata_uri: soroban_sdk::String::from_str(env, "ipfs://metadata-v1"),
+            metadata_hash: bytes32(env, 11),
+            rights_hash: bytes32(env, 22),
+        },
+        &1,
+    );
 
     let (contract_id, client) = install_and_init_contract(env, &admin, &registry, &treasury, 500);
     client.set_asset_allowed(&admin, &asset, &AssetKind::Token, &true);
@@ -2904,4 +2964,82 @@ fn test_native_asset_purchase_with_payouts() {
     assert!(!escrow.claimed);
     assert_eq!(escrow.total_amount, 20_000_000);
     assert_eq!(escrow.payout_shares.len(), 2);
+}
+
+#[test]
+fn purchase_snapshot_preserves_metadata_after_sale_terms_change() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let registry = env.register(MockRegistry, ());
+    let treasury = Address::generate(&env);
+    let buyer = Address::generate(&env);
+    let creator = Address::generate(&env);
+    let asset = env.register(MockAsset, ());
+    let material_id = bytes32(&env, 9);
+
+    let material = MaterialRecord {
+        material_id: material_id.clone(),
+        creator: creator.clone(),
+        paused: false,
+        status: MaterialStatus::Active,
+        quotes: vec![
+            &env,
+            AssetQuote {
+                asset: asset.clone(),
+                amount: 1_000_000,
+            },
+        ],
+        payout_shares: vec![
+            &env,
+            PayoutShare {
+                recipient: creator.clone(),
+                share_bps: 10_000,
+            },
+        ],
+    };
+
+    let registry_client = MockRegistryClient::new(&env, &registry);
+    registry_client.set_material(&material_id, &material);
+    registry_client.set_material_immutable(
+        &material_id,
+        &MockImmutableSnapshot {
+            metadata_uri: soroban_sdk::String::from_str(&env, "ipfs://terms-v1"),
+            metadata_hash: bytes32(&env, 41),
+            rights_hash: bytes32(&env, 42),
+        },
+        &1,
+    );
+
+    let (_contract_id, client) =
+        install_and_init_contract(&env, &admin, &registry, &treasury, 500);
+    client.set_asset_allowed(&admin, &asset, &AssetKind::Token, &true);
+
+    let purchase_id = client.purchase(
+        &buyer,
+        &material_id,
+        &asset,
+        &1_000_000,
+        &sample_transaction_id(&env),
+    );
+
+    let snapshot = client.get_purchase_snapshot(&purchase_id).unwrap();
+    assert_eq!(snapshot.metadata_hash, bytes32(&env, 41));
+    assert_eq!(snapshot.rights_hash, bytes32(&env, 42));
+    assert_eq!(snapshot.sale_terms_version, 1);
+
+    registry_client.set_material_immutable(
+        &material_id,
+        &MockImmutableSnapshot {
+            metadata_uri: soroban_sdk::String::from_str(&env, "ipfs://terms-v2"),
+            metadata_hash: bytes32(&env, 91),
+            rights_hash: bytes32(&env, 92),
+        },
+        &2,
+    );
+
+    let snapshot_after_terms_change = client.get_purchase_snapshot(&purchase_id).unwrap();
+    assert_eq!(snapshot_after_terms_change.metadata_hash, bytes32(&env, 41));
+    assert_eq!(snapshot_after_terms_change.sale_terms_version, 1);
 }

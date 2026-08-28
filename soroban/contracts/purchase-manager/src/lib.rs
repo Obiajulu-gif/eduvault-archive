@@ -170,6 +170,18 @@ pub struct EntitlementRecord {
     pub granted_ledger: u32,
 }
 
+/// Immutable material metadata captured at purchase time (#667).
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PurchaseSnapshot {
+    pub material_id: BytesN<32>,
+    pub metadata_uri: String,
+    pub metadata_hash: BytesN<32>,
+    pub rights_hash: BytesN<32>,
+    pub sale_terms_version: u32,
+    pub purchase_ledger: u32,
+}
+
 /// Escrow record holding creator payout funds during the cooling-off period
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -306,6 +318,8 @@ enum DataKey {
     AllowedAssetIndexCount,
     /// Maintenance index (#464): sequential slot -> creator address.
     CreatorTierIndex(u64),
+    /// Immutable purchase metadata snapshot (#667).
+    PurchaseSnapshot(u64),
     /// Instance storage: total number of `CreatorTierIndex` slots populated.
     CreatorTierIndexCount,
     /// Instance storage: total number of `auth::AuthDataKey::AdminRoleIndex`
@@ -443,6 +457,9 @@ pub struct PurchaseCompletedEvent {
     pub platform_fee: i128,
     pub seller_net_amount: i128,
     pub entitlement_active: bool,
+    pub metadata_hash: BytesN<32>,
+    pub rights_hash: BytesN<32>,
+    pub sale_terms_version: u32,
     pub transaction_id: Bytes,
 }
 
@@ -714,6 +731,12 @@ pub trait MaterialRegistryInterface {
         material_id: &BytesN<32>,
     ) -> Result<MaterialRecord, PurchaseError>;
 
+    fn get_material_immutable(
+        &self,
+        env: &Env,
+        material_id: &BytesN<32>,
+    ) -> Result<MaterialImmutableSnapshot, PurchaseError>;
+
     /// Sale-terms version (#681): bumped by the registry on every
     /// `update_sale_terms`; used to reject stale buyer quotes.
     fn get_sale_terms_version(
@@ -721,6 +744,15 @@ pub trait MaterialRegistryInterface {
         env: &Env,
         material_id: &BytesN<32>,
     ) -> Result<u32, PurchaseError>;
+}
+
+/// Immutable metadata anchors returned by the registry (#667).
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MaterialImmutableSnapshot {
+    pub metadata_uri: String,
+    pub metadata_hash: BytesN<32>,
+    pub rights_hash: BytesN<32>,
 }
 
 /// Interface implementation using cross-contract call
@@ -732,6 +764,20 @@ impl MaterialRegistryInterface for Address {
     ) -> Result<MaterialRecord, PurchaseError> {
         let func = Symbol::new(env, "get_material");
         let result: Result<MaterialRecord, PurchaseError> = env.invoke_contract(
+            self,
+            &func,
+            Vec::from_array(env, [material_id.into_val(env)]),
+        );
+        result.map_err(|_| PurchaseError::RegistryCallFailed)
+    }
+
+    fn get_material_immutable(
+        &self,
+        env: &Env,
+        material_id: &BytesN<32>,
+    ) -> Result<MaterialImmutableSnapshot, PurchaseError> {
+        let func = Symbol::new(env, "get_material_immutable");
+        let result: Result<MaterialImmutableSnapshot, PurchaseError> = env.invoke_contract(
             self,
             &func,
             Vec::from_array(env, [material_id.into_val(env)]),
@@ -877,6 +923,10 @@ impl PurchaseManager {
 
         let purchase_id = get_and_increment_purchase_nonce(&env)?;
         let current_ledger = env.ledger().sequence();
+        let sale_terms_version = config.registry.get_sale_terms_version(&env, &material_id)?;
+        let immutable = config
+            .registry
+            .get_material_immutable(&env, &material_id)?;
 
         if platform_fee > 0 {
             transfer_asset(&env, &buyer, &config.treasury, &asset, platform_fee)?;
@@ -938,6 +988,16 @@ impl PurchaseManager {
         set_entitlement(&env, &entitlement);
         index_purchase(&env, purchase_id, &material_id, &buyer);
 
+        let snapshot = PurchaseSnapshot {
+            material_id: material_id.clone(),
+            metadata_uri: immutable.metadata_uri,
+            metadata_hash: immutable.metadata_hash.clone(),
+            rights_hash: immutable.rights_hash.clone(),
+            sale_terms_version,
+            purchase_ledger: current_ledger,
+        };
+        set_purchase_snapshot(&env, purchase_id, &snapshot);
+
         // Store purchase → buyer mapping for admin refunds
         env.storage()
             .persistent()
@@ -963,6 +1023,9 @@ impl PurchaseManager {
             platform_fee,
             seller_net_amount: seller_net,
             entitlement_active: true,
+            metadata_hash: immutable.metadata_hash,
+            rights_hash: immutable.rights_hash,
+            sale_terms_version,
             transaction_id,
         }
         .publish(&env);
@@ -1396,6 +1459,13 @@ impl PurchaseManager {
         buyer: Address,
     ) -> Option<EntitlementRecord> {
         get_entitlement_internal(&env, &material_id, &buyer)
+    }
+
+    /// Immutable metadata snapshot captured at purchase time (#667).
+    pub fn get_purchase_snapshot(env: Env, purchase_id: u64) -> Option<PurchaseSnapshot> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::PurchaseSnapshot(purchase_id))
     }
 
     /// Get current platform configuration
@@ -3064,6 +3134,12 @@ fn get_entitlement_internal(
 fn set_entitlement(env: &Env, entitlement: &EntitlementRecord) {
     let key = DataKey::Entitlement((entitlement.material_id.clone(), entitlement.buyer.clone()));
     env.storage().persistent().set(&key, entitlement);
+    extend_persistent_ttl(env, &key);
+}
+
+fn set_purchase_snapshot(env: &Env, purchase_id: u64, snapshot: &PurchaseSnapshot) {
+    let key = DataKey::PurchaseSnapshot(purchase_id);
+    env.storage().persistent().set(&key, snapshot);
     extend_persistent_ttl(env, &key);
 }
 
