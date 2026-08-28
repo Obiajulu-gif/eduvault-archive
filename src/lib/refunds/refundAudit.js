@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import { COLLECTIONS } from '@/lib/backend/schemaContracts';
 import { auditLog } from '@/lib/api/audit';
 import { REFUND_POLICY_VERSION } from './refundPolicy';
+import { appendAuditRecord } from '@/lib/backend/auditLedger';
 
 /**
  * Tamper-evident audit trail for refund actions (Issue #27 — "every
@@ -76,6 +77,19 @@ export async function recordRefundAuditEvent({
 
   const entryHash = crypto.createHash('sha256').update(prevHash + canonicalize(entry)).digest('hex');
   await collection.insertOne({ ...entry, entryHash });
+
+  if (db.collection('audit_ledger')) {
+    await appendAuditRecord({
+      db,
+      operationId: `${String(refundId)}:${action}:${resolvedCorrelationId}`,
+      actor: entry.actor,
+      action: `refund.${action}`,
+      target: { type: 'refund', id: String(refundId) },
+      intent: { purchaseId: entry.purchaseId, previousStatus, newStatus, reason },
+      result: { status: newStatus, correlationId: resolvedCorrelationId },
+      reason,
+    });
+  }
 
   auditLog({
     event: `refund_${action}`,

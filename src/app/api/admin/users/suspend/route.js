@@ -14,6 +14,7 @@ import {
   setCreatorSuspendedFlag,
 } from '@/lib/auth/suspension'
 import { sendSuspensionEmail, sendReactivationEmail } from '@/lib/email/suspensionNotifier'
+import { appendAuditRecord } from '@/lib/backend/auditLedger'
 import { enqueueMaterialSearchProjection } from '@/lib/backend/materialSearchProjection'
 
 async function getAdminUser(request) {
@@ -111,6 +112,17 @@ export async function POST(request) {
         : ADMIN_AUDIT_ACTIONS.USER_REACTIVATED,
       reason,
       metadata: { listingsUpdated: listings.modified, previousStatus: targetUser.status ?? null },
+    })
+
+    await appendAuditRecord({
+      db,
+      operationId: request.headers.get('x-idempotency-key') || `${action}:${userId}:${targetUser.status || 'active'}:${admin.sub}`,
+      actor: admin.sub,
+      action: `user.${action}`,
+      target: { type: 'user', id: userId },
+      intent: { action, reason },
+      result: { status: newStatus, listingsUpdated: listings.modified },
+      reason,
     })
 
     auditLog({
