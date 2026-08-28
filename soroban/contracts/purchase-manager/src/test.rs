@@ -1403,6 +1403,686 @@ fn purchase_refunded_event_emitted() {
     assert!(refunded_found);
 }
 
+// ============== Scholarship Credit System Tests ==============
+
+fn setup_scholarship_test(
+    env: &Env,
+) -> (
+    Address,
+    PurchaseManagerClient<'_>,
+    Address,
+    Address,
+    BytesN<32>,
+) {
+    env.mock_all_auths();
+
+    let admin = Address::generate(env);
+    let registry = env.register(MockRegistry, ());
+    let treasury = Address::generate(env);
+    let issuer = Address::generate(env);
+    let learner = Address::generate(env);
+    let asset = env.register(MockAsset, ());
+
+    let material_id = bytes32(env, 1);
+    let material = MaterialRecord {
+        material_id: material_id.clone(),
+        creator: Address::generate(env),
+        paused: false,
+        status: MaterialStatus::Active,
+        quotes: vec![
+            env,
+            AssetQuote {
+                asset: asset.clone(),
+                amount: 1_000_000,
+            },
+        ],
+        payout_shares: vec![
+            env,
+            PayoutShare {
+                recipient: Address::generate(env),
+                share_bps: 10_000,
+            },
+        ],
+    };
+    let registry_client = MockRegistryClient::new(env, &registry);
+    registry_client.set_material(&material_id, &material);
+
+    let (_, client) = install_and_init_contract(env, &admin, &registry, &treasury, 500);
+    client.set_asset_allowed(&admin, &asset, &AssetKind::Token, &true);
+    client.set_scholarship_issuer(&admin, &issuer, &true);
+    client.set_scholarship_credit_cost(&admin, &material_id, &100); // 100 credits needed
+
+    (admin, client, issuer, learner, material_id)
+}
+
+#[test]
+fn test_earliest_expiry_first_consumption_order() {
+    let env = Env::default();
+    let (admin, client, issuer, learner, material_id) = setup_scholarship_test(&env);
+
+    // Issue three grants with different expiry dates
+    let current_ledger = env.ledger().sequence();
+    
+    // Grant 1: expires at ledger 100, 50 credits
+    client.issue_scholarship_credits(&issuer, &learner, &50, &Some(100));
+    
+    // Grant 2: expires at ledger 200, 75 credits  
+    client.issue_scholarship_credits(&issuer, &learner, &75, &Some(200));
+    
+    // Grant 3: no expiry, 25 credits
+    client.issue_scholarship_credits(&issuer, &learner, &25, &None);
+
+    // Total balance should be 150
+    assert_eq!(client.get_scholarship_credit_balance(&learner), 150);
+
+    // Set ledger to 50 (before any expiry)
+    env.ledger().set_sequence_number(50);
+
+    // Redeem 100 credits - should consume from grant 1 (expires earliest) first
+    let result = client.redeem_scholarship_credits(&learner, &material_id);
+    assert!(result.is_ok());
+    
+    // Remaining should be 50 (75 from grant 2 + 25 from grant 3 - consumed 0 from grant 2)
+    assert_eq!(client.get_scholarship_credit_balance(&learner), 50);
+    
+    // Grant 1 should be exhausted and inactive
+    let grant = client.get_scholarship_grant(&0).unwrap();
+    assert_eq!(grant.remaining_credits, 0);
+    assert!(!grant.active);
+}
+
+#[test]
+fn test_redemption_exactly_exhausting_one_grant_spillover() {
+    let env = Env::default();
+    let (admin, client, issuer, learner, material_id) = setup_scholarship_test(&env);
+
+    // Set higher credit cost for this test
+    client.set_scholarship_credit_cost(&admin, &material_id, &120);
+    
+    // Issue two grants
+    client.issue_scholarship_credits(&issuer, &learner, &50, &Some(100));  // Grant 0
+    client.issue_scholarship_credits(&issuer, &learner, &100, &Some(200)); // Grant 1
+
+    env.ledger().set_sequence_number(50);
+    
+    // Redeem 120 credits - should exhaust first grant (50) and take 70 from second
+    let result = client.redeem_scholarship_credits(&learner, &material_id);
+    assert!(result.is_ok());
+    
+    let result_data = result.unwrap();
+    assert_eq!(result_data.credits_used, 120);
+    assert_eq!(result_data.remaining_credits, 30); // 100 - 70 remaining from grant 1
+    
+    // Grant 0 should be exhausted
+    let grant0 = client.get_scholarship_grant(&0).unwrap();
+    assert_eq!(grant0.remaining_credits, 0);
+    assert!(!grant0.active);
+    
+    // Grant 1 should have 30 remaining
+    let grant1 = client.get_scholarship_grant(&1).unwrap();
+    assert_eq!(grant1.remaining_credits, 30);
+    assert!(grant1.active);
+}
+
+#[test]
+fn test_expired_grant_rejection() {
+    let env = Env::default();
+    let (_, client, issuer, learner, material_id) = setup_scholarship_test(&env);
+
+    // Issue grant that expires at ledger 100
+    client.issue_scholarship_credits(&issuer, &learner, &200, &Some(100));
+    
+    // Advance ledger past expiry
+    env.ledger().set_sequence_number(101);
+    
+    // Try to redeem - should fail with expired grant
+    let result = client.try_redeem_scholarship_credits(&learner, &material_id);
+    assert_eq!(result, Err(Ok(PurchaseError::InsufficientScholarshipCredits)));
+}
+
+#[test]
+fn test_revoked_grant_rejection() {
+    let env = Env::default();
+    let (admin, client, issuer, learner, material_id) = setup_scholarship_test(&env);
+
+    // Issue grant
+    client.issue_scholarship_credits(&issuer, &learner, &200, &None);
+    
+    // Verify grant is active
+    let grant = client.get_scholarship_grant(&0).unwrap();
+    assert!(grant.active);
+    
+    // Revoke the grant
+    client.revoke_scholarship_grant(&admin, &0);
+    
+    // Try to redeem - should fail
+    let result = client.try_redeem_scholarship_credits(&learner, &material_id);
+    assert_eq!(result, Err(Ok(PurchaseError::InsufficientScholarshipCredits)));
+}
+
+#[test]
+fn test_too_many_active_grants_boundary() {
+    let env = Env::default();
+    let (_, client, issuer, learner, _) = setup_scholarship_test(&env);
+
+    // Issue exactly 50 grants (the MAX_ACTIVE_SCHOLARSHIP_GRANTS limit)
+    for _ in 0..50 {
+        client.issue_scholarship_credits(&issuer, &learner, &10, &None);
+    }
+    
+    // 51st grant should fail
+    let result = client.try_issue_scholarship_credits(&issuer, &learner, &10, &None);
+    assert_eq!(result, Err(Ok(PurchaseError::TooManyActiveGrants)));
+}
+
+#[test]
+fn test_content_not_scholarship_eligible() {
+    let env = Env::default();
+    let (admin, client, issuer, learner, _) = setup_scholarship_test(&env);
+
+    // Create material without scholarship cost set
+    let registry = env.register(MockRegistry, ());
+    let non_eligible_material = bytes32(&env, 99);
+    let material = MaterialRecord {
+        material_id: non_eligible_material.clone(),
+        creator: Address::generate(&env),
+        paused: false,
+        status: MaterialStatus::Active,
+        quotes: vec![&env, AssetQuote { asset: env.register(MockAsset, ()), amount: 1_000_000 }],
+        payout_shares: vec![&env, PayoutShare { recipient: Address::generate(&env), share_bps: 10_000 }],
+    };
+    let registry_client = MockRegistryClient::new(&env, &registry);
+    registry_client.set_material(&non_eligible_material, &material);
+
+    // Issue credits
+    client.issue_scholarship_credits(&issuer, &learner, &100, &None);
+    
+    // Try to redeem against material with no scholarship cost
+    let result = client.try_redeem_scholarship_credits(&learner, &non_eligible_material);
+    assert_eq!(result, Err(Ok(PurchaseError::ContentNotScholarshipEligible)));
+}
+
+#[test]
+fn test_redemption_already_exists() {
+    let env = Env::default();
+    let (_, client, issuer, learner, material_id) = setup_scholarship_test(&env);
+
+    // Issue credits and redeem once
+    client.issue_scholarship_credits(&issuer, &learner, &200, &None);
+    client.redeem_scholarship_credits(&learner, &material_id).unwrap();
+    
+    // Issue more credits
+    client.issue_scholarship_credits(&issuer, &learner, &200, &None);
+    
+    // Try to redeem again for same material - should fail
+    let result = client.try_redeem_scholarship_credits(&learner, &material_id);
+    assert_eq!(result, Err(Ok(PurchaseError::RedemptionAlreadyExists)));
+}
+
+#[test]
+fn test_insufficient_scholarship_credits() {
+    let env = Env::default();
+    let (_, client, issuer, learner, material_id) = setup_scholarship_test(&env);
+
+    // Issue only 50 credits but need 100
+    client.issue_scholarship_credits(&issuer, &learner, &50, &None);
+    
+    let result = client.try_redeem_scholarship_credits(&learner, &material_id);
+    assert_eq!(result, Err(Ok(PurchaseError::InsufficientScholarshipCredits)));
+}
+
+#[test]
+fn test_scholarship_grant_expired_error() {
+    let env = Env::default();
+    let (admin, client, issuer, learner, _) = setup_scholarship_test(&env);
+
+    // Issue grant that expires at ledger 100
+    client.issue_scholarship_credits(&issuer, &learner, &100, &Some(100));
+    
+    // Advance past expiry
+    env.ledger().set_sequence_number(101);
+    
+    // Try to revoke expired grant - should fail with ScholarshipGrantExpired
+    let result = client.try_revoke_scholarship_grant(&admin, &0);
+    assert_eq!(result, Err(Ok(PurchaseError::ScholarshipGrantExpired)));
+}
+
+#[test]
+fn test_scholarship_grant_inactive_error() {
+    let env = Env::default();
+    let (admin, client, issuer, learner, _) = setup_scholarship_test(&env);
+
+    // Issue and then revoke grant
+    client.issue_scholarship_credits(&issuer, &learner, &100, &None);
+    client.revoke_scholarship_grant(&admin, &0);
+    
+    // Try to revoke again - should fail with ScholarshipGrantInactive
+    let result = client.try_revoke_scholarship_grant(&admin, &0);
+    assert_eq!(result, Err(Ok(PurchaseError::ScholarshipGrantInactive)));
+}
+
+#[test]
+fn test_grant_already_processed_error() {
+    let env = Env::default();
+    let (_, client, issuer, learner, material_id) = setup_scholarship_test(&env);
+
+    // Issue exactly enough credits
+    client.issue_scholarship_credits(&issuer, &learner, &100, &None);
+    
+    // Redeem (this should consume the grant fully)
+    client.redeem_scholarship_credits(&learner, &material_id).unwrap();
+    
+    // The grant should now be inactive with 0 remaining credits
+    let grant = client.get_scholarship_grant(&0).unwrap();
+    assert!(!grant.active);
+    assert_eq!(grant.remaining_credits, 0);
+}
+
+#[test]
+fn test_mixed_expiry_grants_consumption() {
+    let env = Env::default();
+    let (_, client, issuer, learner, material_id) = setup_scholarship_test(&env);
+
+    // Create grants with mixed expiry: some expire, some don't
+    client.issue_scholarship_credits(&issuer, &learner, &30, &Some(50));  // Will expire
+    client.issue_scholarship_credits(&issuer, &learner, &40, &None);      // No expiry
+    client.issue_scholarship_credits(&issuer, &learner, &50, &Some(200)); // Far future
+    
+    // Advance past first grant expiry
+    env.ledger().set_sequence_number(51);
+    
+    // Should now have 90 credits (40 + 50, first grant expired)
+    assert_eq!(client.get_scholarship_credit_balance(&learner), 90);
+    
+    // Redemption should work with remaining credits
+    let result = client.redeem_scholarship_credits(&learner, &material_id);
+    assert!(result.is_ok());
+}
+
+#[test]
+fn test_scholarship_balance_computation_across_grants() {
+    let env = Env::default();
+    let (_, client, issuer, learner, _) = setup_scholarship_test(&env);
+
+    // Issue multiple grants
+    client.issue_scholarship_credits(&issuer, &learner, &25, &None);
+    client.issue_scholarship_credits(&issuer, &learner, &35, &Some(100));
+    client.issue_scholarship_credits(&issuer, &learner, &40, &Some(200));
+    
+    // Total should be sum of all grants
+    assert_eq!(client.get_scholarship_credit_balance(&learner), 100);
+    
+    // Advance past first expiry
+    env.ledger().set_sequence_number(101);
+    
+    // Should exclude expired grant
+    assert_eq!(client.get_scholarship_credit_balance(&learner), 65); // 25 + 40
+}
+
+#[test]  
+fn test_time_based_expiry_edge_case() {
+    let env = Env::default();
+    let (_, client, issuer, learner, material_id) = setup_scholarship_test(&env);
+
+    // Issue grant that expires exactly at current ledger + 1
+    let current = env.ledger().sequence();
+    client.issue_scholarship_credits(&issuer, &learner, &100, &Some(current + 1));
+    
+    // Should still be valid at current ledger
+    assert_eq!(client.get_scholarship_credit_balance(&learner), 100);
+    
+    // Advance to expiry ledger
+    env.ledger().set_sequence_number(current + 1);
+    
+    // Should now be expired (expires_at <= current_ledger)
+    assert_eq!(client.get_scholarship_credit_balance(&learner), 0);
+}
+
+#[test]
+fn test_invalid_credit_amount() {
+    let env = Env::default();
+    let (_, client, issuer, learner, _) = setup_scholarship_test(&env);
+
+    // Try to issue zero credits
+    let result = client.try_issue_scholarship_credits(&issuer, &learner, &0, &None);
+    assert_eq!(result, Err(Ok(PurchaseError::InvalidCreditAmount)));
+
+    // Try to issue negative credits
+    let result = client.try_issue_scholarship_credits(&issuer, &learner, &-100, &None);
+    assert_eq!(result, Err(Ok(PurchaseError::InvalidCreditAmount)));
+}
+
+#[test]
+fn test_invalid_credit_cost() {
+    let env = Env::default();
+    let (admin, client, _, _, material_id) = setup_scholarship_test(&env);
+
+    // Try to set zero cost
+    let result = client.try_set_scholarship_credit_cost(&admin, &material_id, &0);
+    assert_eq!(result, Err(Ok(PurchaseError::InvalidCreditCost)));
+
+    // Try to set negative cost
+    let result = client.try_set_scholarship_credit_cost(&admin, &material_id, &-50);
+    assert_eq!(result, Err(Ok(PurchaseError::InvalidCreditCost)));
+}
+
+#[test]
+fn test_invalid_expiry() {
+    let env = Env::default();
+    let (_, client, issuer, learner, _) = setup_scholarship_test(&env);
+
+    // Try to set expiry in the past
+    let current = env.ledger().sequence();
+    let result = client.try_issue_scholarship_credits(&issuer, &learner, &100, &Some(current - 1));
+    assert_eq!(result, Err(Ok(PurchaseError::InvalidExpiry)));
+}
+
+#[test]
+fn test_scholarship_grant_not_found() {
+    let env = Env::default();
+    let (admin, client, _, _, _) = setup_scholarship_test(&env);
+
+    // Try to revoke non-existent grant
+    let result = client.try_revoke_scholarship_grant(&admin, &999);
+    assert_eq!(result, Err(Ok(PurchaseError::ScholarshipGrantNotFound)));
+
+    // Try to get non-existent grant
+    let grant = client.get_scholarship_grant(&999);
+    assert!(grant.is_none());
+}
+
+#[test]
+fn test_unauthorized_scholarship_operations() {
+    let env = Env::default();
+    let (admin, client, issuer, learner, material_id) = setup_scholarship_test(&env);
+
+    let unauthorized = Address::generate(&env);
+
+    // Unauthorized issuer can't issue credits
+    let result = client.try_issue_scholarship_credits(&unauthorized, &learner, &100, &None);
+    assert_eq!(result, Err(Ok(PurchaseError::NotAuthorized)));
+
+    // Unauthorized admin can't set costs
+    let result = client.try_set_scholarship_credit_cost(&unauthorized, &material_id, &50);
+    assert_eq!(result, Err(Ok(PurchaseError::NotAuthorized)));
+
+    // Unauthorized admin can't revoke grants
+    client.issue_scholarship_credits(&issuer, &learner, &100, &None);
+    let result = client.try_revoke_scholarship_grant(&unauthorized, &0);
+    assert_eq!(result, Err(Ok(PurchaseError::NotAuthorized)));
+}
+
+#[test]
+fn test_max_grants_consumption_performance() {
+    let env = Env::default();
+    let (admin, client, issuer, learner, material_id) = setup_scholarship_test(&env);
+
+    // Set higher cost requiring consumption across multiple grants
+    client.set_scholarship_credit_cost(&admin, &material_id, &500);
+
+    // Issue exactly 50 grants (MAX limit) with 10 credits each = 500 total
+    for i in 0..50 {
+        // Vary expiry to test earliest-first logic across all grants
+        let expiry = if i % 5 == 0 { None } else { Some(1000 + i as u32) };
+        client.issue_scholarship_credits(&issuer, &learner, &10, &expiry);
+    }
+
+    // Verify we have exactly 500 credits across 50 grants
+    assert_eq!(client.get_scholarship_credit_balance(&learner), 500);
+
+    // This redemption should consume from ALL 50 grants (10 credits each)
+    let result = client.redeem_scholarship_credits(&learner, &material_id);
+    assert!(result.is_ok());
+    
+    let result_data = result.unwrap();
+    assert_eq!(result_data.credits_used, 500);
+    assert_eq!(result_data.remaining_credits, 0);
+
+    // All grants should now be inactive/exhausted
+    let final_balance = client.get_scholarship_credit_balance(&learner);
+    assert_eq!(final_balance, 0);
+}
+
+// ============== Bulk Refund Tests ==============
+
+fn setup_bulk_purchase_test(
+    env: &Env,
+    recipient_count: u32,
+) -> (
+    Address,
+    PurchaseManagerClient<'_>,
+    Address,
+    Address,
+    BytesN<32>,
+    Vec<Address>,
+    u64, // first_purchase_id
+) {
+    env.mock_all_auths();
+
+    let admin = Address::generate(env);
+    let registry = env.register(MockRegistry, ());
+    let treasury = Address::generate(env);
+    let purchaser = Address::generate(env);
+    let creator = Address::generate(env);
+    let asset = env.register(MockAsset, ());
+
+    let material_id = bytes32(env, 1);
+    let material = MaterialRecord {
+        material_id: material_id.clone(),
+        creator: creator.clone(),
+        paused: false,
+        status: MaterialStatus::Active,
+        quotes: vec![
+            env,
+            AssetQuote {
+                asset: asset.clone(),
+                amount: 1_000_000,
+            },
+        ],
+        payout_shares: vec![
+            env,
+            PayoutShare {
+                recipient: creator.clone(),
+                share_bps: 10_000,
+            },
+        ],
+    };
+    let registry_client = MockRegistryClient::new(env, &registry);
+    registry_client.set_material(&material_id, &material);
+
+    let (_, client) = install_and_init_contract(env, &admin, &registry, &treasury, 500);
+    client.set_asset_allowed(&admin, &asset, &AssetKind::Token, &true);
+
+    // Create recipients
+    let mut recipients = vec![env; recipient_count as usize];
+    for i in 0..recipient_count {
+        recipients.set(i, Address::generate(env));
+    }
+
+    // Perform bulk purchase
+    let result = client.purchase_bulk_licenses(
+        &purchaser,
+        &material_id,
+        &asset,
+        &1_000_000,
+        &sample_transaction_id(env),
+        &recipients,
+    );
+    let first_purchase_id = result.first_purchase_id;
+
+    (admin, client, purchaser, creator, material_id, recipients, first_purchase_id)
+}
+
+#[test]
+fn test_bulk_refund_full_batch() {
+    let env = Env::default();
+    let (admin, client, purchaser, _, material_id, recipients, first_purchase_id) = 
+        setup_bulk_purchase_test(&env, 5);
+
+    // Verify all recipients have entitlements
+    for i in 0..recipients.len() {
+        let recipient = recipients.get_unchecked(i);
+        assert!(client.has_entitlement(&material_id, &recipient));
+    }
+
+    // Perform bulk refund
+    let result = client.refund_bulk_purchase(&admin, &purchaser, &material_id, &25);
+    assert!(result.is_ok());
+    
+    let refund_result = result.unwrap();
+    assert_eq!(refund_result.refunded_count, 5);
+    assert_eq!(refund_result.skipped_count, 0);
+    assert_eq!(refund_result.total_refund_amount, 5 * 950_000); // 5 * seller_net
+
+    // Verify all entitlements are revoked
+    for i in 0..recipients.len() {
+        let recipient = recipients.get_unchecked(i);
+        assert!(!client.has_entitlement(&material_id, &recipient));
+    }
+
+    // Verify all settlements are in Refunded state
+    for i in 0..5u32 {
+        let purchase_id = first_purchase_id + i as u64;
+        let settlement = client.get_settlement(&purchase_id).unwrap();
+        assert_eq!(settlement.state, SettlementState::Refunded);
+    }
+}
+
+#[test]
+fn test_bulk_refund_partial_batch() {
+    let env = Env::default();
+    let (admin, client, purchaser, _, material_id, recipients, first_purchase_id) = 
+        setup_bulk_purchase_test(&env, 5);
+
+    // Manually refund the first 2 purchases individually
+    client.refund_purchase(&admin, &first_purchase_id);
+    client.refund_purchase(&admin, &(first_purchase_id + 1));
+
+    // Now try bulk refund - should skip the first 2, refund the remaining 3
+    let result = client.refund_bulk_purchase(&admin, &purchaser, &material_id, &25);
+    assert!(result.is_ok());
+    
+    let refund_result = result.unwrap();
+    assert_eq!(refund_result.refunded_count, 3); // Only 3 remaining were refunded
+    assert_eq!(refund_result.skipped_count, 2);  // 2 were already refunded
+    assert_eq!(refund_result.total_refund_amount, 3 * 950_000); // 3 * seller_net
+
+    // Verify all entitlements are still revoked
+    for i in 0..recipients.len() {
+        let recipient = recipients.get_unchecked(i);
+        assert!(!client.has_entitlement(&material_id, &recipient));
+    }
+}
+
+#[test]
+fn test_bulk_refund_resource_limit_boundary() {
+    let env = Env::default();
+    let (admin, client, purchaser, _, material_id, _, first_purchase_id) = 
+        setup_bulk_purchase_test(&env, 50); // MAX_BULK_LICENSE_RECIPIENTS
+
+    // Request refund with limit higher than MAX_MAINTENANCE_BATCH
+    let result = client.refund_bulk_purchase(&admin, &purchaser, &material_id, &100);
+    assert!(result.is_ok());
+    
+    let refund_result = result.unwrap();
+    // Should be capped at MAX_MAINTENANCE_BATCH (25)
+    assert_eq!(refund_result.refunded_count + refund_result.skipped_count, 25);
+    assert_eq!(refund_result.refunded_count, 25);
+    assert_eq!(refund_result.skipped_count, 0);
+
+    // Verify only the first 25 were processed
+    for i in 0..25u32 {
+        let purchase_id = first_purchase_id + i as u64;
+        let settlement = client.get_settlement(&purchase_id).unwrap();
+        assert_eq!(settlement.state, SettlementState::Refunded);
+    }
+
+    // Verify the remaining are still pending
+    for i in 25..50u32 {
+        let purchase_id = first_purchase_id + i as u64;
+        let settlement = client.get_settlement(&purchase_id).unwrap();
+        assert_eq!(settlement.state, SettlementState::Pending);
+    }
+}
+
+#[test]
+fn test_bulk_refund_authorization() {
+    let env = Env::default();
+    let (admin, client, purchaser, _, material_id, _, _) = 
+        setup_bulk_purchase_test(&env, 3);
+
+    let unauthorized = Address::generate(&env);
+
+    // Unauthorized caller should fail
+    let result = client.try_refund_bulk_purchase(&unauthorized, &purchaser, &material_id, &25);
+    assert_eq!(result, Err(Ok(PurchaseError::NotAuthorized)));
+
+    // Original purchaser should succeed
+    let result = client.refund_bulk_purchase(&purchaser, &purchaser, &material_id, &25);
+    assert!(result.is_ok());
+}
+
+#[test]
+fn test_bulk_refund_nonexistent_bulk_purchase() {
+    let env = Env::default();
+    let (admin, client, _, _, _, _, _) = setup_bulk_purchase_test(&env, 3);
+
+    let fake_purchaser = Address::generate(&env);
+    let fake_material = bytes32(&env, 99);
+
+    // Non-existent bulk purchase should fail
+    let result = client.try_refund_bulk_purchase(&admin, &fake_purchaser, &fake_material, &25);
+    assert_eq!(result, Err(Ok(PurchaseError::MaterialNotFound)));
+}
+
+#[test]
+fn test_bulk_refund_with_disputes() {
+    let env = Env::default();
+    let (admin, client, purchaser, _, material_id, recipients, first_purchase_id) = 
+        setup_bulk_purchase_test(&env, 5);
+
+    // Open dispute on the first purchase
+    let first_recipient = recipients.get_unchecked(0);
+    let reason = Bytes::from_array(&env, b"Defective material");
+    client.open_dispute(&first_recipient, &first_purchase_id, &reason);
+
+    // Bulk refund should skip the disputed purchase
+    let result = client.refund_bulk_purchase(&admin, &purchaser, &material_id, &25);
+    assert!(result.is_ok());
+    
+    let refund_result = result.unwrap();
+    assert_eq!(refund_result.refunded_count, 4); // 4 pending purchases refunded
+    assert_eq!(refund_result.skipped_count, 1);  // 1 disputed purchase skipped
+
+    // Verify the disputed purchase is still in Disputed state
+    let settlement = client.get_settlement(&first_purchase_id).unwrap();
+    assert_eq!(settlement.state, SettlementState::Disputed);
+}
+
+#[test]
+fn test_get_bulk_purchase_record() {
+    let env = Env::default();
+    let (_, client, purchaser, _, material_id, recipients, first_purchase_id) = 
+        setup_bulk_purchase_test(&env, 3);
+
+    // Query the bulk purchase record
+    let bulk_record = client.get_bulk_purchase(&purchaser, &material_id);
+    assert!(bulk_record.is_some());
+    
+    let record = bulk_record.unwrap();
+    assert_eq!(record.purchaser, purchaser);
+    assert_eq!(record.material_id, material_id);
+    assert_eq!(record.first_purchase_id, first_purchase_id);
+    assert_eq!(record.recipient_count, 3);
+    assert_eq!(record.unit_price, 1_000_000);
+
+    // Query non-existent bulk purchase
+    let fake_purchaser = Address::generate(&env);
+    let fake_material = bytes32(&env, 99);
+    let no_record = client.get_bulk_purchase(&fake_purchaser, &fake_material);
+    assert!(no_record.is_none());
+}
+
 // ============== Existing Tests (preserved for compatibility) ==============
 
 #[test]

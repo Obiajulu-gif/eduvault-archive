@@ -8,6 +8,7 @@ import { getUserFromCookie } from "@/lib/api/auth";
 import { getDb } from "@/lib/mongodb";
 import { ObjectId } from "mongodb";
 import { buildMaterialHistoryEntry, EDITABLE_MATERIAL_FIELDS } from "@/lib/backend/schemaContracts";
+import { enqueueMaterialSearchProjection } from "@/lib/backend/materialSearchProjection";
 
 export const runtime = "nodejs";
 
@@ -52,6 +53,11 @@ export async function POST(request) {
         };
 
         const result = await db.collection("materials").insertOne(doc);
+        await enqueueMaterialSearchProjection({
+          db,
+          material: { _id: result.insertedId, ...doc },
+          reason: "material_created",
+        });
         auditLog({ event: "material_created", route: "materials", method: "POST", status: 201, actor: user.sub });
         return NextResponse.json({ success: true, materialId: result.insertedId, ...sanitizeMaterial(doc) }, { status: 201 });
       } catch (err) {
@@ -131,13 +137,20 @@ export async function PUT(request) {
 
         const now = new Date();
         const nextVersion = (existing.version || 1) + 1;
-        const updateDoc = { ...updates, updatedAt: now, updatedBy: userAddress, version: nextVersion };
+        const updateDoc = { ...updates, updatedAt: now, updatedBy: userAddress, version: nextVersion, searchVersion: nextVersion };
 
         const result = await db.collection("materials").findOneAndUpdate(
           { _id: new ObjectId(materialId) },
           { $set: updateDoc },
           { returnDocument: "after" }
         );
+        const updatedMaterial = result?.value || result || { ...existing, ...updateDoc };
+        await enqueueMaterialSearchProjection({
+          db,
+          material: updatedMaterial,
+          reason: "material_updated",
+          now,
+        });
 
         const historyEntry = buildMaterialHistoryEntry({
           materialId,
@@ -151,7 +164,7 @@ export async function PUT(request) {
         await db.collection("material_history").insertOne(historyEntry);
 
         auditLog({ event: "material_updated", route: "materials", method: "PUT", status: 200, actor: user.sub, materialId });
-        return NextResponse.json(sanitizeMaterial(result));
+        return NextResponse.json(sanitizeMaterial(updatedMaterial));
       } catch (err) {
         if (err.name === "ValidationError") throw err;
         auditLog({ event: "material_update_failed", route: "materials", method: "PUT", status: 500, reason: err.message });

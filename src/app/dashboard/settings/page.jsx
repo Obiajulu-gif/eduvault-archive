@@ -3,6 +3,7 @@
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import BannerUpload from "@/components/BannerUpload";
+import ProfileProgress from "@/components/dashboard/ProfileProgress";
 import { FaCheckCircle, FaExclamationCircle } from "react-icons/fa";
 
 export default function SettingsPage() {
@@ -42,6 +43,10 @@ export default function SettingsPage() {
         <p className="text-sm text-gray-500">
           Customize your profile and marketplace appearance.
         </p>
+      </div>
+
+      <div className="max-w-2xl">
+        <ProfileProgress />
       </div>
 
       <div className="bg-white rounded-lg shadow-sm p-8 max-w-2xl">

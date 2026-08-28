@@ -202,6 +202,10 @@ export function validateMaterialPayload(body) {
       maxItems: 6,
       maxLength: 280,
     }),
+    previewImages: normalizeStringList(body?.previewImages, {
+      maxItems: 5,
+      maxLength: 2048,
+    }),
     storageKey,
     fileUrl: storageKey,
   };
@@ -277,6 +281,13 @@ export function validateMaterialUpdatePayload(body) {
     }
   }
 
+  if (body.previewImages !== undefined) {
+    allowed.previewImages = normalizeStringList(body.previewImages, {
+      maxItems: 5,
+      maxLength: 2048,
+    });
+  }
+
   if (Object.keys(allowed).length === 0) {
     throw new ValidationError("No editable fields provided");
   }
@@ -318,12 +329,20 @@ export function validateDateRangeQuery(searchParams, { maxRangeDays = 366, defau
 }
 
 export function parsePagination(searchParams, { defaultPageSize = 12, maxPageSize = 50 } = {}) {
-  const page = Math.max(1, Number(searchParams.get("page") || "1"));
   const pageSize = Math.max(
     1,
     Math.min(maxPageSize, Number(searchParams.get("pageSize") || String(defaultPageSize)))
   );
-  return { page, pageSize };
+
+  // Check for cursor-based pagination first
+  const cursor = searchParams.get("cursor");
+  if (cursor) {
+    return { cursor, pageSize, paginationType: "cursor" };
+  }
+
+  // Fall back to offset-based pagination for backward compatibility
+  const page = Math.max(1, Number(searchParams.get("page") || "1"));
+  return { page, pageSize, paginationType: "offset" };
 }
 
 export function escapeRegExp(value) {

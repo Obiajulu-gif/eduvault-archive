@@ -9,6 +9,7 @@ import {
   getPublishingChecklist,
 } from "@/lib/publishing/checklist";
 import { pinMaterialMetadata } from "@/lib/ipfs/metadata";
+import { enqueueMaterialSearchProjection } from "@/lib/backend/materialSearchProjection";
 
 /**
  * POST /api/materials/[id]/publish
@@ -118,10 +119,18 @@ export async function POST(request, { params }) {
       });
     }
 
+    const nextSearchVersion = Number(material.searchVersion || material.version || 1) + 1;
+    updatePayload.searchVersion = nextSearchVersion;
+
     await db.collection("materials").updateOne(
       { _id: materialId },
       { $set: updatePayload }
     );
+    await enqueueMaterialSearchProjection({
+      db,
+      material: { ...material, ...updatePayload },
+      reason: "material_published",
+    });
 
     auditLog({
       event: "publish_success",

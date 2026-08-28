@@ -184,7 +184,7 @@ export async function sendPurchaseReceiptEmail(to, purchase, material) {
   await transporter.sendMail({ from, to, subject, text, html });
 }
 
-import { enqueueSideEffect } from "@/lib/backend/outbox";
+import { enqueueSideEffect } from "./backend/outbox.js";
 
 /**
  * Send a purchase receipt if:

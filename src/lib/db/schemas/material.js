@@ -64,6 +64,15 @@ export const MaterialSchema = {
           bsonType: "string",
           description: "Free-text reason recorded at soft-delete time",
         },
+        previewImages: {
+          bsonType: "array",
+          items: {
+            bsonType: "string",
+            description: "IPFS CID for preview image",
+          },
+          maxItems: 5,
+          description: "Array of CIDs for preview images (gallery)",
+        },
       },
     },
   },

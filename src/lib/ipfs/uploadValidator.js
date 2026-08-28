@@ -1,6 +1,15 @@
+import zlib from 'node:zlib';
+
 /**
  * Validates uploaded file byte streams by inspecting magic numbers / file headers
  * before dispatching to Pinata. Prevents malformed or spoofed files from being pinned.
+ *
+ * For OOXML files (.docx, .xlsx, .pptx), it inspects the internal ZIP structure
+ * to verify that [Content_Types].xml contains the expected content types.
+ *
+ * Note: Legacy OLE2 files (.doc, .xls, .ppt) share an identical signature. Deep parsing
+ * is not performed here, and we rely on the malware quarantine scanner in
+ * src/lib/publishing/quarantine.js as the actual line of defense.
  */
 
 // Magic number signatures keyed by MIME type
@@ -120,6 +129,83 @@ export async function validateFileMagicNumber(file) {
       valid: false,
       reason: `File header does not match declared MIME type "${mimeType}". The file may be corrupt or misidentified.`,
     };
+  }
+
+  // Deep verification for OOXML types (docx, xlsx, pptx)
+  if (
+    mimeType === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' ||
+    mimeType === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' ||
+    mimeType === 'application/vnd.openxmlformats-officedocument.presentationml.presentation'
+  ) {
+    try {
+      const bufferSize = Math.min(file.size, 65536);
+      const buffer = await readHeader(file, bufferSize);
+
+      let offset = 0;
+      let contentTypesXmlBuffer = null;
+      let foundContentTypes = false;
+
+      // Scan up to 5 entries just in case [Content_Types].xml is not the first entry
+      for (let i = 0; i < 5; i++) {
+        if (offset + 30 > buffer.length) break;
+
+        const sig = buffer[offset] | (buffer[offset + 1] << 8) | (buffer[offset + 2] << 16) | (buffer[offset + 3] << 24);
+        if (sig !== 0x04034b50) break;
+
+        const compressionMethod = buffer[offset + 8] | (buffer[offset + 9] << 8);
+        const compressedSize = (buffer[offset + 18] | (buffer[offset + 19] << 8) | (buffer[offset + 20] << 16) | (buffer[offset + 21] << 24)) >>> 0;
+        const uncompressedSize = (buffer[offset + 22] | (buffer[offset + 23] << 8) | (buffer[offset + 24] << 16) | (buffer[offset + 25] << 24)) >>> 0;
+        const fileNameLength = buffer[offset + 26] | (buffer[offset + 27] << 8);
+        const extraFieldLength = buffer[offset + 28] | (buffer[offset + 29] << 8);
+
+        if (offset + 30 + fileNameLength + extraFieldLength > buffer.length) break;
+
+        const fileNameBytes = buffer.slice(offset + 30, offset + 30 + fileNameLength);
+        const fileName = new TextDecoder().decode(fileNameBytes);
+
+        if (fileName === '[Content_Types].xml') {
+          foundContentTypes = true;
+          const dataOffset = offset + 30 + fileNameLength + extraFieldLength;
+          if (dataOffset + compressedSize > buffer.length) {
+            return { valid: false, reason: 'Invalid archive: [Content_Types].xml is truncated.' };
+          }
+          const compressedData = buffer.slice(dataOffset, dataOffset + compressedSize);
+          if (compressionMethod === 0) {
+            contentTypesXmlBuffer = compressedData;
+          } else if (compressionMethod === 8) {
+            contentTypesXmlBuffer = zlib.inflateRawSync(compressedData);
+          } else {
+            return { valid: false, reason: `Unsupported compression method for [Content_Types].xml: ${compressionMethod}` };
+          }
+          break;
+        }
+
+        offset = offset + 30 + fileNameLength + extraFieldLength + compressedSize;
+      }
+
+      if (!foundContentTypes || !contentTypesXmlBuffer) {
+        return { valid: false, reason: 'Invalid OOXML document: [Content_Types].xml not found in the archive.' };
+      }
+
+      const xmlString = new TextDecoder().decode(contentTypesXmlBuffer);
+      let expectedContentType = '';
+      if (mimeType === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') {
+        expectedContentType = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml';
+      } else if (mimeType === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet') {
+        expectedContentType = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml';
+      } else if (mimeType === 'application/vnd.openxmlformats-officedocument.presentationml.presentation') {
+        expectedContentType = 'application/vnd.openxmlformats-officedocument.presentationml.presentation.main+xml';
+      }
+
+      if (!xmlString.includes(expectedContentType)) {
+        return {
+          valid: false,
+          reason: `Spoofing detected: OOXML file declared as "${mimeType}" but internal content type does not match.`,
+        };
+      }
+    } catch (err) {
+      return { valid: false, reason: `Failed to parse OOXML archive: ${err.message}` };
+    }
   }
 
   return { valid: true };

@@ -8,6 +8,7 @@ import { withApiHardening } from "@/lib/api/hardening";
 import { getDb } from "@/lib/mongodb";
 import { auditLog } from "@/lib/api/audit";
 import { errorResponse } from "@/lib/utils/errorResponse";
+import { enqueueMaterialSearchProjection } from "@/lib/backend/materialSearchProjection";
 
 function normalizeAddress(addr) {
   return String(addr || "").trim().toLowerCase();
@@ -80,14 +81,23 @@ export async function POST(request, context) {
         const archived = body.archived !== undefined ? Boolean(body.archived) : body.action !== "restore";
 
         const now = new Date();
+        const nextSearchVersion = Number(material.searchVersion || material.version || 1) + 1;
         const updateDoc = {
           archived,
           archivedAt: archived ? now : null,
           updatedAt: now,
           updatedBy: userAddress,
+          searchVersion: nextSearchVersion,
         };
 
         await db.collection("materials").updateOne(query, { $set: updateDoc });
+        const updatedMaterial = { ...material, ...updateDoc };
+        await enqueueMaterialSearchProjection({
+          db,
+          material: updatedMaterial,
+          reason: archived ? "material_archived" : "material_restored",
+          now,
+        });
 
         auditLog({
           event: archived ? "material_archived" : "material_restored",

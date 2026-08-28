@@ -29,3 +29,13 @@ Systems involved: Frontend, Wallet, Soroban `PurchaseManager`, Stellar RPC, Inde
 - Run the indexer locally: `npm run indexer:stellar` (uses `scripts/run-stellar-indexer.mjs`).
 - Reprocess dead-letter entries: `node scripts/reprocess-deadletter.mjs`.
 - Inspect dead-letter events in MongoDB collection `dead_letter_events` for failure details.
+
+## Mobile checkout recovery (#684)
+
+Mobile users who leave the browser or wallet popup mid-checkout can now resume or safely cancel:
+
+- `PurchaseManager::begin_checkout(buyer, material_id)` records a pending attempt; a second submission while pending is blocked with `CheckoutPending` (no duplicate checkout).
+- `PurchaseManager::cancel_checkout(buyer, material_id)` clears a pending attempt after an interruption (safe to call; missing attempts are not an error).
+- A completed `purchase` clears the pending state automatically.
+
+Flow: begin checkout -> wallet signing interrupted -> return to app -> either retry (pending blocks duplicates until cancelled) or cancel and re-quote.
