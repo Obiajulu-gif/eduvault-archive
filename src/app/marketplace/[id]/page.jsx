@@ -12,12 +12,20 @@ import { useEntitlement } from "@/hooks/api/useEntitlements";
 import { QueryStateProvider } from "@/components/common/QueryStateProvider";
 import Web3ErrorBoundary from "@/components/web3/Web3ErrorBoundary";
 import Navbar from "@/components/Navbar";
+import dynamic from "next/dynamic";
 import ResourceStatusBadge from "@/components/materials/ResourceStatusBadge";
-import RecommendedMaterials from "@/components/materials/RecommendedMaterials";
 import MaterialReviewPanel from "@/components/materials/MaterialReviewPanel";
 import { trackRecentlyViewed } from "@/hooks/useRecentlyViewed";
-import BuyNowModal from "./modals/BuyNowModal";
 import PreviewBlock from "./components/PreviewBlock";
+
+const RecommendedMaterials = dynamic(
+  () => import("@/components/materials/RecommendedMaterials"),
+  { ssr: false }
+);
+const BuyNowModal = dynamic(
+  () => import("./modals/BuyNowModal"),
+  { ssr: false }
+);
 import PreviewStat from "./components/PreviewStat";
 import CreatorCard from "./components/CreatorCard";
 import PurchaseCard from "./components/PurchaseCard";
@@ -307,7 +315,7 @@ export default function MaterialDetailsPage() {
         </QueryStateProvider>
       </main>
 
-      {materialQuery.data && (
+      {materialQuery.data && showBuyModal && (
         <Web3ErrorBoundary onRetry={() => setShowBuyModal(false)}>
           <BuyNowModal
             isOpen={showBuyModal}

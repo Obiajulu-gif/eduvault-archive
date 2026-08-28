@@ -290,5 +290,6 @@ The chain should secure settlement and rights. The web application should optimi
 | [`stellar-wallet-setup.md`](stellar-wallet-setup.md) | User-facing Stellar wallet installation and connection guide |
 | [`creator-publishing-guide.md`](creator-publishing-guide.md) | Step-by-step tutorial for uploading and listing materials |
 | [`soroban-upgrade-pattern.md`](soroban-upgrade-pattern.md) | Contract upgrade strategy and migration rules |
+| [`soroban-scholarship-credits.md`](soroban-scholarship-credits.md) | On-chain scholarship credit grants, redemption flow, and issuer authorization |
 | [`purchase-flow-architecture.md`](purchase-flow-architecture.md) | Hybrid on-chain/off-chain purchase boundaries |
 | [`entitlement-authorization.md`](entitlement-authorization.md) | Entitlement authorization decision flow, states, cache guarantees, and support playbook |
