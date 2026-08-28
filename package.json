@@ -1,6 +1,7 @@
 {
   "name": "eduvault",
   "version": "0.1.0",
+  "type": "module",
   "description": "Stellar-aligned educational content marketplace prototype for creator payments, licensing, and discovery.",
   "license": "MIT",
   "keywords": [
@@ -21,7 +22,7 @@
     "test:all": "npm run test:contracts && npm run test:backend",
     "test:contracts": "hardhat test",
     "test:integration": "vitest run test/integration",
-    "test:backend": "node --test tests/backend/*.test.mjs",
+    "test:backend": "npx tsx --test tests/backend/*.test.mjs",
     "audit:deps": "npm audit --audit-level=critical",
     "audit:deps:high": "npm audit --audit-level=high",
     "audit:deps:critical": "npm audit --audit-level=critical",
