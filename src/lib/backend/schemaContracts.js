@@ -22,6 +22,7 @@ export const COLLECTIONS = {
   materialSearchTombstones: "material_search_tombstones",
   materialSearchReconciliationAudit: "material_search_reconciliation_audit",
   indexerOperatorAudit: "indexer_operator_audit",
+  materialPreviews: "material_previews",
 };
 
 export const REQUIRED_INDEXES = {
@@ -142,6 +143,12 @@ export const REQUIRED_INDEXES = {
   ],
   material_search_reconciliation_audit: [
     { keys: { runId: 1, createdAt: 1 } },
+  ],
+  // #638: sandboxed preview descriptors, keyed by the original file's content
+  // hash. A separate trust domain from the file itself and from `materials`.
+  material_previews: [
+    { keys: { contentHash: 1 }, options: { unique: true, name: "material_previews_content_hash_idx", background: true } },
+    { keys: { state: 1, updatedAt: 1 }, options: { name: "material_previews_state_idx", background: true } },
   ],
 };
 
