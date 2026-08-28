@@ -7,6 +7,7 @@ export const COLLECTIONS = {
   users: "users",
   materials: "materials",
   purchases: "purchases",
+  payouts: "payouts",
   entitlementCache: "entitlement_cache",
   syncState: "sync_state",
   syncEvents: "sync_events",
@@ -18,6 +19,7 @@ export const COLLECTIONS = {
   refunds: "refunds",
   refundAuditLog: "refund_audit_log",
   adminAuditLog: ADMIN_AUDIT_COLLECTION,
+  payoutStatements: "payout_statements",
 };
 
 export const REQUIRED_INDEXES = {
@@ -64,6 +66,25 @@ export const REQUIRED_INDEXES = {
     { keys: { buyerAddress: 1, createdAt: -1 } },
     { keys: { materialId: 1, buyerAddress: 1 }, options: { unique: true, sparse: true } },
     { keys: { chainTxHash: 1 }, options: { unique: true, sparse: true } },
+    // Supports the monthly payout-statement generator's "completed sales in
+    // [monthStart, monthEnd)" scan (#293), and is the same shape the
+    // per-creator earnings query in creator/payouts/route.js would benefit
+    // from once scoped by buyerAddress/materialId alongside it.
+    { keys: { status: 1, purchasedAt: 1 }, options: { name: "purchases_status_purchasedAt_idx", background: true } },
+  ],
+  payouts: [
+    // #293: monthly-statements.mjs scans all payouts in a date window across
+    // every creator, then groups in memory — this is the index that scan
+    // relies on to avoid a full collection scan.
+    { keys: { createdAt: 1 }, options: { name: "payouts_createdAt_idx", background: true } },
+    // Matches the existing (previously unindexed) creator/payouts/route.js
+    // query: `payouts.find({ creatorAddress }).sort({ createdAt: -1 })`.
+    { keys: { creatorAddress: 1, createdAt: -1 }, options: { name: "payouts_creator_createdAt_idx", background: true } },
+  ],
+  payout_statements: [
+    // One statement per creator per calendar month — the idempotency guard
+    // monthly-statements.mjs uses to avoid regenerating/re-emailing on retry.
+    { keys: { creatorAddress: 1, month: 1 }, options: { name: "payout_statements_creator_month_idx", unique: true } },
   ],
   entitlement_cache: [
     { keys: { buyerAddress: 1, materialId: 1 }, options: { unique: true } },
