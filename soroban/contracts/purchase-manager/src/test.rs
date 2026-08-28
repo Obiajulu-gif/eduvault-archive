@@ -1954,9 +1954,24 @@ fn setup_bulk_purchase_test(
     client.set_asset_allowed(&admin, &asset, &AssetKind::Token, &true);
 
     // Create recipients
-    let mut recipients = vec![env; recipient_count as usize];
-    for i in 0..recipient_count {
-        recipients.set(i, Address::generate(env));
+    //
+    // Fixed in passing, out of #677's own scope: `vec![env; recipient_count
+    // as usize]` used std::vec!'s repeat-element syntax, which
+    // soroban_sdk::vec! doesn't support (it only has a variadic-elements
+    // form) — this failed to compile on upstream/main, the very first error
+    // in this file. Vec::set also requires the index to already exist (it's
+    // a put, not a grow-and-set), so a pre-sized vec wasn't the right fix
+    // anyway; building via push_back is both correct and what set() would
+    // have actually needed. NOTE: this crate's test suite still does not
+    // compile after this fix — ~27 further pre-existing errors remain in
+    // the scholarship-credit and bulk-refund tests further down this file
+    // (client.refund_bulk_purchase()/client.redeem_scholarship_credits()
+    // called as if non-try_ variants still returned Result, when the
+    // generated client auto-unwraps them). Deliberately left alone — fixing
+    // that is a much larger, unrelated undertaking outside #677.
+    let mut recipients = Vec::new(env);
+    for _ in 0..recipient_count {
+        recipients.push_back(Address::generate(env));
     }
 
     // Perform bulk purchase
@@ -3722,4 +3737,53 @@ fn purchase_snapshot_preserves_metadata_after_sale_terms_change() {
     let snapshot_after_terms_change = client.get_purchase_snapshot(&purchase_id).unwrap();
     assert_eq!(snapshot_after_terms_change.metadata_hash, bytes32(&env, 41));
     assert_eq!(snapshot_after_terms_change.sale_terms_version, 1);
+}
+
+// ============== Upgrade Compatibility Tests (#677) ==============
+//
+// See material-registry/src/test.rs's identical section header for the full
+// explanation of why a genuine "swap Wasm, verify migrated data" test isn't
+// achievable from this crate's `cargo test` without a pre-built Wasm
+// artifact this repo's build pipeline doesn't currently produce before
+// tests run. upgrade() here had zero test coverage before this change,
+// same as material-registry's.
+
+#[test]
+fn upgrade_rejected_for_non_admin() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let registry = env.register(MockRegistry, ());
+    let treasury = Address::generate(&env);
+    let (_contract_id, client) = install_and_init_contract(&env, &admin, &registry, &treasury, 500);
+
+    let stranger = Address::generate(&env);
+    let fake_wasm_hash = bytes32(&env, 77);
+
+    let result = client.try_upgrade(&stranger, &fake_wasm_hash);
+    assert_eq!(result, Err(Ok(PurchaseError::NotAuthorized)));
+}
+
+#[test]
+fn upgrade_requires_admin_auth() {
+    let env = Env::default();
+    let admin = Address::generate(&env);
+    let treasury = Address::generate(&env);
+
+    // registry and initialize itself need admin auth to set up — scoped to
+    // this block only, via mock_all_auths() called before registration and
+    // relied on for install_and_init_contract's internal initialize() call.
+    env.mock_all_auths();
+    let registry = env.register(MockRegistry, ());
+    let (_contract_id, client) = install_and_init_contract(&env, &admin, &registry, &treasury, 500);
+
+    // Reset to no mocked auths so the upgrade call below must supply a real
+    // signature — it never does, so this must fail at
+    // auth::require_admin's caller.require_auth() call itself.
+    env.set_auths(&[]);
+
+    let fake_wasm_hash = bytes32(&env, 77);
+    let result = client.try_upgrade(&admin, &fake_wasm_hash);
+    assert!(result.is_err());
 }

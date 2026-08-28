@@ -1361,3 +1361,69 @@ fn non_creator_cannot_change_material_status() {
         MaterialStatus::Active
     );
 }
+
+// ============== Upgrade Compatibility Tests (#677) ==============
+//
+// docs/soroban-upgrade-pattern.md claims three tests already cover the
+// upgrade() function (upgrade_rejected_for_non_admin,
+// upgrade_requires_admin_auth, state_preserved_after_upgrade) — none of
+// them existed anywhere in this file before this change; upgrade() had zero
+// test coverage beyond one incidental TTL-renewal test that happens to
+// touch UpgradeAdmin storage. upgrade_rejected_for_non_admin and
+// upgrade_requires_admin_auth below give it real coverage, matching the
+// doc's own names and testing exactly what their names say.
+//
+// state_preserved_after_upgrade, as literally named, is NOT included here —
+// deliberately, rather than faked. Making that call for real requires a
+// second, already-compiled Wasm binary: `Deployer::update_current_contract_wasm`
+// requires a hash already uploaded via `Deployer::upload_contract_wasm`,
+// which itself instantiates a real VM from the provided bytes and requires
+// a genuinely valid, linkable Soroban Wasm module (confirmed by reading
+// soroban-env-host's upload_contract_wasm — it does a full parse-and-link
+// pass, not just a hash check). `env.register(MaterialRegistry, ())`
+// (used by every other test in this file) registers the contract natively
+// as a Rust type for speed — no Wasm bytes exist in-process to reuse, and
+// there is no `get_current_contract_wasm` accessor to retrieve one. Hand-
+// assembling a minimal-but-valid Wasm module byte-by-byte to satisfy the
+// parser was considered and rejected: it would be fragile, unverifiable
+// without a wasm toolchain (none is available in this environment — no
+// wat2wasm/wasm-tools), and wouldn't actually test anything about *this*
+// contract's schema compatibility, only that upload_wasm can swallow an
+// arbitrary trivial module.
+//
+// A real state_preserved_after_upgrade test needs: (1) `soroban/build.sh`
+// (or an equivalent step) to run before `cargo test` so a compiled
+// `material_registry.wasm` exists, (2) that artifact's bytes pulled in via
+// `include_bytes!`, uploaded via `upload_contract_wasm`, and passed to
+// `upgrade()`. That's a build-pipeline change (run-tests.sh currently runs
+// bare `cargo test --lib`, no prior wasm build), not something fixable from
+// inside this test file alone — flagged here for whoever owns that script.
+
+#[test]
+fn upgrade_rejected_for_non_admin() {
+    let env = Env::default();
+    let (_contract_id, client, _admin) = install_contract(&env);
+    env.mock_all_auths();
+
+    let stranger = Address::generate(&env);
+    let fake_wasm_hash = bytes32(&env, 77);
+
+    let result = client.try_upgrade(&stranger, &fake_wasm_hash);
+    assert_eq!(result, Err(Ok(RegistryError::NotAuthorized)));
+}
+
+#[test]
+fn upgrade_requires_admin_auth() {
+    let env = Env::default();
+    let contract_id = env.register(MaterialRegistry, ());
+    let client = MaterialRegistryClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    client.mock_all_auths().initialize(&admin, &Vec::new(&env));
+
+    // No mock_all_auths() scoped to this call — the admin's real signature
+    // is never supplied, so this must fail at admin.require_auth() itself,
+    // before require_upgrade_admin's identity check ever runs.
+    let fake_wasm_hash = bytes32(&env, 77);
+    let result = client.try_upgrade(&admin, &fake_wasm_hash);
+    assert!(result.is_err());
+}
