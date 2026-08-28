@@ -18,6 +18,10 @@ export default defineConfig({
       "src/**/*.{test,spec}.{js,jsx,ts,tsx}",
       "test/integration/**/*.{test,spec}.{js,jsx,ts,tsx}",
       "tests/components/**/*.{test,spec}.{js,jsx,ts,tsx}",
+      // middleware.js (issue #649's nonce-based CSP) has to live at the repo
+      // root for Next.js to recognize it as the app's middleware, so its
+      // test does too.
+      "middleware.test.js",
     ],
     // tests/backend runs under `node --test` and tests/legacy-evm under hardhat —
     // both use test runner globals incompatible with Vitest, so they stay excluded.
