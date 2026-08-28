@@ -134,6 +134,21 @@ No obvious secrets or placeholder production values found.
 
 ---
 
+## Dead-letter event recovery (#668)
+
+If specific events failed during replay, inspect and manage them with the operator CLI:
+
+```bash
+node scripts/indexer-deadletter.mjs list --status=failed
+node scripts/indexer-deadletter.mjs retry <eventId>
+node scripts/indexer-deadletter.mjs quarantine <eventId> --reason="Permanent decode failure"
+```
+
+Permanent failures must include an explicit quarantine reason. Retry and quarantine
+actions are recorded in `indexer_operator_audit`.
+
+---
+
 ## Recovery Completion Criteria
 
 The recovery process can be considered complete when:
