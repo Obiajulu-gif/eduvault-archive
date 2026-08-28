@@ -2,6 +2,7 @@ import { COLLECTIONS } from "../backend/schemaContracts.js";
 import { parseContractEvent } from "./eventParser.js";
 import { invalidateEntitlement } from "../entitlement.js";
 import { detectFork, rewindAfterFork } from "./forkDetection.js";
+import { deriveEventIdFromEvent, computeQuarantineKey } from "./eventIdentity.js";
 
 function duplicateKey(error) {
   return error?.code === 11000;
@@ -60,14 +61,16 @@ export function classifyIndexerError(error) {
   return "poison";
 }
 
+/**
+ * Derive a stable id for `event` (#630). Delegates to `deriveEventIdFromEvent`,
+ * which is deterministic and never invents a random fallback — an event that
+ * can't be identified returns an empty string here, so the existing
+ * `if (!id) throw ...` contract in `applyIndexedEvent` keeps working unchanged.
+ * `runIndexerBatch` pre-checks sufficiency itself so a live-indexed event that
+ * can't be identified is quarantined before it ever reaches that throw.
+ */
 export function eventId(event) {
-  return (
-    event.id ||
-    event.eventId ||
-    [event.ledger, event.transactionHash || event.txHash, event.topic, event.index]
-      .filter(Boolean)
-      .join(":")
-  );
+  return deriveEventIdFromEvent(event).id || "";
 }
 
 export async function applyIndexedEvent(db, event, { now = new Date(), session = null } = {}) {
@@ -296,12 +299,50 @@ function isStaleReplay(record, event) {
   return event.ledger < record.indexedLedger;
 }
 
+/**
+ * Record an event whose identity `deriveEventIdFromEvent` could not trust
+ * enough to apply (#630) — reject it into quarantine rather than processing it
+ * under a fabricated id. Never throws: a failure to write the quarantine
+ * record itself must not stall the batch (the event is skipped either way, and
+ * the batch result's `quarantined` count plus the indexer log still record
+ * that something was rejected).
+ *
+ * Time/space: O(1) writes; the dedup key is one hash of the raw event, so a
+ * replay of the same rejected event upserts the same row (see
+ * `computeQuarantineKey`).
+ */
+async function quarantineEvent(db, { raw, parsed, reason, source, now }) {
+  const key = computeQuarantineKey({ source, rawEvent: raw });
+
+  try {
+    await db.collection(COLLECTIONS.indexerQuarantine).updateOne(
+      { _id: key },
+      {
+        $set: {
+          source,
+          type: parsed?.type || raw?.type || null,
+          raw,
+          parsed,
+          reason,
+          status: "pending",
+          lastSeenAt: now,
+        },
+        $setOnInsert: { createdAt: now },
+      },
+      { upsert: true },
+    );
+  } catch {
+    // Best-effort — see doc comment above.
+  }
+}
+
 export async function runIndexerBatch({
   db,
   eventSource,
   source = "stellar",
   limit = 100,
   getLedgerHash = null,
+  network = null,
 }) {
   const stateId = `${source}:events`;
   let state = await db.collection(COLLECTIONS.syncState).findOne({ _id: stateId });
@@ -327,6 +368,7 @@ export async function runIndexerBatch({
   let lastSuccessfulLedger = state?.lastLedger || null;
 
   const maxRetries = Number(process.env.INDEXER_MAX_RETRIES || 3);
+  let quarantined = 0;
 
   for (const event of events) {
     const parsedEvent = parseContractEvent(event) || (event?.type ? event : null);
@@ -337,8 +379,26 @@ export async function runIndexerBatch({
       continue;
     }
 
+    // #630: identity is derived once, up front, from the event's own
+    // canonical position (network + contract + ledger + transaction +
+    // operation index + event position) — never from a random number. An
+    // event that can't produce a trustworthy id this way is rejected into
+    // quarantine instead of being processed: it is never applied, so it can
+    // never double-apply a purchase or settlement no matter how many times
+    // the batch is retried.
+    const eventWithContext = { ...parsedEvent, source, network };
+    const identity = deriveEventIdFromEvent(eventWithContext);
+
+    if (!identity.sufficient) {
+      quarantined += 1;
+      await quarantineEvent(db, { raw: event, parsed: parsedEvent, reason: identity.reason, source, now: new Date() });
+      lastSuccessfulCursor = event.id ?? event.pagingToken ?? lastSuccessfulCursor;
+      lastSuccessfulLedger = event.ledger ?? lastSuccessfulLedger;
+      continue;
+    }
+
     try {
-      const result = await applyIndexedEvent(db, { ...parsedEvent, source });
+      const result = await applyIndexedEvent(db, eventWithContext);
       if (result.skipped) skipped += 1;
       else applied += 1;
 
@@ -350,7 +410,7 @@ export async function runIndexerBatch({
       lastSuccessfulLedger = parsedEvent.ledger ?? lastSuccessfulLedger;
     } catch (err) {
       hadFailure = true;
-      const id = eventId(parsedEvent) || eventId(event) || `${source}:unknown:${event.ledger || "?"}:${event.id || event.pagingToken || Math.random().toString(36).slice(2, 8)}`;
+      const id = identity.id;
       const dlCol = db.collection(COLLECTIONS.deadLetterEvents);
       const existing = await dlCol.findOne({ _id: id });
       const retryCount = (existing?.retryCount || 0) + 1;
@@ -401,7 +461,7 @@ export async function runIndexerBatch({
     { upsert: true }
   );
 
-  return { applied, skipped, nextCursor, hadFailure };
+  return { applied, skipped, quarantined, nextCursor, hadFailure };
 }
 
 /**
@@ -429,6 +489,21 @@ export async function getIndexerHealth(db, { source = "stellar", currentLedger =
     failed = records.filter((d) => d.status === "failed");
   }
 
+  // #630: events rejected into quarantine (insufficiently identified — see
+  // eventIdentity.js) are a separate bucket from dead-lettered events (which
+  // failed to *apply*, not to be *identified*), surfaced here so an operator
+  // backlog of either is visible from the same health check. Counted
+  // server-side — the rows themselves are never pulled into memory.
+  const qCol = db.collection(COLLECTIONS.indexerQuarantine);
+  let quarantinedCount = 0;
+  if (typeof qCol.countDocuments === "function") {
+    quarantinedCount = await qCol.countDocuments({ status: "pending" });
+  } else if (typeof qCol.find === "function") {
+    quarantinedCount = (await qCol.find({ status: "pending" }).toArray()).length;
+  } else if (qCol.records instanceof Map) {
+    quarantinedCount = Array.from(qCol.records.values()).filter((d) => d.status === "pending").length;
+  }
+
   const lastLedger = state?.lastLedger ?? null;
   const blockedEventsCount = retryable.length + failed.length;
 
@@ -442,6 +517,7 @@ export async function getIndexerHealth(db, { source = "stellar", currentLedger =
     deadLetterFailedCount: failed.length,
     deadLetterRetrySum: retryable.reduce((sum, d) => sum + (d.retryCount || 0), 0),
     blockedEventsCount,
+    quarantinedCount,
     lastForkRewindAt: state?.lastForkRewindAt ?? null,
     lastForkDivergenceLedger: state?.lastForkDivergenceLedger ?? null,
   };
@@ -483,7 +559,7 @@ export function createJsonRpcEventSource({ rpcUrl, contractId, fetchImpl = fetch
   };
 }
 
-export async function reprocessDeadLetters(db, { statuses = ['retryable', 'failed'], limit = 100 } = {}) {
+export async function reprocessDeadLetters(db, { statuses = ['retryable', 'failed'], limit = 100, network = null } = {}) {
   const dlCol = db.collection(COLLECTIONS.deadLetterEvents);
   const items = [];
 
@@ -515,7 +591,9 @@ export async function reprocessDeadLetters(db, { statuses = ['retryable', 'faile
       );
       continue;
     }
-    const eventToApply = { ...parsedEvent, source: entry.source || parsedEvent.source };
+    // #630: carry the network through so a reprocessed event derives the same
+    // canonical id the live indexer would, keeping projection exactly-once.
+    const eventToApply = { ...parsedEvent, source: entry.source || parsedEvent.source, network: parsedEvent.network ?? network };
 
     try {
       await applyIndexedEvent(db, eventToApply);

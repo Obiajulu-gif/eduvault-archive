@@ -21,6 +21,7 @@ export const COLLECTIONS = {
   materialSearchDocuments: "material_search_documents",
   materialSearchTombstones: "material_search_tombstones",
   materialSearchReconciliationAudit: "material_search_reconciliation_audit",
+  indexerQuarantine: "indexer_quarantine",
 };
 
 export const REQUIRED_INDEXES = {
@@ -93,6 +94,14 @@ export const REQUIRED_INDEXES = {
     { keys: { _id: 1 }, options: { unique: true } },
     { keys: { status: 1 } },
     { keys: { retryCount: 1 } },
+  ],
+  // #630: events runIndexerBatch rejects for lacking a trustworthy
+  // (network, ledger, transaction, operation, event-position) identity —
+  // distinct from dead_letter_events, which holds events that failed to
+  // *apply*, not events that failed to be *identified*.
+  indexer_quarantine: [
+    { keys: { status: 1, createdAt: 1 }, options: { name: "indexer_quarantine_status_idx", background: true } },
+    { keys: { source: 1 } },
   ],
   material_history: [
     { keys: { materialId: 1, updatedAt: -1 } },

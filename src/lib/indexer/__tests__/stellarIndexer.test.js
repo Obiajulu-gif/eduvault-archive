@@ -25,11 +25,12 @@ function vecValue(scVals) {
   return toBase64(xdr.ScVal.scvVec(scVals));
 }
 
-function purchaseCompletedRawEvent({ id, purchaseId, materialId, buyer, seller, asset, amount }) {
+function purchaseCompletedRawEvent({ id, purchaseId, materialId, buyer, seller, asset, amount, ledger = 100, txHash, operationIndex = 0 }) {
   return {
     id,
-    ledger: 100,
-    txHash: `tx-${id}`,
+    ledger,
+    txHash: txHash || `tx-${id}`,
+    operationIndex,
     ledgerClosedAt: "2026-07-25T00:00:00Z",
     topic: [
       symbolTopic("purchase"),
@@ -160,7 +161,7 @@ describe("runIndexerBatch", () => {
 
     const result = await runIndexerBatch({ db, eventSource });
 
-    expect(result).toEqual({ applied: 1, skipped: 0, nextCursor: "cursor-1", hadFailure: false });
+    expect(result).toEqual({ applied: 1, skipped: 0, quarantined: 0, nextCursor: "cursor-1", hadFailure: false });
 
     const purchases = db.collection(COLLECTIONS.purchases)._all();
     expect(purchases).toHaveLength(1);
@@ -223,8 +224,8 @@ describe("runIndexerBatch", () => {
     const first = await runIndexerBatch({ db, eventSource });
     const second = await runIndexerBatch({ db, eventSource });
 
-    expect(first).toEqual({ applied: 1, skipped: 0, nextCursor: "c", hadFailure: false });
-    expect(second).toEqual({ applied: 0, skipped: 1, nextCursor: "c", hadFailure: false });
+    expect(first).toEqual({ applied: 1, skipped: 0, quarantined: 0, nextCursor: "c", hadFailure: false });
+    expect(second).toEqual({ applied: 0, skipped: 1, quarantined: 0, nextCursor: "c", hadFailure: false });
     expect(db.collection(COLLECTIONS.purchases)._all()).toHaveLength(1);
   });
 
@@ -270,6 +271,134 @@ describe("runIndexerBatch", () => {
     expect(dl).toBeTruthy();
     expect(dl.status).toBe("failed");
     expect(dl.errorClass).toBe("poison");
+  });
+
+  // ---------------------------------------------------------------------------
+  // #630 — deterministic, collision-resistant identities
+  // ---------------------------------------------------------------------------
+
+  function distinctPurchaseEvent(n, extra = {}) {
+    return purchaseCompletedRawEvent({
+      id: `evt-${n}`,
+      purchaseId: n,
+      materialId: Buffer.alloc(32, n),
+      buyer: Keypair.random().publicKey(),
+      seller: Keypair.random().publicKey(),
+      asset: Keypair.random().publicKey(),
+      amount: 1_000_000 + n,
+      ...extra,
+    });
+  }
+
+  it("#630 quarantines an event with no identifying id instead of applying it or inventing one", async () => {
+    const db = createFakeDb();
+    const orphan = distinctPurchaseEvent(1, { id: undefined });
+
+    const eventSource = {
+      getEvents: vi.fn().mockResolvedValue({ events: [orphan], nextCursor: "c1", lastLedger: 100 }),
+    };
+
+    const result = await runIndexerBatch({ db, eventSource });
+
+    expect(result).toEqual({ applied: 0, skipped: 0, quarantined: 1, nextCursor: "c1", hadFailure: false });
+    expect(db.collection(COLLECTIONS.indexerQuarantine)._all()).toHaveLength(1);
+    expect(db.collection(COLLECTIONS.indexerQuarantine)._all()[0].reason).toMatch(/event position/);
+    // Never applied, never given a synthetic id.
+    expect(db.collection(COLLECTIONS.syncEvents)._all()).toHaveLength(0);
+    expect(db.collection(COLLECTIONS.purchases)._all()).toHaveLength(0);
+    expect(db.collection(COLLECTIONS.deadLetterEvents)._all()).toHaveLength(0);
+  });
+
+  it("#630 re-running a batch with the same orphan event does not re-quarantine or apply it", async () => {
+    const db = createFakeDb();
+    const orphan = distinctPurchaseEvent(1, { id: undefined });
+    const eventSource = {
+      getEvents: vi.fn().mockResolvedValue({ events: [orphan], nextCursor: "c1", lastLedger: 100 }),
+    };
+
+    await runIndexerBatch({ db, eventSource });
+    const second = await runIndexerBatch({ db, eventSource });
+
+    expect(second.quarantined).toBe(1);
+    // Idempotent upsert — still exactly one quarantine document.
+    expect(db.collection(COLLECTIONS.indexerQuarantine)._all()).toHaveLength(1);
+    expect(db.collection(COLLECTIONS.purchases)._all()).toHaveLength(0);
+  });
+
+  it("#630 projects each event exactly once after a crash between apply and checkpoint (AC3, crash path)", async () => {
+    const db = createFakeDb();
+    const events = [distinctPurchaseEvent(1), distinctPurchaseEvent(2)];
+    const eventSource = {
+      getEvents: vi.fn().mockResolvedValue({ events, nextCursor: "c-final", lastLedger: 100 }),
+    };
+
+    // Crash: the checkpoint write throws *after* both events were applied.
+    const syncStateCol = db.collection(COLLECTIONS.syncState);
+    const realUpdateOne = syncStateCol.updateOne.bind(syncStateCol);
+    syncStateCol.updateOne = async () => {
+      throw new Error("simulated crash before checkpoint");
+    };
+    await expect(runIndexerBatch({ db, eventSource })).rejects.toThrow(/simulated crash/);
+
+    const afterCrash = {
+      sync: db.collection(COLLECTIONS.syncEvents)._all().length,
+      purchases: db.collection(COLLECTIONS.purchases)._all().length,
+      entitlements: db.collection(COLLECTIONS.entitlementCache)._all().length,
+      outbox: db.collection("side_effect_outbox")._all().length,
+    };
+    expect(afterCrash).toEqual({ sync: 2, purchases: 2, entitlements: 2, outbox: 2 });
+
+    // Restart: the checkpoint was never written, so the batch replays from the
+    // same cursor.
+    syncStateCol.updateOne = realUpdateOne;
+    const replay = await runIndexerBatch({ db, eventSource });
+
+    expect(replay).toEqual({ applied: 0, skipped: 2, quarantined: 0, nextCursor: "c-final", hadFailure: false });
+    expect(db.collection(COLLECTIONS.syncEvents)._all()).toHaveLength(2);
+    expect(db.collection(COLLECTIONS.purchases)._all()).toHaveLength(2);
+    expect(db.collection(COLLECTIONS.entitlementCache)._all()).toHaveLength(2);
+    // The receipt-email enqueue is guarded on first-apply — not duplicated.
+    expect(db.collection("side_effect_outbox")._all()).toHaveLength(2);
+  });
+
+  it("#630 applies an overlapping backfill batch exactly once (AC3, backfill path)", async () => {
+    const db = createFakeDb();
+    const [a, b, c] = [distinctPurchaseEvent(1), distinctPurchaseEvent(2), distinctPurchaseEvent(3)];
+
+    const first = await runIndexerBatch({
+      db,
+      eventSource: { getEvents: vi.fn().mockResolvedValue({ events: [a, b], nextCursor: "cAB", lastLedger: 100 }) },
+    });
+    const overlap = await runIndexerBatch({
+      db,
+      eventSource: { getEvents: vi.fn().mockResolvedValue({ events: [b, c], nextCursor: "cBC", lastLedger: 101 }) },
+    });
+
+    expect(first).toEqual({ applied: 2, skipped: 0, quarantined: 0, nextCursor: "cAB", hadFailure: false });
+    expect(overlap).toEqual({ applied: 1, skipped: 1, quarantined: 0, nextCursor: "cBC", hadFailure: false });
+    expect(db.collection(COLLECTIONS.syncEvents)._all()).toHaveLength(3);
+    expect(db.collection(COLLECTIONS.purchases)._all()).toHaveLength(3);
+  });
+
+  it("#630 gives two events from the same transaction distinct ids and applies both", async () => {
+    const db = createFakeDb();
+    const shared = { txHash: "tx-shared-hash", ledger: 4242 };
+    const events = [
+      distinctPurchaseEvent(1, { ...shared, operationIndex: 0 }),
+      distinctPurchaseEvent(2, { ...shared, operationIndex: 1 }),
+    ];
+    const eventSource = {
+      getEvents: vi.fn().mockResolvedValue({ events, nextCursor: "c", lastLedger: 4242 }),
+    };
+
+    const result = await runIndexerBatch({ db, eventSource });
+
+    expect(result.applied).toBe(2);
+    expect(result.quarantined).toBe(0);
+    const ids = db.collection(COLLECTIONS.syncEvents)._all().map((d) => d._id);
+    expect(ids).toHaveLength(2);
+    expect(new Set(ids).size).toBe(2);
+    expect(db.collection(COLLECTIONS.purchases)._all()).toHaveLength(2);
   });
 });
 

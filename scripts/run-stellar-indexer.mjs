@@ -2,6 +2,11 @@ import { getDb } from "../src/lib/mongodb.js";
 import { createJsonRpcEventSource, runIndexerBatch } from "../src/lib/indexer/stellarIndexer.js";
 import { runRecovery } from "../src/lib/indexer/recovery.js";
 import { getLedgerBySequence } from "../src/lib/stellar/horizonClient.js";
+// #630: the canonical network passphrase is one of the components a
+// deterministic event id is derived from (src/lib/indexer/eventIdentity.js) —
+// it scopes ids so events indexed against different networks that share one
+// database cannot collide on reused ledger numbers.
+import { NETWORK_PASSPHRASE } from "../src/lib/config/chain.js";
 
 const rpcUrl = process.env.NEXT_PUBLIC_STELLAR_RPC_URL;
 const contractIds = [
@@ -27,7 +32,8 @@ if (runMode === 'recover') {
   }
 
   const limit = Number(process.env.RECOVERY_LOOKBACK_LEDGERS || 200);
-  const result = await runRecovery({ db, accountId, limit });
+  // #630: recovered events carry the same network scope as live-indexed ones.
+  const result = await runRecovery({ db, accountId, limit, network: NETWORK_PASSPHRASE });
 
   console.log(JSON.stringify({ event: "stellar_recovery_complete", ...result }));
 } else {
@@ -37,6 +43,8 @@ if (runMode === 'recover') {
     eventSource: createJsonRpcEventSource({ rpcUrl, contractId }),
     // Enables ledger-hash-based fork detection and checkpointing (#469).
     getLedgerHash: getLedgerBySequence,
+    // Enables deterministic, network-scoped event ids (#630).
+    network: NETWORK_PASSPHRASE,
   });
 
   console.log(JSON.stringify({ event: "stellar_indexer_batch_complete", ...result }));
