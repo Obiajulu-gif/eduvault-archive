@@ -19,7 +19,13 @@ describe("getSupportedPaymentAssets", () => {
 
     const assets = getSupportedPaymentAssets();
     expect(assets.map((a) => a.code)).toEqual(["USDC", "XLM"]);
-    expect(assets[0]).toEqual({ code: "USDC", issuer: null, label: "Stellar USDC" });
+    // USDC's issuer must be resolvable (#674) — callers need a real value to
+    // check a resolved payment asset against, not a null placeholder.
+    expect(assets[0].code).toBe("USDC");
+    expect(assets[0].label).toBe("Stellar USDC");
+    expect(typeof assets[0].issuer).toBe("string");
+    expect(assets[0].issuer.length).toBeGreaterThan(0);
+    // XLM has no issuer by definition.
     expect(assets[1]).toEqual({ code: "XLM", issuer: null, label: "Stellar XLM" });
   });
 
