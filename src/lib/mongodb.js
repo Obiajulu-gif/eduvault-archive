@@ -106,6 +106,20 @@ async function ensureIndexes(db) {
       { name: "outbox_lease_idx", background: true, sparse: true },
     );
 
+    const resourceDrafts = db.collection("resource_drafts");
+    await resourceDrafts.createIndex(
+      { userRef: 1, draftId: 1 },
+      { name: "resource_drafts_user_draft_idx", background: true, unique: true },
+    );
+    await outbox.createIndex(
+      { previousDeliveryId: 1, predecessorDelivered: 1 },
+      { name: "outbox_causal_idx", background: true, sparse: true },
+    );
+    await outbox.createIndex(
+      { sourceAggregate: 1, sourceId: 1, sourceVersion: 1 },
+      { name: "outbox_source_version_idx", background: true, sparse: true },
+    );
+
     console.log("MongoDB indexes ensured successfully.");
     for (const [collectionName, indexes] of Object.entries(REQUIRED_INDEXES)) {
       const collection = db.collection(collectionName);

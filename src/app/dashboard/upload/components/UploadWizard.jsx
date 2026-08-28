@@ -25,6 +25,7 @@ import { useCreateMaterial, useUploadFile } from "@/hooks/api/useMaterials";
 import TransactionStatusPanel from "@/components/transactions/TransactionStatusPanel";
 import { useTransactionCenter } from "@/providers/TransactionProvider";
 import { TransactionStatus } from "@/lib/transactions/transaction";
+import { useDraftAutosave } from "@/hooks/useDraftAutosave";
 
 const STEPS = [
   { id: 1, title: "Upload Files", icon: FaFileAlt, description: "Add your document and thumbnail" },
@@ -124,6 +125,46 @@ export default function UploadWizard() {
   useEffect(() => () => {
     if (thumbPreview) URL.revokeObjectURL(thumbPreview);
   }, [thumbPreview]);
+
+  // ---- Draft autosave (issue #340) -----------------------------------------
+  // Persist the in-progress resource draft, surface autosave status, and restore
+  // it after a page refresh. Files (doc/thumb) cannot be serialized into a
+  // draft, so only the text/select fields are saved.
+  const draftValue = {
+    title,
+    description,
+    category,
+    subject,
+    price,
+    usageRights,
+    visibility,
+    currentStep,
+  };
+
+  const { status: draftStatus, lastSavedAt, error: draftError, clear: clearDraft } =
+    useDraftAutosave({
+      draftId: address ? `creator-material:${address}` : "creator-material:anonymous",
+      value: draftValue,
+      endpoint: "/api/creator/materials/draft",
+      onRestore: (v) => {
+        if (!v) return;
+        if (typeof v.title === "string") setTitle(v.title);
+        if (typeof v.description === "string") setDescription(v.description);
+        if (typeof v.category === "string") setCategory(v.category);
+        if (typeof v.subject === "string") setSubject(v.subject);
+        if (typeof v.price !== "undefined") setPrice(v.price);
+        if (typeof v.usageRights === "string") setUsageRights(v.usageRights);
+        if (typeof v.visibility === "string") setVisibility(v.visibility);
+        if (typeof v.currentStep === "number") {
+          setCurrentStep(Math.min(Math.max(v.currentStep, 1), STEPS.length));
+        }
+      },
+    });
+
+  // Discard the saved draft once the material is successfully published.
+  useEffect(() => {
+    if (workflowState === "success") clearDraft();
+  }, [workflowState, clearDraft]);
 
   const removeThumbnail = () => {
     setThumbFile(null);
@@ -426,6 +467,27 @@ export default function UploadWizard() {
       {/* Progress Header */}
       <div className="border-b border-gray-200 p-6">
         <h2 className="text-xl font-bold mb-4">Publish Educational Material</h2>
+
+        {/* Autosave status (issue #340) */}
+        <div className="mb-4" aria-live="polite">
+          {draftStatus === "saving" && (
+            <p className="text-xs text-gray-500">Saving draft…</p>
+          )}
+          {draftStatus === "saved" && (
+            <p className="text-xs text-green-600">
+              Draft autosaved{lastSavedAt ? ` at ${lastSavedAt.toLocaleTimeString()}` : ""}.
+              Restored automatically after refresh.
+            </p>
+          )}
+          {draftStatus === "error" && (
+            <p className="text-xs text-red-600">
+              Could not save draft: {draftError || "unknown error"}. Your latest changes are kept in this browser.
+            </p>
+          )}
+          {(draftStatus === "idle" || draftStatus === "restoring") && (
+            <p className="text-xs text-gray-400">Your draft is saved automatically as you type.</p>
+          )}
+        </div>
 
         {/* Step Indicators */}
         <div className="flex items-center justify-between mb-2" role="list" aria-label="Upload steps">
