@@ -158,6 +158,25 @@ export async function POST(request) {
           },
         });
 
+        // #638: generate a sandboxed structural preview off the request path.
+        // Independent of quarantine — a preview failure never affects the file's
+        // gating.
+        if (process.env.PREVIEW_PIPELINE_ENABLED !== 'false') {
+          await enqueueSideEffect({
+            sourceAggregate: 'preview',
+            sourceId: quarantine.contentHash,
+            intent: {
+              type: 'preview',
+              channel: 'generate_preview',
+              payload: {
+                contentHash: quarantine.contentHash,
+                mimeType: quarantine.mimeType,
+                sizeBytes: quarantine.sizeBytes,
+              },
+            },
+          });
+        }
+
         auditLog({
           event: 'upload_quarantined',
           route: 'materials/upload',
