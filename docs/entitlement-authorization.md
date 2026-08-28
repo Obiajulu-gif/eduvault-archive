@@ -176,3 +176,13 @@ Step 5: Remediation
 * [`docs/purchased-content-and-entitlements.md`](file:///home/abujulaybeeb/Documents/Drips/Drips%2013/eduvault-archive/docs/purchased-content-and-entitlements.md) — Buyer library overview and contract access points.
 * [`docs/purchase-flow-architecture.md`](file:///home/abujulaybeeb/Documents/Drips/Drips%2013/eduvault-archive/docs/purchase-flow-architecture.md) — Hybrid on-chain/off-chain transaction flow.
 * [`docs/soroban-contract-architecture.md`](file:///home/abujulaybeeb/Documents/Drips/Drips%2013/eduvault-archive/docs/soroban-contract-architecture.md) — Detailed Soroban smart contract invariants and storage schema.
+
+## Entitlement reconciliation before protected downloads (#665)
+
+Download authorization is tied to verified on-contract purchase state, not just cached entitlement data. `PurchaseManager::reconcile_entitlement(material_id, buyer)` re-checks the cached entitlement against the purchase settlement before a protected download is allowed:
+
+- **Settlement still `Pending` with an active entitlement** -> authorized (`Ok(true)`).
+- **Missing entitlement record** -> denied (`EntitlementRevoked`) - the indexer event never landed or the record was removed.
+- **Revoked entitlement or non-`Pending` settlement (refunded/released)** -> denied (`EntitlementRevoked` / `EntitlementStale`) - a stale cache can never grant access silently.
+
+Delayed events, missing events, and revoked entitlements all resolve to safe denied states instead of cached allow decisions.

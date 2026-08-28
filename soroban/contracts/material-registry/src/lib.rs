@@ -103,6 +103,10 @@ enum DataKey {
     CreatorNonce(Address),
     MaterialCore(BytesN<32>),
     MaterialSale(BytesN<32>),
+    /// Monotonic sale-terms version per material (#681): bumped by every
+    /// `update_sale_terms` so pending buyer quotes can be bound to a version
+    /// and rejected once the terms change.
+    SaleTermsVersion(BytesN<32>),
     AllowedAsset(Address),
     /// Maintenance index (#464): sequential slot -> material_id, populated
     /// at registration time so `extend_materials_ttl` can page through every
@@ -256,6 +260,10 @@ impl MaterialRegistry {
         };
         put_material_core(&env, &material_id, &core);
         put_material_sale(&env, &material_id, &sale_state);
+        // Sale terms start at version 1 on registration (#681).
+        env.storage()
+            .instance()
+            .set(&DataKey::SaleTermsVersion(material_id.clone()), &1u32);
         set_creator_nonce(&env, &creator, next_nonce + 1);
         index_material(&env, &material_id);
 
@@ -291,6 +299,18 @@ impl MaterialRegistry {
         record.updated_ledger = env.ledger().sequence();
 
         put_material_sale(&env, &material_id, &sale_state_from_record(&record));
+
+        // Bump the sale-terms version so any pending buyer quote bound to the
+        // previous version is invalidated (#681).
+        let next_version: u32 = env
+            .storage()
+            .instance()
+            .get::<_, u32>(&DataKey::SaleTermsVersion(material_id.clone()))
+            .unwrap_or(0)
+            + 1;
+        env.storage()
+            .instance()
+            .set(&DataKey::SaleTermsVersion(material_id.clone()), &next_version);
 
         MaterialSaleTermsUpdatedEvent {
             material_id,
@@ -413,6 +433,18 @@ impl MaterialRegistry {
         material_id: BytesN<32>,
     ) -> Result<MaterialRecord, RegistryError> {
         get_material_record(&env, &material_id)
+    }
+
+    /// Returns the current sale-terms version for `material_id` (#681).
+    /// Bumped on every `update_sale_terms`; buyers bind pending checkout
+    /// quotes to the version they saw so stale quotes can be rejected.
+    pub fn get_sale_terms_version(env: Env, material_id: BytesN<32>) -> Result<u32, RegistryError> {
+        get_material_record(&env, &material_id)?;
+        Ok(env
+            .storage()
+            .instance()
+            .get::<_, u32>(&DataKey::SaleTermsVersion(material_id))
+            .unwrap_or(1))
     }
 
     pub fn get_quote(
