@@ -8,21 +8,45 @@ use soroban_sdk::testutils::{Address as _, Events as _, Ledger};
 use soroban_sdk::{contract, contractimpl, contracttype};
 use soroban_sdk::{vec, Bytes, Event};
 
+#[contract]
+struct MockRegistry;
+
 #[contracttype]
 #[derive(Clone)]
 enum MockRegistryKey {
     Material(BytesN<32>),
+    Immutable(BytesN<32>),
+    SaleTermsVersion(BytesN<32>),
 }
 
-#[contract]
-struct MockRegistry;
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct MockImmutableSnapshot {
+    metadata_uri: soroban_sdk::String,
+    metadata_hash: BytesN<32>,
+    rights_hash: BytesN<32>,
+}
 
 #[contractimpl]
 impl MockRegistry {
     pub fn set_material(env: Env, material_id: BytesN<32>, material: MaterialRecord) {
         env.storage()
             .persistent()
-            .set(&MockRegistryKey::Material(material_id), &material);
+            .set(&MockRegistryKey::Material(material_id.clone()), &material);
+    }
+
+    pub fn set_material_immutable(
+        env: Env,
+        material_id: BytesN<32>,
+        snapshot: MockImmutableSnapshot,
+        sale_terms_version: u32,
+    ) {
+        env.storage()
+            .persistent()
+            .set(&MockRegistryKey::Immutable(material_id.clone()), &snapshot);
+        env.storage()
+            .persistent()
+            .set(&MockRegistryKey::SaleTermsVersion(material_id), &sale_terms_version);
     }
 
     pub fn get_material(
@@ -33,6 +57,33 @@ impl MockRegistry {
             .persistent()
             .get(&MockRegistryKey::Material(material_id))
             .ok_or(PurchaseError::MaterialNotFound)
+    }
+
+    pub fn get_material_immutable(
+        env: Env,
+        material_id: BytesN<32>,
+    ) -> Result<MaterialImmutableSnapshot, PurchaseError> {
+        let snapshot: MockImmutableSnapshot = env
+            .storage()
+            .persistent()
+            .get(&MockRegistryKey::Immutable(material_id.clone()))
+            .ok_or(PurchaseError::MaterialNotFound)?;
+        Ok(MaterialImmutableSnapshot {
+            metadata_uri: snapshot.metadata_uri,
+            metadata_hash: snapshot.metadata_hash,
+            rights_hash: snapshot.rights_hash,
+        })
+    }
+
+    pub fn get_sale_terms_version(
+        env: Env,
+        material_id: BytesN<32>,
+    ) -> Result<u32, PurchaseError> {
+        Ok(env
+            .storage()
+            .persistent()
+            .get(&MockRegistryKey::SaleTermsVersion(material_id))
+            .unwrap_or(1))
     }
 }
 
@@ -194,6 +245,15 @@ fn setup_purchase(
     };
     let registry_client = MockRegistryClient::new(env, &registry);
     registry_client.set_material(&material_id, &material);
+    registry_client.set_material_immutable(
+        &material_id,
+        &MockImmutableSnapshot {
+            metadata_uri: soroban_sdk::String::from_str(env, "ipfs://metadata-v1"),
+            metadata_hash: bytes32(env, 11),
+            rights_hash: bytes32(env, 22),
+        },
+        &1,
+    );
 
     let (contract_id, client) = install_and_init_contract(env, &admin, &registry, &treasury, 500);
     client.set_asset_allowed(&admin, &asset, &AssetKind::Token, &true);
@@ -1894,9 +1954,24 @@ fn setup_bulk_purchase_test(
     client.set_asset_allowed(&admin, &asset, &AssetKind::Token, &true);
 
     // Create recipients
-    let mut recipients = vec![env; recipient_count as usize];
-    for i in 0..recipient_count {
-        recipients.set(i, Address::generate(env));
+    //
+    // Fixed in passing, out of #677's own scope: `vec![env; recipient_count
+    // as usize]` used std::vec!'s repeat-element syntax, which
+    // soroban_sdk::vec! doesn't support (it only has a variadic-elements
+    // form) — this failed to compile on upstream/main, the very first error
+    // in this file. Vec::set also requires the index to already exist (it's
+    // a put, not a grow-and-set), so a pre-sized vec wasn't the right fix
+    // anyway; building via push_back is both correct and what set() would
+    // have actually needed. NOTE: this crate's test suite still does not
+    // compile after this fix — ~27 further pre-existing errors remain in
+    // the scholarship-credit and bulk-refund tests further down this file
+    // (client.refund_bulk_purchase()/client.redeem_scholarship_credits()
+    // called as if non-try_ variants still returned Result, when the
+    // generated client auto-unwraps them). Deliberately left alone — fixing
+    // that is a much larger, unrelated undertaking outside #677.
+    let mut recipients = Vec::new(env);
+    for _ in 0..recipient_count {
+        recipients.push_back(Address::generate(env));
     }
 
     // Perform bulk purchase
@@ -3584,4 +3659,131 @@ fn test_native_asset_purchase_with_payouts() {
     assert!(!escrow.claimed);
     assert_eq!(escrow.total_amount, 20_000_000);
     assert_eq!(escrow.payout_shares.len(), 2);
+}
+
+#[test]
+fn purchase_snapshot_preserves_metadata_after_sale_terms_change() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let registry = env.register(MockRegistry, ());
+    let treasury = Address::generate(&env);
+    let buyer = Address::generate(&env);
+    let creator = Address::generate(&env);
+    let asset = env.register(MockAsset, ());
+    let material_id = bytes32(&env, 9);
+
+    let material = MaterialRecord {
+        material_id: material_id.clone(),
+        creator: creator.clone(),
+        paused: false,
+        status: MaterialStatus::Active,
+        quotes: vec![
+            &env,
+            AssetQuote {
+                asset: asset.clone(),
+                amount: 1_000_000,
+            },
+        ],
+        payout_shares: vec![
+            &env,
+            PayoutShare {
+                recipient: creator.clone(),
+                share_bps: 10_000,
+            },
+        ],
+    };
+
+    let registry_client = MockRegistryClient::new(&env, &registry);
+    registry_client.set_material(&material_id, &material);
+    registry_client.set_material_immutable(
+        &material_id,
+        &MockImmutableSnapshot {
+            metadata_uri: soroban_sdk::String::from_str(&env, "ipfs://terms-v1"),
+            metadata_hash: bytes32(&env, 41),
+            rights_hash: bytes32(&env, 42),
+        },
+        &1,
+    );
+
+    let (_contract_id, client) =
+        install_and_init_contract(&env, &admin, &registry, &treasury, 500);
+    client.set_asset_allowed(&admin, &asset, &AssetKind::Token, &true);
+
+    let purchase_id = client.purchase(
+        &buyer,
+        &material_id,
+        &asset,
+        &1_000_000,
+        &sample_transaction_id(&env),
+    );
+
+    let snapshot = client.get_purchase_snapshot(&purchase_id).unwrap();
+    assert_eq!(snapshot.metadata_hash, bytes32(&env, 41));
+    assert_eq!(snapshot.rights_hash, bytes32(&env, 42));
+    assert_eq!(snapshot.sale_terms_version, 1);
+
+    registry_client.set_material_immutable(
+        &material_id,
+        &MockImmutableSnapshot {
+            metadata_uri: soroban_sdk::String::from_str(&env, "ipfs://terms-v2"),
+            metadata_hash: bytes32(&env, 91),
+            rights_hash: bytes32(&env, 92),
+        },
+        &2,
+    );
+
+    let snapshot_after_terms_change = client.get_purchase_snapshot(&purchase_id).unwrap();
+    assert_eq!(snapshot_after_terms_change.metadata_hash, bytes32(&env, 41));
+    assert_eq!(snapshot_after_terms_change.sale_terms_version, 1);
+}
+
+// ============== Upgrade Compatibility Tests (#677) ==============
+//
+// See material-registry/src/test.rs's identical section header for the full
+// explanation of why a genuine "swap Wasm, verify migrated data" test isn't
+// achievable from this crate's `cargo test` without a pre-built Wasm
+// artifact this repo's build pipeline doesn't currently produce before
+// tests run. upgrade() here had zero test coverage before this change,
+// same as material-registry's.
+
+#[test]
+fn upgrade_rejected_for_non_admin() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let registry = env.register(MockRegistry, ());
+    let treasury = Address::generate(&env);
+    let (_contract_id, client) = install_and_init_contract(&env, &admin, &registry, &treasury, 500);
+
+    let stranger = Address::generate(&env);
+    let fake_wasm_hash = bytes32(&env, 77);
+
+    let result = client.try_upgrade(&stranger, &fake_wasm_hash);
+    assert_eq!(result, Err(Ok(PurchaseError::NotAuthorized)));
+}
+
+#[test]
+fn upgrade_requires_admin_auth() {
+    let env = Env::default();
+    let admin = Address::generate(&env);
+    let treasury = Address::generate(&env);
+
+    // registry and initialize itself need admin auth to set up — scoped to
+    // this block only, via mock_all_auths() called before registration and
+    // relied on for install_and_init_contract's internal initialize() call.
+    env.mock_all_auths();
+    let registry = env.register(MockRegistry, ());
+    let (_contract_id, client) = install_and_init_contract(&env, &admin, &registry, &treasury, 500);
+
+    // Reset to no mocked auths so the upgrade call below must supply a real
+    // signature — it never does, so this must fail at
+    // auth::require_admin's caller.require_auth() call itself.
+    env.set_auths(&[]);
+
+    let fake_wasm_hash = bytes32(&env, 77);
+    let result = client.try_upgrade(&admin, &fake_wasm_hash);
+    assert!(result.is_err());
 }

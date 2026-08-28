@@ -41,6 +41,7 @@ sequenceDiagram
 - Writes sync events into `sync_events` to ensure idempotency
 - Applies event side-effects (materials, purchases, entitlement_cache)
 - On transient failures: records retry metadata in `dead_letter_events`
+- Provides operator tooling via `scripts/indexer-deadletter.mjs` for list/retry/quarantine flows (#668)
 - Provides a `reprocess-deadletter.mjs` script for maintainers to reprocess
 
 ## Source-of-truth boundaries
@@ -49,7 +50,7 @@ sequenceDiagram
 - MongoDB: authoritative for application catalog, caches, and derived state
 - IPFS/Pinata: authoritative for file bytes and pinned metadata content
 
-Link: see `scripts/run-stellar-indexer.mjs` and `scripts/reprocess-deadletter.mjs` for operational commands.
+Link: see `scripts/run-stellar-indexer.mjs`, `scripts/indexer-deadletter.mjs`, and `scripts/reprocess-deadletter.mjs` for operational commands.
 # EduVault Architecture
 
 ## 1. System Goals

@@ -51,6 +51,14 @@ pub struct InitialAssetPolicy {
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MaterialImmutableSnapshot {
+    pub metadata_uri: String,
+    pub metadata_hash: BytesN<32>,
+    pub rights_hash: BytesN<32>,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MaterialRecord {
     pub material_id: BytesN<32>,
     pub creator: Address,
@@ -433,6 +441,25 @@ impl MaterialRegistry {
         material_id: BytesN<32>,
     ) -> Result<MaterialRecord, RegistryError> {
         get_material_record(&env, &material_id)
+    }
+
+    /// Immutable metadata anchors for purchase-time snapshots (#667).
+    pub fn get_material_immutable(
+        env: Env,
+        material_id: BytesN<32>,
+    ) -> Result<MaterialImmutableSnapshot, RegistryError> {
+        let core_key = DataKey::MaterialCore(material_id.clone());
+        let core: MaterialCore = env
+            .storage()
+            .persistent()
+            .get(&core_key)
+            .ok_or(RegistryError::MaterialNotFound)?;
+        extend_persistent_ttl(&env, &core_key);
+        Ok(MaterialImmutableSnapshot {
+            metadata_uri: core.metadata_uri,
+            metadata_hash: core.metadata_hash,
+            rights_hash: core.rights_hash,
+        })
     }
 
     /// Returns the current sale-terms version for `material_id` (#681).

@@ -11,6 +11,11 @@
 // ── Field definitions ────────────────────────────────────────────────────────
 
 import { QUARANTINE_STATES } from '@/lib/publishing/quarantine';
+import {
+  getManifestSecret,
+  verifyManifestAttestation,
+  verifyPublishBinding,
+} from '@/lib/backend/contentManifest';
 
 export const PUBLISH_REQUIRED_FIELDS = [
   {
@@ -30,6 +35,12 @@ export const PUBLISH_REQUIRED_FIELDS = [
     label: "Malware scan",
     description: "The uploaded content must complete malware scanning and be marked clean.",
     check: (m) => m.quarantineState === QUARANTINE_STATES.CLEAN,
+  },
+  {
+    key: "contentManifest",
+    label: "Content manifest binding",
+    description: "Scan evidence must be cryptographically bound to the uploaded bytes and CID.",
+    check: (m) => !!(m.contentManifestHash && m.contentManifestGeneration),
   },
 ];
 
@@ -167,6 +178,33 @@ export function isReadyToPublish(material) {
  * @param {string} userAddress - The authenticated user's wallet address.
  * @returns {{ valid: boolean, error?: string, status?: number, checklist?: object }}
  */
+export function validateContentManifestBinding(material, quarantineRecord, latestManifest) {
+  if (!latestManifest?.manifest || !quarantineRecord) {
+    return { valid: false, error: 'Content manifest not found for material' };
+  }
+
+  const secret = getManifestSecret();
+  if (!secret || !latestManifest.attestation) {
+    return { valid: false, error: 'Content manifest attestation is unavailable' };
+  }
+
+  if (!verifyManifestAttestation(latestManifest.manifest, latestManifest.attestation, secret)) {
+    return { valid: false, error: 'Content manifest attestation is invalid' };
+  }
+
+  const binding = verifyPublishBinding({
+    manifest: latestManifest.manifest,
+    material,
+    quarantineRecord,
+  });
+
+  if (!binding.valid) {
+    return { valid: false, error: binding.reason || 'Content binding verification failed' };
+  }
+
+  return { valid: true, manifestHash: binding.manifestHash };
+}
+
 export function validatePublishRequest(material, userAddress) {
   // Material existence
   if (!material) {
