@@ -25,6 +25,9 @@ Optional fields:
 - `payoutWalletAddressLower`: normalized lookup key for the payout wallet.
 - `preferredPayoutCurrency`: preferred display currency for earnings and settlement metadata.
 - `payoutNotes`: optional creator notes for finance and operations.
+- `webhookSigningSecret`: current HMAC secret for outbound creator webhooks.
+- `webhookSigningSecretPrevious`: previous secret retained during rotation (#669).
+- `webhookSigningSecretRotatedAt`: timestamp when the current secret replaced the previous one.
 
 Indexes:
 

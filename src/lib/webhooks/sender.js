@@ -3,6 +3,69 @@ import { getDb } from '@/lib/mongodb';
 import { logger } from '@/lib/logger';
 import { validateWebhookDestination, safeFetch, SsrfError } from './ssrfGuard';
 
+const replayCache = new Map();
+const DEFAULT_REPLAY_TTL_SECONDS = 300;
+const DEFAULT_ROTATION_GRACE_SECONDS = 86400;
+
+function replayCacheKey(signatureHeader) {
+  return signatureHeader;
+}
+
+function pruneReplayCache(nowSeconds) {
+  for (const [key, expiresAt] of replayCache.entries()) {
+    if (expiresAt <= nowSeconds) replayCache.delete(key);
+  }
+}
+
+function rememberSignature(signatureHeader, timestamp, ttlSeconds = DEFAULT_REPLAY_TTL_SECONDS) {
+  const expiresAt = timestamp + ttlSeconds;
+  replayCache.set(replayCacheKey(signatureHeader), expiresAt);
+  pruneReplayCache(timestamp);
+}
+
+function isReplayedSignature(signatureHeader, nowSeconds) {
+  const expiresAt = replayCache.get(replayCacheKey(signatureHeader));
+  return typeof expiresAt === 'number' && expiresAt > nowSeconds;
+}
+
+export function verifyWebhookSignatureWithRotation(
+  body,
+  signatureHeader,
+  {
+    currentSecret,
+    previousSecret = null,
+    previousSecretRotatedAt = null,
+    toleranceSeconds = 300,
+    now = Math.floor(Date.now() / 1000),
+    rotationGraceSeconds = DEFAULT_ROTATION_GRACE_SECONDS,
+  } = {},
+) {
+  if (!currentSecret) return false;
+  if (isReplayedSignature(signatureHeader, now)) return false;
+
+  const verifyOptions = { toleranceSeconds, now, replayCacheEnabled: false };
+  if (verifyWebhookSignature(body, signatureHeader, currentSecret, verifyOptions)) {
+    rememberSignature(signatureHeader, now, toleranceSeconds);
+    return true;
+  }
+
+  if (
+    previousSecret &&
+    previousSecretRotatedAt &&
+    now <= Math.floor(new Date(previousSecretRotatedAt).getTime() / 1000) + rotationGraceSeconds &&
+    verifyWebhookSignature(body, signatureHeader, previousSecret, verifyOptions)
+  ) {
+    rememberSignature(signatureHeader, now, toleranceSeconds);
+    return true;
+  }
+
+  return false;
+}
+
+export function clearWebhookReplayCache() {
+  replayCache.clear();
+}
+
 export async function getDailyStats(db) {
   const now = new Date();
   const yesterday = new Date(now.getTime() - 24 * 60 * 60 * 1000);
@@ -61,18 +124,26 @@ export function createWebhookSignatureHeader(body, secret, timestamp = Math.floo
   return `t=${timestamp},v1=${signature}`;
 }
 
-export function verifyWebhookSignature(body, signatureHeader, secret, { toleranceSeconds = 300, now = Math.floor(Date.now() / 1000) } = {}) {
+export function verifyWebhookSignature(body, signatureHeader, secret, { toleranceSeconds = 300, now = Math.floor(Date.now() / 1000), replayCacheEnabled = true } = {}) {
   if (!body || !signatureHeader || !secret) return false;
   const parts = Object.fromEntries(signatureHeader.split(',').map((part) => part.split('=')));
   const timestamp = Number(parts.t);
   const signature = parts.v1;
   if (!Number.isFinite(timestamp) || !signature) return false;
   if (Math.abs(now - timestamp) > toleranceSeconds) return false;
+  if (replayCacheEnabled && isReplayedSignature(signatureHeader, now)) return false;
 
   const expected = createWebhookSignatureHeader(body, secret, timestamp).split('v1=')[1];
   const expectedBuffer = Buffer.from(expected, 'hex');
   const receivedBuffer = Buffer.from(signature, 'hex');
-  return expectedBuffer.length === receivedBuffer.length && timingSafeEqual(expectedBuffer, receivedBuffer);
+  const valid =
+    expectedBuffer.length === receivedBuffer.length && timingSafeEqual(expectedBuffer, receivedBuffer);
+
+  if (valid && replayCacheEnabled) {
+    rememberSignature(signatureHeader, now, toleranceSeconds);
+  }
+
+  return valid;
 }
 
 async function ensureWebhookSigningSecret(db, creator) {

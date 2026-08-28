@@ -21,6 +21,7 @@ export const COLLECTIONS = {
   materialSearchDocuments: "material_search_documents",
   materialSearchTombstones: "material_search_tombstones",
   materialSearchReconciliationAudit: "material_search_reconciliation_audit",
+  indexerOperatorAudit: "indexer_operator_audit",
 };
 
 export const REQUIRED_INDEXES = {
@@ -93,6 +94,11 @@ export const REQUIRED_INDEXES = {
     { keys: { _id: 1 }, options: { unique: true } },
     { keys: { status: 1 } },
     { keys: { retryCount: 1 } },
+    { keys: { quarantinedAt: 1 }, options: { sparse: true } },
+  ],
+  indexer_operator_audit: [
+    { keys: { eventId: 1, createdAt: -1 } },
+    { keys: { action: 1, createdAt: -1 } },
   ],
   material_history: [
     { keys: { materialId: 1, updatedAt: -1 } },

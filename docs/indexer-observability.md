@@ -44,6 +44,21 @@ which audits Horizon against the database independently of the cursor-based
 to apply are tracked via the dead-letter collection and
 `classifyIndexerError` (transient vs. poison), described above.
 
+## Operator dead-letter tooling (#668)
+
+Operators can inspect and manage failed indexer events with
+`scripts/indexer-deadletter.mjs`:
+
+```bash
+node scripts/indexer-deadletter.mjs list --status=retryable --limit=20
+node scripts/indexer-deadletter.mjs retry <eventId>
+node scripts/indexer-deadletter.mjs quarantine <eventId> --reason="Malformed payload"
+```
+
+Every retry or quarantine action is written to `indexer_operator_audit`.
+Permanent failures must be quarantined with an explicit reason before they are
+excluded from automatic retry.
+
 ## Known scope limits
 
 - Fork detection only compares the single most-recently-checkpointed ledger's

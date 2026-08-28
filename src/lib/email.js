@@ -129,7 +129,8 @@ export async function sendPurchaseReceiptEmail(to, purchase, material) {
   const from = process.env.EMAIL_FROM || defaultFrom;
   const transporter = createTransporter();
 
-  const title = material.title || "Study Material";
+  const snapshot = purchase.purchaseSnapshot || null;
+  const title = material.title || snapshot?.metadataUri || "Study Material";
   const amount = purchase.amount || "0";
   const asset = purchase.asset || "XLM";
   const purchaseId = String(purchase._id || purchase.purchaseId || "N/A");

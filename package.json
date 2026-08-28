@@ -29,7 +29,8 @@
     "scan:secrets": "node scripts/scan-secrets.mjs",
     "indexer:stellar": "node scripts/run-stellar-indexer.mjs",
     "clean:intents": "node scripts/clean-stale-intents.mjs",
-    "clean:intents:dry": "DRY_RUN=true node scripts/clean-stale-intents.mjs"
+    "clean:intents:dry": "DRY_RUN=true node scripts/clean-stale-intents.mjs",
+    "indexer:deadletter": "node scripts/indexer-deadletter.mjs"
   },
   "dependencies": {
     "@creit-tech/stellar-wallets-kit": "npm:@jsr/creit-tech__stellar-wallets-kit@^2.1.0",

@@ -127,6 +127,12 @@ export async function applyIndexedEvent(db, event, { now = new Date(), session =
 
   if (event.type === "purchase.completed") {
     const buyerAddress = String(event.buyerAddress || "").toLowerCase();
+    const purchaseSnapshot = {
+      metadataHash: event.metadataHash || null,
+      rightsHash: event.rightsHash || null,
+      saleTermsVersion: event.saleTermsVersion ?? null,
+      metadataUri: event.metadataUri || null,
+    };
     await db.collection(COLLECTIONS.purchases).updateOne(
       { materialId: event.materialId, buyerAddress },
       {
@@ -140,6 +146,7 @@ export async function applyIndexedEvent(db, event, { now = new Date(), session =
           asset: event.asset || null,
           status: "settled",
           settlementState: "Pending",
+          purchaseSnapshot,
           indexedLedger: event.ledger || null,
           updatedAt: now,
         },
@@ -535,4 +542,84 @@ export async function reprocessDeadLetters(db, { statuses = ['retryable', 'faile
   }
 
   return { reprocessed };
+}
+
+async function recordIndexerOperatorAction(db, action) {
+  await db.collection(COLLECTIONS.indexerOperatorAudit).insertOne({
+    ...action,
+    createdAt: new Date(),
+  });
+}
+
+export async function listDeadLetterEvents(db, { status, limit = 50 } = {}) {
+  const query = status ? { status } : {};
+  const dlCol = db.collection(COLLECTIONS.deadLetterEvents);
+  if (typeof dlCol.find !== 'function') {
+    const records = dlCol.records instanceof Map ? Array.from(dlCol.records.values()) : [];
+    return records.filter((entry) => (status ? entry.status === status : true)).slice(0, limit);
+  }
+  return dlCol.find(query).sort({ lastAttemptedAt: -1 }).limit(limit).toArray();
+}
+
+export async function retryDeadLetter(db, eventId, { operator = 'system' } = {}) {
+  const dlCol = db.collection(COLLECTIONS.deadLetterEvents);
+  const entry = await dlCol.findOne({ _id: eventId });
+  if (!entry) {
+    throw new Error(`Dead-letter event not found: ${eventId}`);
+  }
+  if (entry.status === 'quarantined') {
+    throw new Error('Quarantined events must be explicitly released before retry');
+  }
+
+  const parsedEvent = entry.parsed || parseContractEvent(entry.raw);
+  if (!parsedEvent) {
+    throw new Error('Event could not be parsed for retry');
+  }
+
+  await applyIndexedEvent(db, { ...parsedEvent, source: entry.source || parsedEvent.source });
+  await dlCol.deleteOne({ _id: eventId });
+  await recordIndexerOperatorAction(db, {
+    eventId,
+    action: 'retry',
+    operator,
+    previousStatus: entry.status,
+    errorClass: entry.errorClass || null,
+  });
+  return { eventId, retried: true };
+}
+
+export async function quarantineDeadLetter(db, eventId, { reason, operator = 'system' } = {}) {
+  if (!reason || !String(reason).trim()) {
+    throw new Error('Permanent failures require an explicit quarantine reason');
+  }
+
+  const dlCol = db.collection(COLLECTIONS.deadLetterEvents);
+  const entry = await dlCol.findOne({ _id: eventId });
+  if (!entry) {
+    throw new Error(`Dead-letter event not found: ${eventId}`);
+  }
+
+  await dlCol.updateOne(
+    { _id: eventId },
+    {
+      $set: {
+        status: 'quarantined',
+        quarantineReason: String(reason).trim(),
+        quarantinedAt: new Date(),
+        quarantinedBy: operator,
+        lastAttemptedAt: new Date(),
+      },
+    }
+  );
+
+  await recordIndexerOperatorAction(db, {
+    eventId,
+    action: 'quarantine',
+    operator,
+    reason: String(reason).trim(),
+    previousStatus: entry.status,
+    errorClass: entry.errorClass || null,
+  });
+
+  return { eventId, quarantined: true };
 }
