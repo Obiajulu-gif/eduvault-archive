@@ -173,3 +173,8 @@ No gaps or vulnerabilities identified.
 ## Signer versioning and rotation (#666)
 
 On top of the emergency kill switch and per-transaction cap, refund authorizations now carry a **signer version** and **expiry** (see `docs/refund-custody.md`). A compromised signer is disabled by bumping `RefundSignerVersion` on the purchase-manager contract - older versions are rejected (`RefundSignerDisabled`) while valid historical records remain intact, and replayed payloads are blocked by their expiry bound.
+
+## Dispute evidence authorization boundary (#709)
+
+Dispute refund execution enforces that refund authorization is explicitly linked to an `approved` dispute containing a complete evidence bundle (`buyerClaim`, `creatorMetadata`, `purchaseTransaction`, `accessLogs`, `entitlementState`). Attempts to execute refunds on `opened`, `reviewing`, or `denied` disputes are rejected at the authorization boundary.
+
