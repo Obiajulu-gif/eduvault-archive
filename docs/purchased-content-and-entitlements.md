@@ -32,4 +32,13 @@ Payment and entitlement behavior is covered in
 `soroban/contracts/purchase-manager/src/test.rs`, including successful
 purchases, duplicate prevention, entitlement reads, purchase snapshots, refunds, and TTL renewal.
 
-For detailed documentation on the backend authorization policy, the five entitlement states, caching invariants, and troubleshooting workflows, see [`docs/entitlement-authorization.md`](entitlement-authorization.md).
+## Disaster Recovery & Restore Verification (#715)
+
+To guarantee that restored databases preserve entitlement enforcement boundaries and protected file accessibility:
+
+1. `scripts/restore-verification.mjs` verifies that every protected material document contains a valid storage reference / CID and valid content hash format.
+2. The verification engine probes entitlement decision rules against restored data to ensure entitled buyers retain access while unentitled callers are blocked and refunded/revoked purchases are denied.
+3. System encryption keys (`JWT_SECRET`) are validated to ensure token signing and delivery decryption succeed post-restore.
+
+For detailed documentation on the backend authorization policy, the five entitlement states, caching invariants, and troubleshooting workflows, see [`docs/entitlement-authorization.md`](entitlement-authorization.md) and [`docs/disaster-recovery.md`](disaster-recovery.md).
+
