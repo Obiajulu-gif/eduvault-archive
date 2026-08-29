@@ -136,3 +136,8 @@ Every material carries a monotonic **sale-terms version** in the registry (`Mate
 - `PurchaseManager::verify_quote_version(material_id, quoted_version)` exposes the check directly for UI preflight.
 
 Price updates, asset changes, and stale-quote submissions are all rejected by the same version guard.
+
+## Canonical asset decimal handling (#710)
+
+All prices, checkout quotes, and refund transactions agree on canonical minor-unit asset representations (`i128`). Display amounts are converted to minor units using asset decimal metadata (XLM = 7, USDC = 7). Refunds strictly truncate minor-unit calculations so partial refunds never exceed original payment values.
+

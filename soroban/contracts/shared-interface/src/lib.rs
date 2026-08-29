@@ -62,6 +62,33 @@ pub struct AssetPolicyInfo {
     pub enabled: bool,
 }
 
+/// Asset decimal metadata specifying how UI/display amounts map to on-chain minor units (`i128`) (#710).
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AssetDecimalMetadata {
+    pub asset: Address,
+    pub decimals: u32,
+}
+
+/// Helper functions for canonical minor-unit decimal handling (#710).
+pub mod decimals {
+    /// Native Stellar XLM decimal precision (7 decimals = stroops).
+    pub const NATIVE_XLM_DECIMALS: u32 = 7;
+    /// USDC asset default decimal precision (7 decimals).
+    pub const USDC_DECIMALS: u32 = 7;
+
+    /// Calculates maximum refund in minor units given original payment in minor units and refund ratio in basis points.
+    /// Invariant: Truncates downwards so refund can NEVER round above original payment.
+    pub fn calculate_max_refund_minor_units(original_payment: i128, refund_ratio_bps: u32) -> i128 {
+        if original_payment <= 0 || refund_ratio_bps == 0 {
+            return 0;
+        }
+        let bps = if refund_ratio_bps > 10_000 { 10_000 } else { refund_ratio_bps };
+        (original_payment * (bps as i128)) / 10_000
+    }
+}
+
+
 /// A single accepted-asset price quote for a material.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
