@@ -217,7 +217,7 @@ export async function sendWebhookWithRetry(url, payload, retries = 3, { signingS
   return false;
 }
 
-import { enqueueSideEffect } from '@/lib/backend/outbox';
+import { enqueueSideEffect, getNextCausalLink } from '@/lib/backend/outbox';
 
 export async function broadcastPurchaseEvent(materialId, purchaseData) {
   try {
@@ -253,9 +253,19 @@ export async function broadcastPurchaseEvent(materialId, purchaseData) {
       }
     };
 
+    // Causal ordering (issue #635): link this delivery to the previous one
+    // for the same material so purchase/refund/entitlement-change webhooks
+    // for one subscriber can never be leased out of order, even under a
+    // retry storm.
+    const sourceAggregate = 'material';
+    const sourceId = String(material._id || materialId);
+    const { sourceVersion, previousDeliveryId } = await getNextCausalLink(sourceAggregate, sourceId);
+
     await enqueueSideEffect({
-      sourceAggregate: 'material',
-      sourceId: String(material._id || materialId),
+      sourceAggregate,
+      sourceId,
+      sourceVersion,
+      previousDeliveryId,
       intent: {
         type: 'webhook',
         channel: 'purchase.completed',

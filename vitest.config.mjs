@@ -14,13 +14,32 @@ export default defineConfig({
   test: {
     environment: "jsdom",
     setupFiles: ["./test/setup-vitest.js"],
+    globalSetup: ["./test/global-setup-outbox.js"],
     include: [
       "src/**/*.{test,spec}.{js,jsx,ts,tsx}",
       "test/integration/**/*.{test,spec}.{js,jsx,ts,tsx}",
       "tests/components/**/*.{test,spec}.{js,jsx,ts,tsx}",
+      // outbox.test.js uses vitest imports and mongodb-memory-server (real
+      // Mongo query semantics matter here — see issue #635), unlike the rest
+      // of tests/backend which runs under `node --test`. It was previously
+      // caught by the blanket tests/backend/** exclude below and never
+      // actually ran under any test command; explicitly included here so it
+      // executes under `npm test`.
+      "tests/backend/outbox.test.js",
     ],
-    // tests/backend runs under `node --test` and tests/legacy-evm under hardhat —
-    // both use test runner globals incompatible with Vitest, so they stay excluded.
-    exclude: ["tests/backend/**", "tests/legacy-evm/**", "archive/**", "contracts/**", "soroban/**", "node_modules/**"],
+    // The rest of tests/backend runs under `node --test` and tests/legacy-evm
+    // under hardhat — both use test runner globals incompatible with Vitest,
+    // so they stay excluded. Vitest's `exclude` wins over a matching
+    // `include` entry, and its glob matcher doesn't support `!negation`, so
+    // outbox.test.js is carved out via an extglob that matches every
+    // tests/backend/*.mjs file but not the one *.js file.
+    exclude: [
+      "tests/backend/**/*.mjs",
+      "tests/legacy-evm/**",
+      "archive/**",
+      "contracts/**",
+      "soroban/**",
+      "node_modules/**",
+    ],
   },
 });
