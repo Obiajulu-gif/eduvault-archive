@@ -229,12 +229,13 @@ mongorestore \
 
 ### Recovery testing checklist
 
-Run this checklist after every significant schema migration:
+Run this checklist after every significant schema migration or disaster recovery drill (#715):
 
 - [ ] Create a fresh backup with `node scripts/backup-mongodb.mjs`.
 - [ ] Spin up a separate MongoDB instance (e.g., `docker run -p 27018:27017 mongo:7`).
 - [ ] Restore the backup to the test instance.
-- [ ] Start the app pointing at the test instance and verify core flows (login, list materials, purchase).
+- [ ] Run `node scripts/restore-verification.mjs <backup.gz>` to verify secrets, collection schemas, protected material content hashes, and zero-trust entitlement enforcement.
+- [ ] Start the app pointing at the test instance and verify core flows (login, list materials, purchase, protected download).
 - [ ] Delete the test instance.
 
 ---
