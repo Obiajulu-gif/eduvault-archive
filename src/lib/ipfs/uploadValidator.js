@@ -212,7 +212,49 @@ export async function validateFileMagicNumber(file) {
 }
 
 /**
- * Validates both MIME type allowlist and magic number for a document file.
+ * Executable / script file extensions that must never be accepted as
+ * downloadable educational material (issue #671). Even if a file is
+ * mislabeled with an allowlisted MIME type and a matching magic number, a
+ * `.exe`/`.sh`/`.js`/... name is grounds for rejection because end users
+ * may be auto-prompted or tricked into executing it.
+ *
+ * MIME types are intentionally NOT the only signal here: browsers often
+ * derive `file.type` from the extension, but an attacker can spoof both the
+ * declared type and the magic number (e.g. a polyglot). Blocking the
+ * extension is a cheap, defense-in-depth layer on top of magic-number
+ * validation and the malware quarantine scanner.
+ */
+const EXECUTABLE_EXTENSIONS = new Set([
+  '.exe', '.msi', '.bat', '.cmd', '.com', '.scr', '.pif', '.ps1', '.psm1',
+  '.vbs', '.vbe', '.js', '.jse', '.wsf', '.wsh', '.sh', '.bash', '.ksh',
+  '.csh', '.zsh', '.php', '.pl', '.py', '.rb', '.perl', '.dll', '.so',
+  '.dylib', '.jar', '.app', '.msc', '.hta', '.reg', '.aspx', '.asp',
+  '.cer', '.cpl', '.msh', '.jsx', '.ts', '.tsx',
+]);
+
+/**
+ * Reject files carrying a known executable/script extension (issue #671).
+ *
+ * @param {File} file
+ * @returns {{ blocked: boolean, reason?: string }}
+ */
+export function detectExecutableExtension(file) {
+  const name = (file.name || '').trim().toLowerCase();
+  const dotIndex = name.lastIndexOf('.');
+  if (dotIndex === -1) return { blocked: false };
+  const extension = name.slice(dotIndex);
+  if (EXECUTABLE_EXTENSIONS.has(extension)) {
+    return {
+      blocked: true,
+      reason: `File extension "${extension}" is not allowed. Executable or script content cannot be published as learning material.`,
+    };
+  }
+  return { blocked: false };
+}
+
+/**
+ * Validates both MIME type allowlist and magic number for a document file,
+ * and rejects files carrying executable/script extensions (issue #671).
  *
  * @param {File} file
  * @param {string[]} allowedTypes - list of permitted MIME types
@@ -230,6 +272,11 @@ export async function validateUploadedFile(file, allowedTypes) {
       valid: false,
       reason: `Unsupported file type: ${mimeType || 'unknown'}.`,
     };
+  }
+
+  const executable = detectExecutableExtension(file);
+  if (executable.blocked) {
+    return { valid: false, reason: executable.reason };
   }
 
   return validateFileMagicNumber(file);

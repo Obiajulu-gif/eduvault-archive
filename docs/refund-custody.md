@@ -71,3 +71,84 @@ Refund authorization payloads carry a **signer version** and an **expiry** bound
 - Replayed payloads are rejected by the expiry bound (`RefundAuthorizationExpired`); version mismatches are rejected distinctly (`RefundSignerVersionMismatch`).
 
 Rotation procedure: issue new payloads under the new version, bump the contract version, then rotate the signing key per the existing custody guidance below.
+
+## On-chain refund state transitions (#672)
+
+Refunds are executed by `PurchaseManager::refund_purchase` (and the buyer-
+scoped `refund_purchase_to_buyer`). This section documents the settlement
+state machine and the accounting guarantees the conformance tests in
+`soroban/contracts/purchase-manager/src/test.rs` pin (`test_duplicate_refund_*`,
+`test_refund_before_and_after_download_authorization`,
+`test_partial_bulk_refund_*`).
+
+### Settlement lifecycle
+
+A purchase's `SettlementRecord.state` walks a small state machine:
+
+```
+        ┌──────────┬─────────────────────────────────────────────┐
+        │ state    │ meaning / terminal?                         │
+        ├──────────┼─────────────────────────────────────────────┤
+        │ Pending  │ paid, in escrow, download allowed  (not terminal) │
+        │ Released │ funds sent to creator            (terminal) │
+        │ Disputed │ under dispute (not terminal)                │
+        │ Refunded │ funds returned to buyer, access revoked (terminal) │
+        │ Expired  │ abandoned / timed out           (terminal) │
+        └──────────┴─────────────────────────────────────────────┘
+```
+
+`is_settled` treats `Released`, `Refunded`, and `Expired` as terminal.
+
+### Pending → Refunded (successful refund)
+
+`perform_single_refund` only proceeds when **all** preconditions hold:
+
+- a settlement exists and is in `Pending` state;
+- an escrow record exists and is not already claimed;
+- the purchase buyer is resolvable; and
+- the entitlement exists and is `active`.
+
+A successful refund is atomic:
+
+1. transfers the escrowed `seller_net` back to the buyer (fails with
+   `InsufficientEscrowBalance` if the contract float cannot cover it);
+2. marks the escrow `claimed = true`;
+3. **revokes** the entitlement (`active = false`) so future download
+   authorization calls (`reconcile_entitlement`) are denied;
+4. transitions the settlement to `Refunded`, sets `resolved_ledger` and
+   `refunded_amount`; and
+5. emits `PurchaseRefundedEvent` with `entitlement_revoked = true`.
+
+Because revocation happens in the same transaction as the refund, a purchase
+that is refunded can never again authorize a download — refund-before and
+refund-after download-authorization states are both covered by conformance
+tests.
+
+### Duplicate and invalid refund attempts fail with stable errors
+
+If a refund cannot proceed the exact reason is mapped to a **stable**
+`PurchaseError` (never a partial write):
+
+| skip reason            | returned error                |
+|------------------------|-------------------------------|
+| no settlement          | `SettlementNotPending`        |
+| settlement not Pending | `RefundNotAllowed`            |
+| escrow already claimed | `EscrowAlreadyClaimed`        |
+| buyer not found        | `NotAuthorized`               |
+| entitlement not found  | `NotAuthorized`               |
+| entitlement inactive   | `NotAuthorized`               |
+| anything else          | `RefundNotAllowed`            |
+
+A **duplicate refund** of an already-`Refunded` purchase therefore fails with
+`RefundNotAllowed` and performs **zero** token transfers — the conformance
+test asserts the transfer ledger, settlement state, and entitlement state are
+all unchanged after the rejected attempt.
+
+### Partial (bulk) refunds preserve remaining entitlements
+
+Bulk licensing creates one settlement + escrow + entitlement per recipient.
+Refunding a single purchase within a batch revokes only that recipient's
+entitlement and flips only that settlement to `Refunded`; every other
+recipient keeps an `active` entitlement and a `Pending` settlement. The
+conformance test checks that un-refunded recipients still authorize downloads
+and their settlements remain `Pending`.

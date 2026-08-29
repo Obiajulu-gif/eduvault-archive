@@ -290,3 +290,67 @@ Moved user-specific concerns to client components:
 ---
 
 *Audit authored as part of issue resolution sprint — `feature/issue-resolutions`.*
+
+---
+
+## 10. Enforceable Performance & Query Budgets (#670)
+
+The audit measurements above are baseline *observations*. This section turns
+them into **enforceable, numeric budgets** that CI and monitoring can fail or
+alert on. Each budget names the metric, the endpoint/operation it governs, the
+budget value, and the user-facing workflow it protects.
+
+### 10.1 Latency budgets
+
+| # | Operation | Endpoint | Budget (p95) | User-facing workflow it protects |
+|---|-----------|----------|--------------|----------------------------------|
+| L1 | Marketplace listing | `GET /api/market-materials` (cursor page) | ≤ 80 ms | Browsing the catalog / filter + sort + infinite scroll |
+| L2 | Marketplace listing (first byte) | `/marketplace` page ISR render | ≤ 80 ms TTFB | First paint of the browsing page |
+| L3 | Purchase check / initiation | `POST /api/checkout/initiate`, `POST /api/purchase` | ≤ 300 ms | Clicking "Buy now" → review screen |
+| L4 | Entitlement lookup (download authorization) | `GET /api/entitlements`, detail-page access check | ≤ 50 ms | Opening/downloading a purchased resource |
+| L5 | Refund check | `POST /api/checkout/refund` | ≤ 300 ms | Submitting a refund request |
+
+### 10.2 Query-count budgets (per request)
+
+| # | Operation | Budget | Rationale |
+|---|-----------|--------|-----------|
+| Q1 | Marketplace listing | ≤ 4 DB queries (1 catalog cursor query + allowed lookups) | A single cursor query plus at most subject/cache lookups; any page render must not fan out |
+| Q2 | Purchase check / initiate | ≤ 5 DB queries + ≤ 1 on-chain call | Escrow/asset/policy lookups plus a single Stellar call |
+| Q3 | Entitlement lookup | ≤ 2 DB queries (entitlement cache + optional verification) | Cache-first; must not touch the chain on the hot path |
+| Q4 | Detail page (asset) | ≤ 6 DB queries | Material + reviews + recommended + cart/comparison |
+
+The listing query already uses cursor-based pagination (no `skip`); the budget
+forbids reintroducing O(n) offset scans on the catalog path.
+
+### 10.3 Indexer-lag budget
+
+| # | Operation | Budget | User-facing workflow it protects |
+|---|-----------|--------|----------------------------------|
+| I1 | Indexer lag (`currentLedger − lastLedger`) | ≤ 2 × typical batch advance (default: **≤ 10 ledgers**, usually a few seconds) for > 1 polling interval | New purchases/entitlements being visible after checkout |
+| I2 | Indexer batch apply | ≤ 5 s per batch (p95) | Entitlement cache freshness |
+| I3 | Dead-letter backlog | `deadLetterFailedCount` = 0 for > 1 interval; `deadLetterRetryableCount` trending flat or down | Refund/entitlement events landing correctly |
+
+The default indexer batch is `INDEXER_MAX_RETRIES = 3` for retries; the lag
+budget ties to `src/lib/indexer/stellarIndexer.js`'s `lag` metric and the
+`GET /api/indexer` health payload (documented in `../indexer-observability.md`).
+
+### 10.4 How budgets are enforced
+
+- **Monitoring/alerting**: `lag` → alert if `> 10` ledgers (i.e. > 2× the
+  budgeted 5-ledger typical advance) for more than one polling interval;
+  `deadLetterFailedCount != 0` for more than one interval; fork rewind on
+  every occurrence. Thresholds live in `docs/indexer-observability.md`.
+- **CI/APM**: latency and query-count budgets (10.1, 10.2) are enforced by the
+  APM/lighthouse CI gates that produced the `LCP`/`TBT` numbers above. Any
+  PR that re-introduces an offset `skip` on `market-materials`, re-adds
+  `force-dynamic` to the listing, or pushes `GET /api/entitlements` above the
+  cache-first budget must fail the gate.
+- **Manual verification** for a PR that touches these paths: run the
+  cursor-benchmark table (section 7) and the ISR TTFB check (section 8) and
+  confirm you remain within the budgets above.
+
+### 10.5 Regression acceptance
+
+A performance regression is "closed" when all budgets (L1–L5, Q1–Q4, I1–I3)
+are satisfied and every budget has a monitoring/CI gate that fires on
+violation — no budget is allowed to exist only as documentation.

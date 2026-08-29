@@ -441,6 +441,41 @@ Notes:
 - `purchase.completed` and `payout.distributed` must be idempotent under repeated indexing
 - backend code should continue using stable event ids derived from ledger, tx hash, topic, and index
 
+### Event schema snapshots and compatibility policy (#673)
+
+The raw `#[contractevent]` **topic symbols and payload fields** are the ABI
+indexers and entitlement logic actually decode. They are snapshotted and
+machine-checked in `soroban/contracts/shared-interface/src/lib.rs`
+(the `events` module) with golden fixtures in
+`soroban/contracts/shared-interface/src/test.rs`. That crate is the shared
+cross-contract ABI layer, so a change to any snapshotted event fails CI
+there *before* it can desync an indexer.
+
+The snapshots cover the events this architecture documents plus the ones
+that carry entitlement state:
+
+| snapshot                       | contract           | topics (leading + `#[topic]`)                                | entitlement column |
+|--------------------------------|--------------------|----------------------------------------------------------------|--------------------|
+| `material.registered`          | `MaterialRegistry` | `material, registered, material_id, creator`                 | —                  |
+| `material.sale_terms_updated`  | `MaterialRegistry` | `material, sale_terms_updated, material_id, creator`         | —                  |
+| `purchase.completed`           | `PurchaseManager`  | `purchase, completed, purchase_id, material_id, buyer`       | `entitlement_active` |
+| `purchase.bulk_completed`      | `PurchaseManager`  | `purchase, bulk_completed, purchaser, material_id`           | —                  |
+| `purchase.refunded`            | `PurchaseManager`  | `purchase, refunded, purchase_id, material_id, buyer`        | `entitlement_revoked` |
+
+Policy:
+
+- **Additive** changes (appending a new trailing payload column or a new
+  event) are non-breaking: consumers ignore unknown trailing columns.
+- **Breaking** changes (renaming, reordering, or removing a topic symbol or a
+  payload field; changing a field's encoded type) require updating the
+  `events` module **and** its snapshot tests in the same PR, and following the
+  deployment order in `shared-interface/lib.rs` (deploy `material-registry`
+  first, `purchase-manager` second).
+- The entitlement contract is `entitlement_active` on `purchase.completed`
+  and `entitlement_revoked` on `purchase.refunded`; these columns must never
+  be dropped or renamed, or the indexer's `entitlement_cache` upsert becomes
+  meaningless.
+
 ## Admin Assumptions
 
 Platform admin powers in v1:

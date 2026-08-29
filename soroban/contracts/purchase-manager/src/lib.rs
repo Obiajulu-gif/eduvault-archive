@@ -3,7 +3,7 @@
 use shared_interface::{PendingAdminTransfer, MIN_ADMIN_TRANSFER_DELAY_SECS};
 use soroban_sdk::{
     contract, contracterror, contractevent, contractimpl, contracttype, Address, Bytes, BytesN,
-    Env, IntoVal, Symbol, Val, Vec,
+    Env, IntoVal, String, Symbol, Val, Vec,
 };
 
 pub mod auth;
@@ -1270,6 +1270,14 @@ impl PurchaseManager {
             idx += 1;
         }
 
+        // Immutable purchase metadata snapshot (#667): capture the same
+        // sale-terms version and metadata/rights hashes the single-purchase
+        // path records, so bulk-license purchase events are indexer-compatible.
+        let sale_terms_version = config.registry.get_sale_terms_version(&env, &material_id)?;
+        let immutable = config.registry.get_material_immutable(&env, &material_id)?;
+        let metadata_hash = immutable.metadata_hash;
+        let rights_hash = immutable.rights_hash;
+
         // Emit individual purchase completed events for indexer compatibility
         idx = 0;
         let mut event_purchase_id = first_purchase_id;
@@ -1286,6 +1294,9 @@ impl PurchaseManager {
                 seller_net_amount: quote.amount
                     - (quote.amount * effective_fee_bps as i128) / BASIS_POINTS as i128,
                 entitlement_active: true,
+                metadata_hash: metadata_hash.clone(),
+                rights_hash: rights_hash.clone(),
+                sale_terms_version,
                 transaction_id: transaction_id.clone(),
             }
             .publish(&env);
