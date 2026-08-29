@@ -324,8 +324,56 @@ export function MaterialReviewPanelView({
   );
 }
 
+/**
+ * Skeleton placeholder for the review panel, mirroring its two-column layout
+ * so there is no layout shift once the panel resolves. Rendered as the
+ * Suspense fallback while the feedback query is pending.
+ */
+export function MaterialReviewPanelSkeleton() {
+  return (
+    <section
+      role="status"
+      aria-label="Loading reviews"
+      data-testid="material-review-skeleton"
+      className="mt-10 rounded-3xl border border-slate-200 bg-white p-5 shadow-sm md:p-7"
+    >
+      <div className="grid gap-8 lg:grid-cols-[0.85fr_1.15fr]">
+        <div>
+          <div className="h-3 w-32 rounded bg-slate-100 animate-pulse" />
+          <div className="mt-3 h-7 w-48 rounded bg-slate-200 animate-pulse" />
+          <div className="mt-5 rounded-2xl border border-slate-100 bg-slate-50 p-5">
+            <div className="h-10 w-24 rounded bg-slate-200 animate-pulse" />
+            <div className="mt-3 h-4 w-40 rounded bg-slate-100 animate-pulse" />
+          </div>
+          <div className="mt-6 space-y-4">
+            <div className="h-20 rounded-2xl bg-slate-100 animate-pulse" />
+            <div className="h-28 rounded-2xl bg-slate-100 animate-pulse" />
+            <div className="h-11 w-full rounded-2xl bg-slate-200 animate-pulse" />
+          </div>
+        </div>
+        <div className="min-w-0">
+          <div className="h-5 w-40 rounded bg-slate-200 animate-pulse" />
+          <div className="mt-5 space-y-5">
+            {[1, 2, 3].map((i) => (
+              <div key={i} className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="h-4 w-32 rounded bg-slate-100 animate-pulse" />
+                  <div className="h-5 w-24 rounded-full bg-slate-100 animate-pulse" />
+                </div>
+                <div className="mt-3 h-4 w-28 rounded bg-slate-100 animate-pulse" />
+                <div className="mt-3 h-4 w-full rounded bg-slate-100 animate-pulse" />
+                <div className="mt-2 h-4 w-3/4 rounded bg-slate-100 animate-pulse" />
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
 export default function MaterialReviewPanel(props) {
-  const feedbackQuery = useMaterialFeedback(props.materialId);
+  const feedbackQuery = useMaterialFeedback(props.materialId, { suspense: true });
   const submitFeedbackMutation = useSubmitMaterialFeedback(props.materialId);
 
   return (

@@ -283,7 +283,7 @@ Moved user-specific concerns to client components:
 - [x] Add `Cache-Control` headers to `/api/subjects` route
 - [x] Convert marketplace listing page to RSC + thin client shell *(ISR-enabled static shell with client-side interactivity)*
 - [x] Replace `force-dynamic` with `revalidate = 60` on marketplace listing *(Estimated 79% TTFB improvement: 380ms → 80ms)*
-- [ ] Add Suspense boundaries around `MaterialReviewPanel`
+- [x] Add Suspense boundaries around `MaterialReviewPanel` *(Wrapped in a `<Suspense>` boundary with a matching skeleton fallback; the panel's feedback query is Suspense-enabled so the rest of the detail page paints before the review data resolves)*
 - [x] Switch to cursor-based pagination for MongoDB queries *(Performance improvement: ~60-80% faster for deep pagination, eliminates O(n) skip operations)*
 - [ ] Lazy-load the `Web3Provider` / wagmi tree per route
 
