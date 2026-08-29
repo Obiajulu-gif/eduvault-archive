@@ -6,6 +6,7 @@ import { normalizeStringList, sanitizeObject, validateUploadPayload, validateUpl
 import { pinata } from '@/lib/pinata'
 import { validatePinataResponse, validateGatewayUrl, retryWithBackoff } from '@/lib/api/storage'
 import { sanitizeRichText, isSafeUrl } from '@/lib/api/contentSanitizer'
+import { guardZipArchiveUpload } from '@/lib/backend/archiveUploadGuard'
 
 export const dynamic = 'force-dynamic'
 
@@ -105,6 +106,23 @@ export async function POST(request) {
         } catch (validationErr) {
           auditLog({ event: 'upload_failed', route: 'upload', method: 'POST', status: 400, reason: validationErr.message })
           return NextResponse.json({ error: validationErr.message }, { status: 400 })
+        }
+
+        // 3.55️⃣ For zip uploads specifically, guard against path traversal,
+        // symlinks, nested archives, and decompression bombs (issue #639)
+        // before the archive is ever pinned to IPFS as-is.
+        try {
+          const archiveCheck = await guardZipArchiveUpload(file)
+          if (!archiveCheck.safe) {
+            auditLog({ event: 'upload_failed', route: 'upload', method: 'POST', status: 422, reason: `archive_rejected:${archiveCheck.reason}` })
+            return NextResponse.json(
+              { error: `Archive rejected: ${archiveCheck.reason.replace(/_/g, ' ')}.` },
+              { status: 422 }
+            )
+          }
+        } catch (archiveErr) {
+          auditLog({ event: 'upload_failed', route: 'upload', method: 'POST', status: 500, reason: `archive_check_failure: ${archiveErr.message}` })
+          return NextResponse.json({ error: 'Failed to validate archive contents.' }, { status: 500 })
         }
 
         // 3.6️⃣ Validate upload metadata fields
