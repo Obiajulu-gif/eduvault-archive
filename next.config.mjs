@@ -1,4 +1,3 @@
-import { PHASE_PRODUCTION_BUILD } from "next/constants.js";
 import { assertRuntimeEnv } from "./src/lib/env.js";
 
 /** @type {import('next').NextConfig} */
@@ -45,9 +44,13 @@ const nextConfig = {
 };
 
 export default function config(phase) {
-  if (phase !== PHASE_PRODUCTION_BUILD) {
-    assertRuntimeEnv();
-  }
+  // Fail fast on a broken environment at *every* non-CI entrypoint (#678):
+  // development (`next dev`), the production server (`next start`), and the
+  // production build itself. `assertRuntimeEnv` skips under CI so automated
+  // builds can run without a full deployment .env, but a local production
+  // build with placeholder contract IDs or webhook secrets must refuse to
+  // proceed rather than ship a build that cannot serve traffic correctly.
+  assertRuntimeEnv();
 
   return nextConfig;
 }

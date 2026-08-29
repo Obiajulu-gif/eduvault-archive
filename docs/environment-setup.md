@@ -47,6 +47,32 @@ Required local values for the main app are:
 
 Optional values include SMTP settings, WalletConnect project configuration, and planned Stellar/Soroban settings such as `NEXT_PUBLIC_STELLAR_NETWORK`, `NEXT_PUBLIC_STELLAR_RPC_URL`, `NEXT_PUBLIC_HORIZON_URL`, and `NEXT_PUBLIC_SOROBAN_CONTRACT_ID`.
 
+## Fail-fast environment validation
+
+EduVault validates the environment before serving traffic and before a
+production build (`next build`, `next start`, and `next dev` all check). A
+missing or placeholder value for a required variable, a malformed Soroban
+contract ID, or a placeholder/short webhook secret aborts startup with a
+listing of every problem instead of failing later at request time.
+
+Checks that apply:
+
+- **Contract IDs** — `NEXT_PUBLIC_MATERIAL_REGISTRY_CONTRACT_ID`,
+  `NEXT_PUBLIC_PURCHASE_MANAGER_CONTRACT_ID`, and
+  `NEXT_PUBLIC_SOROBAN_CONTRACT_ID` must be well-formed 56-character
+  `C`-prefixed Stellar addresses once set. A `0x…` address or a truncated
+  value is rejected.
+- **Webhook secrets** — when webhooks are enabled (`WEBHOOK_URL`,
+  `STELLAR_WEBHOOK_SECRET`, or `CRON_SECRET` set), the signing secret must
+  be present and at least 32 characters in production.
+- **Placeholders** — values such as `replace-with-a-long-random-string`,
+  `YOUR_PINATA_JWT`, and the like are rejected in production.
+
+The check is skipped under CI (`CI=true`) so automated builds can run
+without a full deployment `.env`. To debug a failed startup, run
+`node -e "process.env.NODE_ENV='production'; import('./src/lib/env.js').then((m)=>console.log(m.validateRuntimeEnv()))"`
+or run the unit tests in `src/lib/__tests__/env.test.js`.
+
 ## Start MongoDB
 
 Use Docker when you do not already have a local or hosted MongoDB instance:
