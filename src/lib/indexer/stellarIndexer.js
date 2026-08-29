@@ -1,7 +1,7 @@
 import { COLLECTIONS } from "../backend/schemaContracts.js";
 import { parseContractEvent } from "./eventParser.js";
 import { invalidateEntitlement } from "../entitlement.js";
-import { detectFork, rewindAfterFork } from "./forkDetection.js";
+import { detectFork, rewindAfterFork, dedupeCheckpoints, MAX_CHECKPOINTS } from "./forkDetection.js";
 import { deriveEventIdFromEvent, computeQuarantineKey } from "./eventIdentity.js";
 
 function duplicateKey(error) {
@@ -356,12 +356,17 @@ export async function runIndexerBatch({
 
   if (state?.lastLedger && state?.lastLedgerHash && getLedgerHash) {
     const fork = await detectFork(db, {
+      // Prefer the bounded per-ledger checkpoint history when present; fall
+      // back to a single-entry history derived from the legacy fields.
+      checkpoints: Array.isArray(state?.checkpoints) && state.checkpoints.length > 0
+        ? state.checkpoints
+        : [{ ledger: state.lastLedger, hash: state.lastLedgerHash }],
       ledger: state.lastLedger,
       expectedHash: state.lastLedgerHash,
       getLedgerHash,
     });
     if (fork.forked) {
-      await rewindAfterFork(db, { source, divergenceLedger: state.lastLedger });
+      await rewindAfterFork(db, { source, divergenceLedger: fork.divergenceLedger });
       state = await db.collection(COLLECTIONS.syncState).findOne({ _id: stateId });
     }
   }
@@ -452,6 +457,24 @@ export async function runIndexerBatch({
     nextLedgerHash = canonical?.hash || nextLedgerHash;
   }
 
+  // Maintain the bounded per-ledger checkpoint history used for deep reorg
+  // detection (#587): append the new checkpoint (when the batch advanced to
+  // a ledger we can hash), dedupe by ledger keeping the newest hash, and trim
+  // to MAX_CHECKPOINTS entries.
+  const existingCheckpoints =
+    Array.isArray(state?.checkpoints) && state.checkpoints.length > 0
+      ? state.checkpoints
+      : state?.lastLedger && state?.lastLedgerHash
+        ? [{ ledger: state.lastLedger, hash: state.lastLedgerHash }]
+        : [];
+
+  const nextCheckpoints = [...existingCheckpoints];
+  if (nextLedger && nextLedgerHash && nextLedger !== state?.lastLedger) {
+    nextCheckpoints.push({ ledger: nextLedger, hash: nextLedgerHash });
+  }
+
+  const boundedCheckpoints = dedupeCheckpoints(nextCheckpoints).slice(-MAX_CHECKPOINTS);
+
   await db.collection(COLLECTIONS.syncState).updateOne(
     { _id: stateId },
     {
@@ -461,6 +484,7 @@ export async function runIndexerBatch({
         cursor: nextCursor,
         lastLedger: nextLedger,
         lastLedgerHash: nextLedgerHash,
+        checkpoints: boundedCheckpoints,
         updatedAt: new Date(),
       },
       $setOnInsert: { createdAt: new Date() },
