@@ -206,7 +206,15 @@ mismatch returns **403**, and an un-exported/not-found contract resource returns
 **403** (never a leaky 200). Unauthorized creator/buyer negative tests live in
 `tests/backend/authorization-boundary.test.mjs`.
 
-## 7. Related Documents
+## 7. Resolved Issues
+
+The following issues have been implemented and verified:
+
+- **#680** — Email subscription workflow hardened with idempotent subscribe/unsubscribe, webhook signature verification, and spoof-resistant event handling (`src/lib/email/subscriptionGuard.js`, `tests/backend/subscription-guard.test.mjs`).
+- **#682** — Entitlement cache rebuild verification added to disaster recovery procedures, including executable rebuild script and RPO/RTO targets (`scripts/rebuild-entitlement-cache.mjs`, `docs/disaster-recovery.md`).
+- **#683** — Backend-contract authorization boundary centralized with `assertResourceOwner`, `assertBuyer`, and `mapContractAuthError` functions, covering unauthorized creator/buyer actions with negative tests (`src/lib/api/authorizationBoundary.js`, `tests/backend/authorization-boundary.test.mjs`).
+
+## 8. Related Documents
 
 * [`docs/architecture.md`](file:///home/abujulaybeeb/Documents/Drips/Drips%2013/eduvault-archive/docs/architecture.md) — System goals, boundaries, and high-level architecture.
 * [`docs/purchased-content-and-entitlements.md`](file:///home/abujulaybeeb/Documents/Drips/Drips%2013/eduvault-archive/docs/purchased-content-and-entitlements.md) — Buyer library overview and contract access points.
