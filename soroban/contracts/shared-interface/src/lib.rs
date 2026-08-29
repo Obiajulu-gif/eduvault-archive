@@ -128,5 +128,140 @@ pub struct PendingAdminTransfer {
     pub accept_after: u64,
 }
 
+/// Canonical, machine-checked snapshots of the on-chain **event schemas**
+/// (#673) that indexers and both contracts (`material-registry`,
+/// `purchase-manager`) depend on.
+///
+/// Soroban `#[contractevent]` events are emitted under a leading set of
+/// topic `Symbol`s followed by `#[topic]` fields, with the remaining struct
+/// fields serialized into the event data payload. A change to any of those
+/// topic symbols, their order, or the payload field set is a *breaking*
+/// change for every consumer (indexers, entitlement logic, off-chain
+/// refund/dispute services).
+///
+/// These constants are the single source of truth for the event ABI. The
+/// snapshot tests in `test.rs` lock them so that renaming a field, reordering
+/// topics, or dropping a payload column fails CI in this leaf crate **before**
+/// the change can reach production and desync an indexer.
+///
+/// # Compatibility policy
+///
+/// - **Additive** payload/topic changes are allowed without a new version, as
+///   long as existing columns are not reordered or removed (consumers ignore
+///   unknown trailing data columns).
+/// - **Breaking** changes (renaming/reordering/removing a topic or a payload
+///   field, or changing a field's encoded type) require updating this module
+///   and adding an explicitly-named *previous* schema fixture in `test.rs` in
+///   the same PR, following the same rollout ordering described at the top of
+///   this file (deploy `material-registry` first, `purchase-manager` second).
+pub mod events {
+    /// A single event schema: its topic column labels (the leading topic
+    /// `Symbol`s plus the `#[topic]` field names, in emit order) and its
+    /// ordered payload field names (the non-topic struct fields, in
+    /// declaration order).
+    #[derive(Clone, Debug, Eq, PartialEq)]
+    pub struct EventSchema {
+        /// Canonical human-readable event name, e.g. `"purchase.completed"`.
+        pub name: &'static str,
+        /// Topic `Symbol`s + `#[topic]` field names, in emit order.
+        pub topics: &'static [&'static str],
+        /// Non-topic payload field names, in declaration order.
+        pub fields: &'static [&'static str],
+    }
+
+    /// `material-registry`: publish — `register_material`.
+    ///
+    /// Emits `MaterialRegisteredEvent` with topic symbols
+    /// `["material", "registered"]` and `#[topic]` `material_id`, `creator`.
+    pub const MATERIAL_REGISTERED: EventSchema = EventSchema {
+        name: "material.registered",
+        topics: &["material", "registered", "material_id", "creator"],
+        fields: &[
+            "metadata_uri",
+            "metadata_hash",
+            "rights_hash",
+            "status",
+            "quotes",
+            "payout_shares",
+        ],
+    };
+
+    /// `material-registry`: sale update — `update_sale_terms`.
+    ///
+    /// Emits `MaterialSaleTermsUpdatedEvent` with topic symbols
+    /// `["material", "sale_terms_updated"]` and `#[topic]` `material_id`,
+    /// `creator`.
+    pub const MATERIAL_SALE_TERMS_UPDATED: EventSchema = EventSchema {
+        name: "material.sale_terms_updated",
+        topics: &["material", "sale_terms_updated", "material_id", "creator"],
+        fields: &["status", "quotes", "payout_shares"],
+    };
+
+    /// `purchase-manager`: purchase — `purchase`.
+    ///
+    /// Emits `PurchaseCompletedEvent` with topic symbols
+    /// `["purchase", "completed"]` and `#[topic]` `purchase_id`, `material_id`,
+    /// `buyer`.
+    pub const PURCHASE_COMPLETED: EventSchema = EventSchema {
+        name: "purchase.completed",
+        topics: &["purchase", "completed", "purchase_id", "material_id", "buyer"],
+        fields: &[
+            "seller",
+            "asset",
+            "amount",
+            "platform_fee",
+            "seller_net_amount",
+            "entitlement_active",
+            "metadata_hash",
+            "rights_hash",
+            "sale_terms_version",
+            "transaction_id",
+        ],
+    };
+
+    /// `purchase-manager`: purchase — `purchase_bulk_licenses`.
+    ///
+    /// Emits `BulkPurchaseCompletedEvent` with topic symbols
+    /// `["purchase", "bulk_completed"]` and `#[topic]` `purchaser`,
+    /// `material_id`.
+    pub const PURCHASE_BULK_COMPLETED: EventSchema = EventSchema {
+        name: "purchase.bulk_completed",
+        topics: &["purchase", "bulk_completed", "purchaser", "material_id"],
+        fields: &["recipient_count", "unit_price", "total_paid", "asset"],
+    };
+
+    /// `purchase-manager`: refund — `refund_purchase`.
+    ///
+    /// Emits `PurchaseRefundedEvent` with topic symbols
+    /// `["purchase", "refunded"]` and `#[topic]` `purchase_id`, `material_id`,
+    /// `buyer`.
+    pub const PURCHASE_REFUNDED: EventSchema = EventSchema {
+        name: "purchase.refunded",
+        topics: &["purchase", "refunded", "purchase_id", "material_id", "buyer"],
+        fields: &["asset", "refund_amount", "entitlement_revoked"],
+    };
+
+    /// `purchase-manager`: entitlement lifecycle.
+    ///
+    /// There is no standalone entitlement event; entitlement status is
+    /// surfaced on the purchase/refund events above via `entitlement_active`
+    /// (granted) and `entitlement_revoked` (revoked). These two fields are
+    /// the cross-contract entitlement schema and must stay present on their
+    /// respective events.
+    pub const ENTITLEMENT_STATUS_FIELDS: &[&str] =
+        &["entitlement_active", "entitlement_revoked"];
+
+    /// Every production event schema tracked by the snapshot suite in
+    /// `test.rs`. A new production event must be added here (and covered by a
+    /// snapshot test) when it is introduced.
+    pub const ALL: &[EventSchema] = &[
+        MATERIAL_REGISTERED,
+        MATERIAL_SALE_TERMS_UPDATED,
+        PURCHASE_COMPLETED,
+        PURCHASE_BULK_COMPLETED,
+        PURCHASE_REFUNDED,
+    ];
+}
+
 #[cfg(test)]
 mod test;

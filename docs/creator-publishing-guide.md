@@ -34,8 +34,9 @@ The wizard guides you through four steps:
 ## Step 3: Upload Your File
 
 1. Select the educational material file from your device.
-2. The file is uploaded directly to IPFS through Pinata. You will see a progress indicator during the upload.
-3. Once pinned, the file receives a content identifier (CID) that serves as its permanent, tamper-proof address on IPFS.
+2. The file is validated before upload (see **Upload validation and malware quarantine** below).
+3. Once validated, the file is uploaded directly to IPFS through Pinata. You will see a progress indicator during the upload.
+4. Once pinned, the file receives a content identifier (CID) that serves as its permanent, tamper-proof address on IPFS.
 
 **Supported file types:**
 
@@ -46,6 +47,31 @@ The wizard guides you through four steps:
 **File size limits:**
 
 - Maximum file size is determined by your Pinata plan. Default free-tier limit is typically around 100 MB per pin.
+
+### Upload validation and malware quarantine
+
+EduVault can host downloadable content, so every upload is validated and
+scanned before it can appear in the marketplace. This is enforced in
+`src/lib/ipfs/uploadValidator.js` and the `POST /api/upload` route.
+
+1. **Allowed extensions & MIME:** the file must match one of the supported
+   extensions above and the payload must have a plausible MIME type.
+2. **Executable blocking:** executable and script-bearing extensions
+   (`.exe`, `.bat`, `.cmd`, `.com`, `.scr`, `.pif`, `.dll`, `.msi`, `.js`,
+   `.vbs`, `.ps1`, `.sh`, `.apk`, `.jar`, ...) are **blocked outright** with a
+   `422` — dangerous file types are rejected before any upload and before
+   marketplace listing.
+3. **Magic-number / content sniffing:** the declared extension is cross-checked
+   against the file's actual magic number, so a renamed executable
+   (e.g. `notes.pdf` that is really an `.exe`) is rejected.
+4. **Oversized files** are rejected at the size limit.
+5. **Malware scanning (fail-closed):** clean files are enrolled in a
+   **quarantine record** (`pending`) and a `scan_content` side-effect is
+   enqueued. The material is **not** listed in the marketplace until the
+   scanner flips its `quarantineState` to `clean`. If the scanner fails or is
+   unavailable, the upload **fails closed** (it stays quarantined and is not
+   promoted to a marketplace listing) rather than publishing un-scanned
+   content. Unsafe material is never listed.
 
 ## Step 4: Fill In Material Details
 
@@ -149,6 +175,9 @@ Both actions require a signed on-chain transaction via `MaterialRegistry.set_mat
 | Insufficient balance | Not enough XLM for gas | Fund your account via Friendbot (testnet) or receive XLM. |
 | Material already exists | Duplicate registration attempt | Use the edit flow to update existing material instead. |
 | Metadata validation error | Missing required fields | Complete all required fields in the upload form. |
+| File type rejected (422) | Executable/suspicious extension or MIME mismatch | Upload one of the supported, non-executable file types listed in Step 3. |
+| Magic-number mismatch (422) | Declared extension does not match the file's real content (e.g. a renamed executable) | Re-save the file in a supported format and re-upload. |
+| Malware scan pending / failed | Upload quarantined or scanner unavailable | Material is held out of the marketplace (fail-closed) until the scanner reports `clean`; contact support if a legitimate file is stuck. |
 
 ## Related Documentation
 

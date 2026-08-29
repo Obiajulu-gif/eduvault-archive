@@ -20,11 +20,16 @@ suggested alert thresholds.
 
 ## Suggested alert thresholds
 
-- **Lag**: alert if `lag` exceeds a few times the typical batch-to-batch
-  ledger advance for your polling interval — a sustained high lag means
-  batches aren't keeping up (increase `limit`/polling frequency) or the
-  indexer has stalled entirely (check for a stuck `retryable` entry via
-  `deadLetterRetryableCount`).
+Numeric budgets below are the enforceable defaults from the marketplace
+performance budget (#670, see
+`docs/tasks/marketplace-performance-audit.md` §10).
+
+- **Lag**: alert if `lag` exceeds **10 ledgers** for more than **one polling
+  interval** (budget: typical advance is ≤ 5 ledgers per interval, so 10 is
+  the "2× the typical batch-to-batch ledger advance" threshold). A sustained
+  high lag means batches aren't keeping up (increase `limit`/polling
+  frequency) or the indexer has stalled entirely (check for a stuck
+  `retryable` entry via `deadLetterRetryableCount`).
 - **Dead-letter depth**: alert if `deadLetterFailedCount` is nonzero for more
   than one polling interval — poison events don't self-resolve and need a
   human to look at `raw`/`lastError` on the dead-letter document.

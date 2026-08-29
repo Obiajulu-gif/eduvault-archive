@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import zlib from "node:zlib";
-import { validateFileMagicNumber } from "../../src/lib/ipfs/uploadValidator.js";
+import {
+  validateFileMagicNumber,
+  validateUploadedFile,
+  detectExecutableExtension,
+} from "../../src/lib/ipfs/uploadValidator.js";
 
 // Helper to create a custom Mock File object
 function createMockFile(bytes, type, name = "test.bin") {
@@ -122,4 +126,57 @@ test("validateFileMagicNumber rejects ZIP file with missing [Content_Types].xml"
   const result = await validateFileMagicNumber(file);
   assert.equal(result.valid, false);
   assert.match(result.reason, /\[Content_Types\].xml not found/);
+});
+
+// --- Issue #671: executable / script extension blocking ---
+
+test("detectExecutableExtension blocks .exe", () => {
+  const file = createMockFile([0x4d, 0x5a], "application/pdf", "malware.exe"); // PE header but declared as PDF
+  const result = detectExecutableExtension(file);
+  assert.equal(result.blocked, true);
+  assert.match(result.reason, /\.exe/);
+});
+
+test("detectExecutableExtension blocks .sh, .bat, .ps1, .js, .py", () => {
+  for (const name of ["evil.sh", "run.bat", "r.ps1", "x.js", "s.py"]) {
+    const file = createMockFile([0x25, 0x50, 0x44, 0x46], "text/plain", name);
+    assert.equal(detectExecutableExtension(file).blocked, true, `${name} should be blocked`);
+  }
+});
+
+test("detectExecutableExtension does not block benign extensions", () => {
+  for (const name of ["lecture.pdf", "notes.txt", "quiz.zip", "sheet.xlsx"]) {
+    const file = createMockFile([0x25, 0x50, 0x44, 0x46], "application/pdf", name);
+    assert.equal(detectExecutableExtension(file).blocked, false, `${name} should be allowed`);
+  }
+});
+
+test("validateUploadedFile rejects executable extension even with allowlisted MIME", async () => {
+  const exeBytes = [0x4d, 0x5a]; // MZ header
+  const file = createMockFile(exeBytes, "application/pdf", "renamed-malware.exe");
+  const result = await validateUploadedFile(file, ["application/pdf"]);
+  assert.equal(result.valid, false);
+  assert.match(result.reason, /not allowed/);
+});
+
+test("validateUploadedFile rejects mismatched magic number for non-executable", async () => {
+  // Declared PDF but header bytes are ZIP; not an executable extension.
+  const badBytes = [0x50, 0x4b, 0x03, 0x04];
+  const file = createMockFile(badBytes, "application/pdf", "notes.pdf");
+  const result = await validateUploadedFile(file, ["application/pdf"]);
+  assert.equal(result.valid, false);
+});
+
+test("validateUploadedFile passes a clean, correctly-mimetyped PDF", async () => {
+  const pdfBytes = [0x25, 0x50, 0x44, 0x46, 0x31, 0x2e, 0x34];
+  const file = createMockFile(pdfBytes, "application/pdf", "notes.pdf");
+  const result = await validateUploadedFile(file, ["application/pdf"]);
+  assert.equal(result.valid, true);
+});
+
+test("validateUploadedFile rejects non-allowlisted MIME before extension check", async () => {
+  const file = createMockFile([0x25, 0x50, 0x44, 0x46], "application/x-shockwave-flash", "flash.swf");
+  const result = await validateUploadedFile(file, ["application/pdf"]);
+  assert.equal(result.valid, false);
+  assert.match(result.reason, /Unsupported file type/);
 });

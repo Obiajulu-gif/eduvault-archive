@@ -104,9 +104,24 @@ export function buildMarketplaceDiscoveryQuery(searchParams, { now = new Date() 
     // suspension. Denormalised onto the material so discovery stays a single
     // indexed query instead of a per-result lookup against users.
     creatorSuspended: { $ne: true },
+    // Quarantine gate (issue #671): only materials that have passed malware
+    // scanning may be listed. Any material with a non-clean quarantine state
+    // (pending / rejected / manual_review / timeout / scanner_unavailable) is
+    // excluded from the marketplace. Legacy materials created before
+    // quarantine tracking existed carry no `quarantineState` field and are
+    // kept visible; newly uploaded materials get a state from the scanning
+    // pipeline and must be `clean` before they surface.
     $or: [
-      { relevanceStatus: { $exists: false } },
-      { relevanceStatus: { $ne: "low" } },
+      { quarantineState: "clean" },
+      { quarantineState: { $exists: false } },
+    ],
+    $and: [
+      {
+        $or: [
+          { relevanceStatus: { $exists: false } },
+          { relevanceStatus: { $ne: "low" } },
+        ],
+      },
     ],
   };
   const andClauses = [];

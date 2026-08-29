@@ -7,6 +7,10 @@ import { pinata } from '@/lib/pinata'
 import { validatePinataResponse, validateGatewayUrl, retryWithBackoff } from '@/lib/api/storage'
 import { sanitizeRichText, isSafeUrl } from '@/lib/api/contentSanitizer'
 import { guardZipArchiveUpload } from '@/lib/backend/archiveUploadGuard'
+import { validateUploadedFile, detectExecutableExtension } from '@/lib/ipfs/uploadValidator'
+import { createQuarantineRecord } from '@/lib/publishing/quarantine'
+import { enqueueSideEffect } from '@/lib/backend/outbox'
+import { getDb } from '@/lib/mongodb'
 
 export const dynamic = 'force-dynamic'
 
@@ -81,6 +85,33 @@ export async function POST(request) {
             { error: `Unsupported file type: ${file.type || 'unknown'}. Allowed types include PDF, Word, Excel, PPT, TXT, and ZIP.` },
             { status: 415 }
           )
+        }
+
+        // 2.1️⃣ Reject files whose *name* carries an executable/script extension
+        // (issue #671). The MIME check above is spoofable (declared type +
+        // magic number can both be forged, e.g. polyglot files), so blocking the
+        // extension is a cheap defense-in-depth gate before any pin occurs.
+        const executableCheck = detectExecutableExtension(file)
+        if (executableCheck.blocked) {
+          auditLog({ event: 'upload_failed', route: 'upload', method: 'POST', status: 415, reason: 'executable_extension' })
+          return NextResponse.json({ error: executableCheck.reason }, { status: 415 })
+        }
+
+        // 2.2️⃣ Validate magic number (deep content sniffing) so the declared
+        // MIME type matches the actual file bytes. Bypasses extension-only
+        // spoofing: a renamed .exe will fail its magic-mismatch check here.
+        try {
+          const fileCheck = await validateUploadedFile(file, ALLOWED_FILE_TYPES)
+          if (!fileCheck.valid) {
+            auditLog({ event: 'upload_failed', route: 'upload', method: 'POST', status: 422, reason: 'file_magic_mismatch' })
+            return NextResponse.json(
+              { error: fileCheck.reason || 'File contents do not match its declared type.' },
+              { status: 422 }
+            )
+          }
+        } catch (magicErr) {
+          auditLog({ event: 'upload_failed', route: 'upload', method: 'POST', status: 500, reason: `magic_validation_failure: ${magicErr.message}` })
+          return NextResponse.json({ error: 'Failed to validate file contents.' }, { status: 500 })
         }
 
         // 3️⃣ Validate Thumbnail (Size & Type) - If provided
@@ -162,6 +193,50 @@ export async function POST(request) {
           validateGatewayUrl(fileUrl, 'document')
           results.fileUrl = fileUrl
           results.storageKey = uploadedFile.cid
+
+          // 4.1️⃣ Quarantine gate (issue #671): every newly pinned document is
+          // enrolled in a quarantine record as `pending` and a malware-scan
+          // side-effect is enqueued. The material will not surface on the
+          // marketplace until the scanner flips it to `clean`. If scanning is
+          // unavailable the record stays pending (fail-closed) and the material
+          // remains hidden rather than being published unsafely.
+          try {
+            const db = await getDb()
+            const uploaderAddress = request.headers.get('x-wallet-address') || 'anonymous'
+            const quarantine = await createQuarantineRecord({
+              db,
+              contentHash: uploadedFile.cid,
+              fileName: file.name,
+              mimeType: file.type,
+              sizeBytes: file.size,
+              uploaderAddress,
+              materialId: null,
+            })
+            await enqueueSideEffect({
+              sourceAggregate: 'quarantine',
+              sourceId: quarantine.contentHash,
+              intent: {
+                type: 'indexer',
+                channel: 'scan_content',
+                payload: {
+                  contentHash: quarantine.contentHash,
+                  fileName: quarantine.fileName,
+                  mimeType: quarantine.mimeType,
+                  sizeBytes: quarantine.sizeBytes,
+                  action: 'scan',
+                },
+              },
+            })
+            results.quarantineState = quarantine.state
+          } catch (quarantineErr) {
+            auditLog({ event: 'upload_failed', route: 'upload', method: 'POST', status: 500, reason: `quarantine_enrollment_failure: ${quarantineErr.message}` })
+            // Fail closed: refuse to publish the CID that we could not
+            // quarantine-track, so it can never bypass the listing gate.
+            return NextResponse.json(
+              { error: 'Failed to enroll upload for safety review. Please retry.' },
+              { status: 500 }
+            )
+          }
         } catch (err) {
           auditLog({ event: 'upload_failed', route: 'upload', method: 'POST', status: 500, reason: `document_upload_failure: ${err.message}` })
           return NextResponse.json({ error: `Failed to upload document to storage: ${err.message}` }, { status: 500 })
@@ -293,6 +368,7 @@ export async function POST(request) {
           fileUrl: results.fileUrl,
           image: results.imgUrl || '',
           metadata: results.metadataUrl,
+          quarantineState: results.quarantineState || null,
         })
       } catch (err) {
         auditLog({ event: 'upload_failed', route: 'upload', method: 'POST', status: 500, reason: err.message })

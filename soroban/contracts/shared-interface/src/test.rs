@@ -128,3 +128,178 @@ fn pending_admin_transfer_round_trips() {
     };
     assert_eq!(roundtrip(&env, &value), value);
 }
+
+// ============== #673: Event Schema Snapshots ==============
+//
+// These lock the canonical event schemas defined in `crate::events`. A
+// breaking change to any topic `Symbol`, its order, or a payload field set
+// (rename / reorder / remove / retype) must update `lib.rs`'s `events`
+// module AND these fixtures in the same PR, otherwise CI fails here — before
+// the drift can desync an indexer or entitlement logic at runtime.
+
+use crate::events::{EventSchema, ALL, ENTITLEMENT_STATUS_FIELDS};
+
+fn schema_has_duplicate(items: &[&str]) -> bool {
+    for (i, &item) in items.iter().enumerate() {
+        for &other in &items[i + 1..] {
+            if item == other {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+fn assert_valid_schema(event: &EventSchema) {
+    assert!(!event.name.is_empty(), "event name must not be empty");
+    assert!(
+        event.topics.len() >= 2,
+        "event '{}' must have at least the leading topic symbols",
+        event.name
+    );
+    assert!(
+        event.fields.len() >= 1,
+        "event '{}' must have at least one payload field",
+        event.name
+    );
+    // No duplicate topic symbols or payload columns — a duplicate is almost
+    // always an accidental breaking change.
+    assert!(
+        !schema_has_duplicate(event.topics),
+        "event '{}' has duplicate topic symbols",
+        event.name
+    );
+    assert!(
+        !schema_has_duplicate(event.fields),
+        "event '{}' has duplicate payload fields",
+        event.name
+    );
+}
+
+#[test]
+fn event_schema_snapshots_are_valid_and_complete() {
+    // At minimum the publish, sale-update, purchase, refund and entitlement
+    // lifecycle events must be snapshotted.
+    assert!(ALL.len() >= 5, "expected 5+ event schemas, got {}", ALL.len());
+
+    for expected in [
+        "material.registered",
+        "material.sale_terms_updated",
+        "purchase.completed",
+        "purchase.bulk_completed",
+        "purchase.refunded",
+    ] {
+        assert!(
+            ALL.iter().any(|e| e.name == expected),
+            "event schema '{}' missing from events::ALL",
+            expected
+        );
+    }
+
+    for event in ALL {
+        assert_valid_schema(event);
+    }
+}
+
+#[test]
+fn event_schema_names_are_unique() {
+    for (i, event) in ALL.iter().enumerate() {
+        for other in &ALL[i + 1..] {
+            assert_ne!(
+                event.name, other.name,
+                "duplicate event schema name '{}'",
+                event.name
+            );
+        }
+    }
+}
+
+#[test]
+fn publish_event_schema_snapshot() {
+    assert_eq!(events::MATERIAL_REGISTERED.name, "material.registered");
+    assert_eq!(
+        events::MATERIAL_REGISTERED.topics,
+        &["material", "registered", "material_id", "creator"]
+    );
+    assert_eq!(
+        events::MATERIAL_REGISTERED.fields,
+        &[
+            "metadata_uri",
+            "metadata_hash",
+            "rights_hash",
+            "status",
+            "quotes",
+            "payout_shares",
+        ]
+    );
+}
+
+#[test]
+fn sale_update_event_schema_snapshot() {
+    let ev = &events::MATERIAL_SALE_TERMS_UPDATED;
+    assert_eq!(ev.name, "material.sale_terms_updated");
+    assert_eq!(
+        ev.topics,
+        &["material", "sale_terms_updated", "material_id", "creator"]
+    );
+    assert_eq!(ev.fields, &["status", "quotes", "payout_shares"]);
+}
+
+#[test]
+fn purchase_event_schema_snapshot() {
+    let ev = &events::PURCHASE_COMPLETED;
+    assert_eq!(ev.name, "purchase.completed");
+    assert_eq!(
+        ev.topics,
+        &["purchase", "completed", "purchase_id", "material_id", "buyer"]
+    );
+    assert_eq!(
+        ev.fields,
+        &[
+            "seller",
+            "asset",
+            "amount",
+            "platform_fee",
+            "seller_net_amount",
+            "entitlement_active",
+            "metadata_hash",
+            "rights_hash",
+            "sale_terms_version",
+            "transaction_id",
+        ]
+    );
+    // The entitlement-granted column must stay on the purchase event.
+    assert!(ev.fields.contains(&"entitlement_active"));
+}
+
+#[test]
+fn bulk_purchase_event_schema_snapshot() {
+    let ev = &events::PURCHASE_BULK_COMPLETED;
+    assert_eq!(ev.name, "purchase.bulk_completed");
+    assert_eq!(
+        ev.topics,
+        &["purchase", "bulk_completed", "purchaser", "material_id"]
+    );
+    assert_eq!(ev.fields, &["recipient_count", "unit_price", "total_paid", "asset"]);
+}
+
+#[test]
+fn refund_event_schema_snapshot() {
+    let ev = &events::PURCHASE_REFUNDED;
+    assert_eq!(ev.name, "purchase.refunded");
+    assert_eq!(
+        ev.topics,
+        &["purchase", "refunded", "purchase_id", "material_id", "buyer"]
+    );
+    assert_eq!(ev.fields, &["asset", "refund_amount", "entitlement_revoked"]);
+    // The entitlement-revoked column must stay on the refund event.
+    assert!(ev.fields.contains(&"entitlement_revoked"));
+}
+
+#[test]
+fn entitlement_status_fields_are_locked() {
+    assert_eq!(
+        ENTITLEMENT_STATUS_FIELDS,
+        &["entitlement_active", "entitlement_revoked"]
+    );
+}
