@@ -33,3 +33,8 @@ Payment and entitlement behavior is covered in
 purchases, duplicate prevention, entitlement reads, purchase snapshots, refunds, and TTL renewal.
 
 For detailed documentation on the backend authorization policy, the five entitlement states, caching invariants, and troubleshooting workflows, see [`docs/entitlement-authorization.md`](entitlement-authorization.md).
+
+## Version-scoped learner progress & bookmarks (#708)
+
+Learner bookmarks and progress markers are scoped by `(walletAddress, materialId, version)`. When content updates or rollbacks occur, bookmarks attached to historical material versions remain accessible and uncorrupted.
+
