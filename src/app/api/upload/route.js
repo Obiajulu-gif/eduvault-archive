@@ -5,6 +5,7 @@ import { withApiHardening } from '@/lib/api/hardening'
 import { normalizeStringList, sanitizeObject, validateUploadPayload, validateUploadFileMetadata } from '@/lib/api/validation'
 import { pinata } from '@/lib/pinata'
 import { validatePinataResponse, validateGatewayUrl, retryWithBackoff } from '@/lib/api/storage'
+import { sanitizeRichText, isSafeUrl } from '@/lib/api/contentSanitizer'
 import { guardZipArchiveUpload } from '@/lib/backend/archiveUploadGuard'
 
 export const dynamic = 'force-dynamic'
@@ -215,6 +216,23 @@ export async function POST(request) {
           coverImageUrl: 2048,
           thumbnailUrl: 2048,
         })
+
+        // Defense-in-depth (issue #649): sanitizeObject above only strips
+        // control characters, it does not strip HTML — there's no rendering
+        // path today that injects these fields as raw HTML (they render as
+        // plain, React-escaped JSX text), but description is exactly the
+        // kind of free-form field that's likely to grow rich-text rendering
+        // later, and coverImageUrl/thumbnailUrl are attacker-controlled
+        // strings that could otherwise carry a javascript:/data: scheme.
+        if (sanitizedScalarFields.description) {
+          sanitizedScalarFields.description = sanitizeRichText(sanitizedScalarFields.description)
+        }
+        for (const urlField of ['coverImageUrl', 'thumbnailUrl']) {
+          if (sanitizedScalarFields[urlField] && !isSafeUrl(sanitizedScalarFields[urlField])) {
+            auditLog({ event: 'upload_failed', route: 'upload', method: 'POST', status: 400, reason: `unsafe_url_scheme:${urlField}` })
+            return NextResponse.json({ error: `Invalid ${urlField}: unsupported URL scheme.` }, { status: 400 })
+          }
+        }
 
         const metadataJSON = {
           name: sanitizedScalarFields.title || sanitizedScalarFields.name || '',

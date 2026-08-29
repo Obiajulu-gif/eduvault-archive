@@ -19,6 +19,10 @@ export default defineConfig({
       "src/**/*.{test,spec}.{js,jsx,ts,tsx}",
       "test/integration/**/*.{test,spec}.{js,jsx,ts,tsx}",
       "tests/components/**/*.{test,spec}.{js,jsx,ts,tsx}",
+      // middleware.js (issue #649's nonce-based CSP) has to live at the repo
+      // root for Next.js to recognize it as the app's middleware, so its
+      // test does too.
+      "middleware.test.js",
       // outbox.test.js uses vitest imports and mongodb-memory-server (real
       // Mongo query semantics matter here — see issue #635), unlike the rest
       // of tests/backend which runs under `node --test`. It was previously
