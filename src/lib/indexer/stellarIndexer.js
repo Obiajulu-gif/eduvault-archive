@@ -1,7 +1,7 @@
 import { COLLECTIONS } from "../backend/schemaContracts.js";
 import { parseContractEvent } from "./eventParser.js";
 import { invalidateEntitlement } from "../entitlement.js";
-import { detectFork, rewindAfterFork } from "./forkDetection.js";
+import { detectFork, rewindAfterFork, dedupeCheckpoints, MAX_CHECKPOINTS } from "./forkDetection.js";
 import { deriveEventIdFromEvent, computeQuarantineKey } from "./eventIdentity.js";
 
 function duplicateKey(error) {
@@ -290,6 +290,302 @@ export async function applyIndexedEvent(db, event, { now = new Date(), session =
     }
   }
 
+  if (event.type === "dispute.resolved") {
+    const purchase = await db.collection(COLLECTIONS.purchases).findOne(
+      { materialId: event.materialId, purchaseId: event.purchaseId },
+      options
+    );
+    if (isStaleReplay(purchase, event)) {
+      return { eventId: id, skipped: true };
+    }
+    const buyerAddress = purchase?.buyerAddress || null;
+    const refundedBuyer = event.resolution === "RefundBuyer";
+
+    await db.collection(COLLECTIONS.purchases).updateOne(
+      { materialId: event.materialId, purchaseId: event.purchaseId },
+      {
+        $set: {
+          settlementState: refundedBuyer ? "Refunded" : "Released",
+          disputeResolution: event.resolution ?? null,
+          disputeResolvedAt: now,
+          disputeResolvedLedger: event.resolvedLedger ?? null,
+          indexedLedger: event.ledger || null,
+          updatedAt: now,
+        },
+      },
+      options
+    );
+
+    if (refundedBuyer) {
+      // Mirror purchase.refunded: a RefundBuyer resolution revokes the
+      // cached entitlement for this (materialId, buyer) pair.
+      if (buyerAddress) {
+        await invalidateEntitlement(event.materialId, buyerAddress, "chain-dispute-resolved", {
+          db,
+          session,
+          purchaseId: event.purchaseId,
+          settlementState: "Refunded",
+        });
+      }
+    } else if (buyerAddress) {
+      // ReleaseToCreator keeps the buyer's access active — re-establish the
+      // entitlement that dispute.opened froze.
+      await db.collection(COLLECTIONS.entitlementCache).updateOne(
+        { materialId: event.materialId, buyerAddress },
+        {
+          $set: {
+            materialId: event.materialId,
+            buyerAddress,
+            state: "finalized",
+            active: true,
+            source: "stellar",
+            purchaseId: event.purchaseId ?? null,
+            settlementState: "Released",
+            chainTxHash: event.transactionHash || event.txHash || null,
+            indexedLedger: event.ledger || null,
+            checkedAt: now,
+            updatedAt: now,
+          },
+          $setOnInsert: { createdAt: now },
+        },
+        upsertOptions
+      );
+    }
+  }
+
+  if (event.type === "escrow.released") {
+    const purchase = await db.collection(COLLECTIONS.purchases).findOne(
+      { materialId: event.materialId, purchaseId: event.purchaseId },
+      options
+    );
+    if (isStaleReplay(purchase, event)) {
+      return { eventId: id, skipped: true };
+    }
+
+    await db.collection(COLLECTIONS.purchases).updateOne(
+      { materialId: event.materialId, purchaseId: event.purchaseId },
+      {
+        $set: {
+          settlementState: "Released",
+          escrowReleasedAt: now,
+          escrowReleaseLedger: event.ledger || null,
+          indexedLedger: event.ledger || null,
+          updatedAt: now,
+        },
+      },
+      options
+    );
+  }
+
+  if (event.type === "payout.distributed") {
+    const recipientAddress = String(event.recipient || "").toLowerCase();
+    await db.collection(COLLECTIONS.payouts).updateOne(
+      { purchaseId: event.purchaseId, recipient: recipientAddress },
+      {
+        $set: {
+          purchaseId: event.purchaseId ?? null,
+          materialId: event.materialId || null,
+          recipient: recipientAddress,
+          role: event.role ?? null,
+          asset: event.asset ?? null,
+          amount: event.amount ?? null,
+          chainTxHash: event.transactionHash || event.txHash || null,
+          indexedLedger: event.ledger || null,
+          updatedAt: now,
+        },
+        $setOnInsert: { createdAt: now },
+      },
+      upsertOptions
+    );
+  }
+
+  if (event.type === "purchase.bulk_completed") {
+    const bulkKey = `bulk:${event.transactionHash || event.txHash || "tx"}:${event.materialId}`;
+    await db.collection(COLLECTIONS.bulkPurchases).updateOne(
+      { _id: bulkKey },
+      {
+        $set: {
+          _id: bulkKey,
+          purchaser: event.purchaser ?? null,
+          materialId: event.materialId || null,
+          recipientCount: event.recipientCount ?? null,
+          unitPrice: event.unitPrice ?? null,
+          totalPaid: event.totalPaid ?? null,
+          asset: event.asset ?? null,
+          chainTxHash: event.transactionHash || event.txHash || null,
+          indexedLedger: event.ledger || null,
+          updatedAt: now,
+        },
+        $setOnInsert: { createdAt: now },
+      },
+      upsertOptions
+    );
+  }
+
+  if (event.type === "creator.tier_updated") {
+    const creatorKey = String(event.creator || "").toLowerCase();
+    await db.collection(COLLECTIONS.creatorTiers).updateOne(
+      { _id: creatorKey },
+      {
+        $set: {
+          _id: creatorKey,
+          creator: event.creator ?? null,
+          tier: event.tier ?? null,
+          indexedLedger: event.ledger || null,
+          updatedAt: now,
+        },
+        $setOnInsert: { createdAt: now },
+      },
+      upsertOptions
+    );
+  }
+
+  if (event.type === "admin.transfer_initiated") {
+    const fromKey = String(event.from || "").toLowerCase();
+    await db.collection(COLLECTIONS.adminTransfers).updateOne(
+      { _id: fromKey },
+      {
+        $set: {
+          _id: fromKey,
+          from: event.from ?? null,
+          pendingAdmin: event.pendingAdmin ?? null,
+          status: "initiated",
+          indexedLedger: event.ledger || null,
+          updatedAt: now,
+        },
+        $setOnInsert: { createdAt: now },
+      },
+      upsertOptions
+    );
+  }
+
+  if (event.type === "admin.transfer_accepted") {
+    const newAdminKey = String(event.newAdmin || "").toLowerCase();
+    await db.collection(COLLECTIONS.adminTransfers).updateOne(
+      { _id: newAdminKey },
+      {
+        $set: {
+          _id: newAdminKey,
+          newAdmin: event.newAdmin ?? null,
+          status: "accepted",
+          acceptedAt: now,
+          indexedLedger: event.ledger || null,
+          updatedAt: now,
+        },
+        $setOnInsert: { createdAt: now },
+      },
+      upsertOptions
+    );
+  }
+
+  // Scholarship credit subsystem — mirrors on-chain grant/redemption state
+  // off-chain so moderators and analytics have visibility (see #598).
+  if (event.type === "scholarship.credits_issued") {
+    const learnerAddress = String(event.learner || "").toLowerCase();
+    await db.collection(COLLECTIONS.scholarshipGrants).updateOne(
+      { grantId: event.grantId, learner: learnerAddress },
+      {
+        $set: {
+          grantId: event.grantId ?? null,
+          learner: learnerAddress,
+          issuer: event.issuer ?? null,
+          amount: event.amount ?? null,
+          remainingAmount: event.amount ?? null,
+          expiresAt: event.expiresAt ?? null,
+          active: true,
+          indexedLedger: event.ledger || null,
+          chainTxHash: event.transactionHash || event.txHash || null,
+          updatedAt: now,
+        },
+        $setOnInsert: { createdAt: now },
+      },
+      upsertOptions
+    );
+  }
+
+  if (event.type === "scholarship.credits_redeemed") {
+    const learnerAddress = String(event.learner || "").toLowerCase();
+    await db.collection(COLLECTIONS.scholarshipRedemptions).updateOne(
+      { redemptionId: event.redemptionId },
+      {
+        $set: {
+          redemptionId: event.redemptionId ?? null,
+          learner: learnerAddress,
+          materialId: event.materialId || null,
+          creditsUsed: event.creditsUsed ?? null,
+          remainingCredits: event.remainingCredits ?? null,
+          indexedLedger: event.ledger || null,
+          chainTxHash: event.transactionHash || event.txHash || null,
+          updatedAt: now,
+        },
+        $setOnInsert: { createdAt: now },
+      },
+      upsertOptions
+    );
+
+    // Keep the learner's active grant's remaining balance in sync.
+    await db.collection(COLLECTIONS.scholarshipGrants).updateOne(
+      { learner: learnerAddress, active: true },
+      {
+        $set: {
+          remainingAmount: event.remainingCredits ?? null,
+          updatedAt: now,
+        },
+      },
+      options
+    );
+  }
+
+  if (event.type === "scholarship.grant_revoked") {
+    const learnerAddress = String(event.learner || "").toLowerCase();
+    await db.collection(COLLECTIONS.scholarshipGrants).updateOne(
+      { grantId: event.grantId, learner: learnerAddress },
+      {
+        $set: {
+          active: false,
+          creditsRevoked: event.creditsRevoked ?? null,
+          revokedAt: now,
+          indexedLedger: event.ledger || null,
+          updatedAt: now,
+        },
+      },
+      options
+    );
+  }
+
+  if (event.type === "scholarship.cost_updated") {
+    await db.collection(COLLECTIONS.materials).updateOne(
+      { materialId: event.materialId },
+      {
+        $set: {
+          materialId: event.materialId,
+          scholarshipCreditCost: event.creditCost ?? null,
+          indexedLedger: event.ledger || null,
+          updatedAt: now,
+        },
+        $setOnInsert: { createdAt: now },
+      },
+      upsertOptions
+    );
+  }
+
+  if (event.type === "scholarship.issuer_updated") {
+    await db.collection(COLLECTIONS.scholarshipConfig).updateOne(
+      { _id: "issuer" },
+      {
+        $set: {
+          _id: "issuer",
+          issuer: event.issuer ?? null,
+          enabled: event.enabled !== false,
+          indexedLedger: event.ledger || null,
+          updatedAt: now,
+        },
+        $setOnInsert: { createdAt: now },
+      },
+      upsertOptions
+    );
+  }
+
   return { eventId: id, skipped: !!alreadyIndexed };
 }
 
@@ -356,12 +652,17 @@ export async function runIndexerBatch({
 
   if (state?.lastLedger && state?.lastLedgerHash && getLedgerHash) {
     const fork = await detectFork(db, {
+      // Prefer the bounded per-ledger checkpoint history when present; fall
+      // back to a single-entry history derived from the legacy fields.
+      checkpoints: Array.isArray(state?.checkpoints) && state.checkpoints.length > 0
+        ? state.checkpoints
+        : [{ ledger: state.lastLedger, hash: state.lastLedgerHash }],
       ledger: state.lastLedger,
       expectedHash: state.lastLedgerHash,
       getLedgerHash,
     });
     if (fork.forked) {
-      await rewindAfterFork(db, { source, divergenceLedger: state.lastLedger });
+      await rewindAfterFork(db, { source, divergenceLedger: fork.divergenceLedger });
       state = await db.collection(COLLECTIONS.syncState).findOne({ _id: stateId });
     }
   }
@@ -452,6 +753,24 @@ export async function runIndexerBatch({
     nextLedgerHash = canonical?.hash || nextLedgerHash;
   }
 
+  // Maintain the bounded per-ledger checkpoint history used for deep reorg
+  // detection (#587): append the new checkpoint (when the batch advanced to
+  // a ledger we can hash), dedupe by ledger keeping the newest hash, and trim
+  // to MAX_CHECKPOINTS entries.
+  const existingCheckpoints =
+    Array.isArray(state?.checkpoints) && state.checkpoints.length > 0
+      ? state.checkpoints
+      : state?.lastLedger && state?.lastLedgerHash
+        ? [{ ledger: state.lastLedger, hash: state.lastLedgerHash }]
+        : [];
+
+  const nextCheckpoints = [...existingCheckpoints];
+  if (nextLedger && nextLedgerHash && nextLedger !== state?.lastLedger) {
+    nextCheckpoints.push({ ledger: nextLedger, hash: nextLedgerHash });
+  }
+
+  const boundedCheckpoints = dedupeCheckpoints(nextCheckpoints).slice(-MAX_CHECKPOINTS);
+
   await db.collection(COLLECTIONS.syncState).updateOne(
     { _id: stateId },
     {
@@ -461,6 +780,7 @@ export async function runIndexerBatch({
         cursor: nextCursor,
         lastLedger: nextLedger,
         lastLedgerHash: nextLedgerHash,
+        checkpoints: boundedCheckpoints,
         updatedAt: new Date(),
       },
       $setOnInsert: { createdAt: new Date() },

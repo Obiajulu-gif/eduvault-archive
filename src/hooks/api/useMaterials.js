@@ -28,11 +28,12 @@ export function useMaterialDetail(id) {
   });
 }
 
-export function useMaterialFeedback(id) {
+export function useMaterialFeedback(id, options = {}) {
   return useQuery({
     queryKey: queryKeys.materials.feedback(id),
     queryFn: () => materialService.getMaterialFeedback(id),
     enabled: !!id,
+    ...options,
   });
 }
 

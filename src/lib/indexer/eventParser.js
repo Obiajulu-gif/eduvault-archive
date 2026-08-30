@@ -70,6 +70,118 @@ const EVENT_PARSERS = {
     materialId: bytesToHex(topics[2]),
     creatorAddress: topics[3] ?? null,
   }),
+  // PayoutDistributedEvent (purchase-manager): topics = ["payout",
+  // "distributed", purchase_id, material_id, recipient]; data = [role,
+  // asset, amount, transaction_id]
+  "payout.distributed": (topics, data) => ({
+    type: "payout.distributed",
+    purchaseId: topics[2] != null ? String(topics[2]) : null,
+    materialId: bytesToHex(topics[3]),
+    recipient: topics[4] ?? null,
+    role: data[0] ?? null,
+    asset: data[1] ?? null,
+    amount: data[2] != null ? String(data[2]) : null,
+  }),
+  // DisputeResolvedEvent (purchase-manager): topics = ["dispute",
+  // "resolved", purchase_id, material_id]; data = [resolution,
+  // resolved_ledger]. resolution is a DisputeResolution enum (Unresolved /
+  // RefundBuyer / ReleaseToCreator), decoded as its variant name.
+  "dispute.resolved": (topics, data) => ({
+    type: "dispute.resolved",
+    purchaseId: topics[2] != null ? String(topics[2]) : null,
+    materialId: bytesToHex(topics[3]),
+    resolution: data[0] ?? null,
+    resolvedLedger: data[1] ?? null,
+  }),
+  // EscrowReleasedEvent (purchase-manager): topics = ["escrow",
+  // "released", purchase_id]; data = [material_id, asset, amount] — note
+  // material_id is a data field, not a topic, for this event.
+  "escrow.released": (topics, data) => ({
+    type: "escrow.released",
+    purchaseId: topics[2] != null ? String(topics[2]) : null,
+    materialId: bytesToHex(data[0]),
+    asset: data[1] ?? null,
+    amount: data[2] != null ? String(data[2]) : null,
+  }),
+  // AdminTransferInitiatedEvent (purchase-manager): topics = ["admin",
+  // "transfer_initiated", from]; data = [pending_admin]
+  "admin.transfer_initiated": (topics, data) => ({
+    type: "admin.transfer_initiated",
+    from: topics[2] ?? null,
+    pendingAdmin: data[0] ?? null,
+  }),
+  // AdminTransferAcceptedEvent (purchase-manager): topics = ["admin",
+  // "transfer_accepted", new_admin]; data = []
+  "admin.transfer_accepted": (topics) => ({
+    type: "admin.transfer_accepted",
+    newAdmin: topics[2] ?? null,
+  }),
+  // CreatorTierUpdatedEvent (purchase-manager): topics = ["creator",
+  // "tier_updated", creator]; data = [tier]. tier is a CreatorTier enum
+  // (Default / Tier1 / Tier2), decoded as its variant name.
+  "creator.tier_updated": (topics, data) => ({
+    type: "creator.tier_updated",
+    creator: topics[2] ?? null,
+    tier: data[0] ?? null,
+  }),
+  // BulkPurchaseCompletedEvent (purchase-manager): topics = ["purchase",
+  // "bulk_completed", purchaser, material_id]; data = [recipient_count,
+  // unit_price, total_paid, asset]
+  "purchase.bulk_completed": (topics, data) => ({
+    type: "purchase.bulk_completed",
+    purchaser: topics[2] ?? null,
+    materialId: bytesToHex(topics[3]),
+    recipientCount: data[0] ?? null,
+    unitPrice: data[1] != null ? String(data[1]) : null,
+    totalPaid: data[2] != null ? String(data[2]) : null,
+    asset: data[3] ?? null,
+  }),
+  // ScholarshipCreditsIssuedEvent (purchase-manager): topics =
+  // ["scholarship", "credits_issued", grant_id, learner]; data = [issuer,
+  // amount, expires_at]
+  "scholarship.credits_issued": (topics, data) => ({
+    type: "scholarship.credits_issued",
+    grantId: topics[2] != null ? String(topics[2]) : null,
+    learner: topics[3] ?? null,
+    issuer: data[0] ?? null,
+    amount: data[1] != null ? String(data[1]) : null,
+    expiresAt: data[2] ?? null,
+  }),
+  // ScholarshipCreditsRedeemedEvent (purchase-manager): topics =
+  // ["scholarship", "credits_redeemed", redemption_id, learner,
+  // material_id]; data = [credits_used, remaining_credits]
+  "scholarship.credits_redeemed": (topics, data) => ({
+    type: "scholarship.credits_redeemed",
+    redemptionId: topics[2] != null ? String(topics[2]) : null,
+    learner: topics[3] ?? null,
+    materialId: bytesToHex(topics[4]),
+    creditsUsed: data[0] != null ? String(data[0]) : null,
+    remainingCredits: data[1] != null ? String(data[1]) : null,
+  }),
+  // ScholarshipGrantRevokedEvent (purchase-manager): topics =
+  // ["scholarship", "grant_revoked", grant_id, learner]; data = [issuer,
+  // credits_revoked]
+  "scholarship.grant_revoked": (topics, data) => ({
+    type: "scholarship.grant_revoked",
+    grantId: topics[2] != null ? String(topics[2]) : null,
+    learner: topics[3] ?? null,
+    issuer: data[0] ?? null,
+    creditsRevoked: data[1] != null ? String(data[1]) : null,
+  }),
+  // ScholarshipCostUpdatedEvent (purchase-manager): topics =
+  // ["scholarship", "cost_updated", material_id]; data = [credit_cost]
+  "scholarship.cost_updated": (topics, data) => ({
+    type: "scholarship.cost_updated",
+    materialId: bytesToHex(topics[2]),
+    creditCost: data[0] != null ? String(data[0]) : null,
+  }),
+  // ScholarshipIssuerUpdatedEvent (purchase-manager): topics =
+  // ["scholarship", "issuer_updated", issuer]; data = [enabled]
+  "scholarship.issuer_updated": (topics, data) => ({
+    type: "scholarship.issuer_updated",
+    issuer: topics[2] ?? null,
+    enabled: data[0] !== false,
+  }),
 };
 
 /**

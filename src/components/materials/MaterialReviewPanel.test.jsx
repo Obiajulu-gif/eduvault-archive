@@ -1,6 +1,16 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { Suspense } from "react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { describe, expect, it, vi } from "vitest";
-import { MaterialReviewPanelView } from "./MaterialReviewPanel";
+import MaterialReviewPanel, { MaterialReviewPanelSkeleton, MaterialReviewPanelView } from "./MaterialReviewPanel";
+import { materialService } from "@/services/materialService";
+
+vi.mock("@/services/materialService", () => ({
+  materialService: {
+    getMaterialFeedback: vi.fn(),
+    submitMaterialFeedback: vi.fn(),
+  },
+}));
 
 function renderPanel(props = {}) {
   return render(
@@ -82,6 +92,53 @@ describe("MaterialReviewPanel", () => {
 
     expect(screen.getByText("Creators cannot score their own resource.")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Publish feedback" })).toBeDisabled();
+  });
+
+  it("renders the skeleton fallback while review data is pending (Suspense)", async () => {
+    let resolveFeedback;
+    materialService.getMaterialFeedback.mockReturnValue(
+      new Promise((resolve) => {
+        resolveFeedback = resolve;
+      }),
+    );
+
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <Suspense fallback={<MaterialReviewPanelSkeleton />}>
+          <MaterialReviewPanel
+            materialId="mat-101"
+            currentAddress="GBUYER1234567890"
+            creatorAddress="GCREATOR1234567890"
+            initialReviews={[]}
+          />
+        </Suspense>
+      </QueryClientProvider>,
+    );
+
+    // While the feedback fetch is pending, the Suspense fallback must be
+    // shown and the panel content must not be painted yet.
+    expect(await screen.findByTestId("material-review-skeleton")).toBeInTheDocument();
+    expect(screen.queryByText("No feedback yet")).not.toBeInTheDocument();
+
+    // Resolve the delayed fetch: the panel replaces the fallback.
+    await act(async () => {
+      resolveFeedback({
+        items: [],
+        averageScore: 0,
+        feedbackCount: 0,
+        moderation: {
+          label: "Basic moderation placeholder",
+          message: "Feedback is published immediately and queued for future moderation review.",
+        },
+      });
+    });
+
+    expect(await screen.findByText("No feedback yet")).toBeInTheDocument();
+    expect(screen.queryByTestId("material-review-skeleton")).not.toBeInTheDocument();
   });
 
   it("shows existing feedback history and average score", () => {
