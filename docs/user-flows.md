@@ -40,3 +40,12 @@ Mobile users who leave the browser or wallet popup mid-checkout can now resume o
 - A completed `purchase` clears the pending state automatically.
 
 Flow: begin checkout -> wallet signing interrupted -> return to app -> either retry (pending blocks duplicates until cancelled) or cancel and re-quote.
+
+## Learner progress bookmarks tied to material versions (#708)
+
+Learners track their progress and bookmark states tied to the exact material version purchased:
+- Progress records are composite-indexed by `(walletAddress, materialId, version)`.
+- When a material creator releases an updated material version, existing bookmarks remain attached to the purchased version without data corruption.
+- Material rollbacks query historical version bookmarks directly.
+- Learners can export their progress history via privacy export APIs.
+

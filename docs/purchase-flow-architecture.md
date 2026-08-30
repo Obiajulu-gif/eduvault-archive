@@ -82,3 +82,7 @@ breaks the bundle and verification fails.
 `tests/backend/receipt-provenance.test.mjs` covers generation, determinism,
 re-verification, tamper detection (version bump + refund flip), canonical
 key-order independence, and required-field enforcement.
+
+## Dispute Evidence Bundles (#709)
+
+Disputes raised against purchases require structured evidence bundles (`DisputeEvidenceBundle`) containing buyer claims, creator metadata, purchase transaction proof, access logs, and entitlement state. The dispute lifecycle moves through `opened` -> `reviewing` -> `approved`/`denied` -> `executed`, ensuring refund authorizations reference valid approved dispute states.

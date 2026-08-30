@@ -177,3 +177,11 @@ See [`soroban/tests/`](../soroban/tests/) for integration tests covering:
 **"Already initialized"**: Asset already registered. Call `set_asset_allowed` to update it.
 
 **TTL expired**: Asset registration expired on-ledger. Call `extend_allowed_asset_ttl` to renew.
+
+## Canonical Minor-Unit Decimal Handling (#710)
+
+Educational material prices and refunds use canonical minor-unit representation across XLM (7 decimals), USDC (7 decimals), contract `i128` amounts, and UI display:
+- `AssetDecimalMetadata` stores `asset` and decimal precision.
+- Conversions between display amounts and minor units use exact integer scale factors ($10^{\text{decimals}}$) preventing floating point rounding errors.
+- Refund calculations enforce integer truncation (`calculate_max_refund_minor_units`), guaranteeing refunds can **never** round above original payment amounts.
+

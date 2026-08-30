@@ -152,3 +152,24 @@ entitlement and flips only that settlement to `Refunded`; every other
 recipient keeps an `active` entitlement and a `Pending` settlement. The
 conformance test checks that un-refunded recipients still authorize downloads
 and their settlements remain `Pending`.
+
+## Refund dispute evidence bundles and authorization (#709)
+
+Dispute resolution and refund execution require a structured evidence bundle (`DisputeEvidenceBundle`) combining:
+- **Buyer Claim**: reason, detailed description, submission timestamp.
+- **Creator Material Metadata**: material ID, title, version, creator wallet address.
+- **Purchase Transaction**: Stellar transaction hash, payment amount, asset code, purchase timestamp.
+- **Access Logs**: audit log of material download/access attempts.
+- **Prior Entitlement State**: active flag, entitlement grant timestamp.
+
+### Status State Machine
+
+Disputes progress through strict status transitions:
+`opened` → `reviewing` → (`approved` | `denied`) → `executed`
+
+1. **`opened`**: Dispute initialized by buyer with complete evidence bundle validation.
+2. **`reviewing`**: Under maintainer investigation.
+3. **`approved`**: Maintainer approves claim after verifying complete evidence.
+4. **`denied`**: Maintainer rejects claim; refund execution blocked.
+5. **`executed`**: Refund authorization executed on-chain, linked to approved dispute ID.
+

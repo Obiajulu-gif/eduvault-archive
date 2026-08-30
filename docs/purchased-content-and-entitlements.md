@@ -40,6 +40,10 @@ Payment and entitlement behavior is covered in
 `soroban/contracts/purchase-manager/src/test.rs`, including successful
 purchases, duplicate prevention, entitlement reads, purchase snapshots, refunds, and TTL renewal.
 
+## Version-scoped learner progress & bookmarks (#708)
+
+Learner bookmarks and progress markers are scoped by `(walletAddress, materialId, version)`. When content updates or rollbacks occur, bookmarks attached to historical material versions remain accessible and uncorrupted.
+
 ## Disaster Recovery & Restore Verification (#715)
 
 To guarantee that restored databases preserve entitlement enforcement boundaries and protected file accessibility:
