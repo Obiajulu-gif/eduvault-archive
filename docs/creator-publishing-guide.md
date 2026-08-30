@@ -153,7 +153,16 @@ After publishing, manage your materials from the dashboard:
 
 - **My Materials** (`/dashboard/my-materials`) — View, pause, or archive existing materials.
 - **Market** (`/dashboard/market`) — See marketplace performance and buyer activity.
-- **Analytics** (`/dashboard/analytics`) — Track views, purchases, and earnings over time.
+### Managing Revenue and Analytics
+
+The **Analytics** (`/dashboard/analytics`) and Revenue views separate your earnings into distinct balance states to provide a clear financial picture:
+- **Pending**: Purchases that are processing or waiting for settlement.
+- **Settled**: Payouts that have successfully cleared and are available.
+- **Refunded**: Deductions from your balance due to buyer refunds.
+- **Disputed**: Funds held in custody during an active dispute.
+- **Fees**: Platform fees deducted from the gross purchase amount.
+
+These totals reconcile precisely with underlying purchase, payout, and refund events. You can export these records for accounting purposes.
 
 ### Updating Material Details
 

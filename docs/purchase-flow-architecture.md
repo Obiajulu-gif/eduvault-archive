@@ -17,6 +17,17 @@ To solve Issue #10, EduVault implements a hybrid Web3 approach that bridges on-c
 2. **Missing Address (401)**: If a request lacks a wallet address payload, it is rejected.
 3. **Duplicate Purchases**: The system idempotently catches duplicate purchase submissions and returns the existing entitlement instead of crashing or double-charging.
 
+## Creator Revenue State Model
+
+The creator revenue dashboard separates earnings into distinct lifecycle states to match purchase and payout events:
+- **Pending**: Purchases recorded but settlement is still in progress (escrowed or awaiting finalization).
+- **Settled**: Funds distributed to the creator's wallet.
+- **Refunded**: Funds returned to the buyer.
+- **Disputed**: Funds held in custody pending dispute resolution.
+- **Fees**: The platform fee portion deducted from gross sales.
+
+These buckets aggregate purchase, refund, and payout events to ensure totals reconcile properly for creator exports.
+
 ## Future Production Enhancements
 Currently, the prototype relies on the client submitting the transaction hash to the backend. For a fully trustless production system, the `/api/purchase` endpoint should be upgraded to use the Stellar Horizon SDK to verify the transaction payload mathematically (verifying the `amount`, `destination`, and `asset`) before generating the entitlement.
 
