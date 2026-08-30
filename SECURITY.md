@@ -45,5 +45,12 @@ Access to protected material is explicitly audited with reason codes to allow cr
 - **Reason Codes:** The system distinguishes between `preview` (publicly accessible chunks or low-res versions), `buyer_download` (entitled purchaser), `admin_review` (platform administration and moderation), and `support` (explicitly granted support access).
 - **Redaction:** Sensitive tokens (e.g. Bearer tokens, capability tokens) and URLs in audit logs are redacted before being recorded to standard output.
 
+## Content Takedowns, Buyer Protection & Evidence Retention (#705)
+EduVault enforces strict isolation and access policies during content takedowns:
+- **Immediate Public Delisting:** Takedown actions immediately delist materials from the public catalog and block all new purchase transactions.
+- **Buyer Safety vs. Access Retention:** Severe malware/security violations result in instant entitlement revocation and automated escrow refund. Copyright and creator deprecation preserve historical buyer snapshot access while disputes are resolved.
+- **Private Evidence Retention:** Cryptographic hashes, IPFS storage CIDs, and violation records are preserved in private immutable audit storage for legal and compliance verification without public exposure. See [`docs/content-takedown-and-evidence-retention.md`](docs/content-takedown-and-evidence-retention.md) for the full operational policy.
+
 ## Disclosure Policy
-We commit to acknowledging all reports within 48 hours and will work to resolve valid issues as quickly as possible.
+We commit to acknowledging all reports within 48 hours and will work to resolve valid issues as quickly as possible.
+

@@ -52,5 +52,14 @@ To guarantee that restored databases preserve entitlement enforcement boundaries
 2. The verification engine probes entitlement decision rules against restored data to ensure entitled buyers retain access while unentitled callers are blocked and refunded/revoked purchases are denied.
 3. System encryption keys (`JWT_SECRET`) are validated to ensure token signing and delivery decryption succeed post-restore.
 
+## Content Takedown & Buyer Entitlements Policy (#705)
+
+When a material undergoes a takedown or policy delisting:
+- **Public Visibility:** Instantly hidden from discovery and new purchases.
+- **Critical Risk (Malware/Security):** Active entitlements are revoked immediately and buyers are routed to automated full escrow refunds.
+- **Creator Deprecation / Licensing Disputes:** Existing buyers retain lifetime/grace-period download rights to their immutable purchase snapshot (`get_purchase_snapshot`) or can opt into refund settlement.
+- **Policy Reference:** For complete details on lifecycle transitions and evidence retention, see [`docs/content-takedown-and-evidence-retention.md`](content-takedown-and-evidence-retention.md).
+
 For detailed documentation on the backend authorization policy, the five entitlement states, caching invariants, and troubleshooting workflows, see [`docs/entitlement-authorization.md`](entitlement-authorization.md) and [`docs/disaster-recovery.md`](disaster-recovery.md).
+
 
