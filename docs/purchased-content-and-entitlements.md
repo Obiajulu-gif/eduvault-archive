@@ -22,6 +22,13 @@ Off-chain projections store the same snapshot on each `purchases` document as
 `purchaseSnapshot`. The purchased-materials API and receipt emails prefer this
 snapshot over live `materials` fields when rendering what the buyer purchased.
 
+## Previews for Paid Content
+
+Unentitled users (e.g. before purchase) can only access bounded previews of paid materials:
+- Preview requests to the material API enforce preview metadata bounds (length limits, restricted asset scope).
+- Assets rendered for preview are watermarked or structurally restricted to prevent exposure of full content.
+- Attempts to leak full assets or exceed preview limits are prevented server-side, returning an unauthorized response unless a confirmed purchase is verified.
+
 Existing purchase records without a snapshot can be backfilled with:
 
 ```bash

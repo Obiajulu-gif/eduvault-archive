@@ -16,7 +16,8 @@ Systems involved: Frontend, Backend API, MongoDB (`materials`), IPFS/Pinata, Sor
 ## Buyer Flow
 
 1. Browse marketplace, open a material detail page.
-2. Start checkout; frontend requests a signed Stellar transaction via wallet.
+2. View bounded/watermarked preview of paid material.
+3. Start checkout; frontend requests a signed Stellar transaction via wallet.
 3. Backend or frontend submits transaction to Soroban `PurchaseManager`.
 4. Soroban emits `purchase.completed` event on success.
 5. Indexer consumes events and writes `purchases` and `entitlement_cache`.

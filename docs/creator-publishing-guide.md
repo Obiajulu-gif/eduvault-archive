@@ -110,6 +110,14 @@ Configure the pricing terms for your material:
 
 The platform fee is applied automatically by the `PurchaseManager` contract and is not part of the creator-defined payout split.
 
+## Step 5b: Configure Previews (Paid Content)
+
+For paid materials, creators must define preview bounds so buyers can sample content without accessing the full protected file:
+- **Preview Metadata**: Define which sections or pages are visible before purchase.
+- **Preview Length**: Set a maximum percentage (e.g., 10%) or absolute limit (e.g., first 5 pages, first 30 seconds of video).
+- **Watermarking**: Previews are automatically rendered with watermarks.
+- Server-side enforcement ensures that preview endpoints never serve protected full assets before a confirmed purchase.
+
 ## Step 6: Review and Confirm
 
 1. The wizard presents a summary of all material details: file, metadata, pricing, and payout configuration.
