@@ -167,12 +167,16 @@ You can update pricing and payout shares after publication:
 
 **Note:** Creator ownership, metadata hash, and rights hash are immutable after initial registration. Only sale terms and material status can be changed.
 
-### Pausing or Archiving
+### Pausing, Archiving or Rolling Back
 
 - **Pause** — Temporarily disables new purchases while preserving existing entitlements.
 - **Archive** — Permanently hides the material from the marketplace.
+- **Version Rollback** — Revert a material to a previous safe version after a bad upload (e.g., incorrect or corrupt content).
+  - Preserves immutable purchase references so historical receipts remain accurate.
+  - Exposes `current`, `rolled-back`, and `deprecated` version states.
+  - Buyers retain access to the version they purchased according to policy.
 
-Both actions require a signed on-chain transaction via `MaterialRegistry.set_material_status()`.
+These actions require a signed on-chain transaction via `MaterialRegistry.set_material_status()`.
 
 ## Error Handling
 

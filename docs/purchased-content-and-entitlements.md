@@ -14,7 +14,8 @@ access:
 - `get_purchase_snapshot(purchase_id)` returns immutable metadata captured at
   purchase time (`metadata_hash`, `rights_hash`, `sale_terms_version`) so
   buyer receipts and purchase history are not rewritten when creators update
-  live catalog metadata or sale terms (#667).
+  live catalog metadata or sale terms (#667). This immutable reference allows buyers to retain access to the exact version they purchased even if the creator issues a **version rollback** or deprecates a version.
+- rollback workflows deprecate an unsafe current version while preserving historical receipts.
 - refunds revoke an entitlement, so protected-download callers must treat a
   missing or inactive entitlement as denied access.
 
