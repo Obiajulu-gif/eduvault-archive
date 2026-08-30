@@ -29,8 +29,19 @@ export async function GET(req, { params }) {
         }
 
         const userAddress = normalizeBuyerAddress(user.walletAddress || user.address || user.id);
+        
+        const { searchParams } = new URL(req.url);
+        let accessReason = "buyer_download";
+        if (searchParams.get("preview") === "true" || searchParams.get("reason") === "preview") {
+          accessReason = "preview";
+        } else if (searchParams.get("reason") === "support") {
+          accessReason = "support";
+        } else if (user.role === "admin") {
+          accessReason = "admin_review";
+        }
+
         if (!userAddress) {
-          auditLog({ event: "download_no_address", route: "material-download", method: "GET", status: 400, actor: user.sub });
+          auditLog({ event: "download_no_address", route: "material-download", method: "GET", status: 400, actor: user.sub, role: user.role, reason: accessReason });
           return NextResponse.json({ error: "No wallet address on account" }, { status: 400 });
         }
 
@@ -40,12 +51,13 @@ export async function GET(req, { params }) {
           .findOne({ _id: new ObjectId(id) });
 
         if (!material) {
-          auditLog({ event: "download_not_found", route: "material-download", method: "GET", status: 404, materialId: id });
+          auditLog({ event: "download_not_found", route: "material-download", method: "GET", status: 404, materialId: id, actor: user.sub, role: user.role, reason: accessReason });
           return NextResponse.json({ error: "Material not found" }, { status: 404 });
         }
 
         const decision = await authorizeMaterialAccess({ db, material, buyerAddress: userAddress });
         const accessSource = decision.source;
+        const purchaseId = decision.purchaseId;
 
         if (!decision.allowed) {
           auditLog({
@@ -54,8 +66,13 @@ export async function GET(req, { params }) {
             method: "GET",
             status: decision.httpStatus,
             actor: user.sub,
+            role: user.role,
             walletAddress: userAddress,
             materialId: id,
+            material: material.title || id,
+            version: material.version || "1.0",
+            purchase: purchaseId || null,
+            reason: accessReason,
           });
           return NextResponse.json(
             decision.state === "unavailable"
@@ -73,7 +90,12 @@ export async function GET(req, { params }) {
             method: "GET",
             status: 404,
             actor: user.sub,
+            role: user.role,
             materialId: id,
+            material: material.title || id,
+            version: material.version || "1.0",
+            purchase: purchaseId || null,
+            reason: accessReason,
           });
           return NextResponse.json({ error: "Material has no associated file" }, { status: 404 });
         }
@@ -86,8 +108,13 @@ export async function GET(req, { params }) {
           method: "GET",
           status: 200,
           actor: user.sub,
+          role: user.role,
           walletAddress: userAddress,
           materialId: id,
+          material: material.title || id,
+          version: material.version || "1.0",
+          purchase: purchaseId || null,
+          reason: accessReason,
         });
 
         return NextResponse.json(

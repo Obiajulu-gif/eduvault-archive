@@ -40,5 +40,10 @@ Disaster recovery procedures must enforce zero-trust entitlement security and st
 - **Zero-Trust Access Probes:** Restored data must be validated against entitlement decision probes to ensure unentitled callers receive no access leaks and revoked/refunded buyers cannot decrypt materials.
 - **Secret Isolation:** Production secrets must never be logged or saved in unencrypted restore drill output. Restore drills must take place in isolated staging environments.
 
+## Audit Logs & Access Reasons (#712)
+Access to protected material is explicitly audited with reason codes to allow creators and maintainers to investigate access patterns and identify potential leaks or unauthorized support access. 
+- **Reason Codes:** The system distinguishes between `preview` (publicly accessible chunks or low-res versions), `buyer_download` (entitled purchaser), `admin_review` (platform administration and moderation), and `support` (explicitly granted support access).
+- **Redaction:** Sensitive tokens (e.g. Bearer tokens, capability tokens) and URLs in audit logs are redacted before being recorded to standard output.
+
 ## Disclosure Policy
 We commit to acknowledging all reports within 48 hours and will work to resolve valid issues as quickly as possible.
