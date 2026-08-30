@@ -12,6 +12,8 @@ suggested alert thresholds.
 | `lastLedger` | Sequence of the last ledger the indexer fully applied all events from. |
 | `lastLedgerHash` | That ledger's hash, as last confirmed against the canonical chain. Used for fork detection on the next batch. |
 | `lastCheckpointAt` | Timestamp of the last successful checkpoint write. |
+| `lastBackfillCheckpointAt` | Timestamp of the last successful backfill checkpoint write. |
+| `backfillRange` | Bounded ledger range `[start, end]` currently being replayed by a backfill operation. |
 | `lag` | `currentLedger - lastLedger`, when the caller supplies `currentLedger` from its own RPC/Horizon client. `null` if not supplied — the indexer does not make an extra network call just to measure this. |
 | `deadLetterRetryableCount` | Number of dead-lettered events still eligible for automatic retry. |
 | `deadLetterFailedCount` | Number of dead-lettered events classified as poison, or that exhausted `INDEXER_MAX_RETRIES` — these need operator attention (see `scripts/reprocess-deadletter.mjs`), not automatic retry. |
