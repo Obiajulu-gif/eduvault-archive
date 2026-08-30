@@ -9,7 +9,7 @@ Status badges appear on marketplace cards, the resource detail page, and the cre
 | **Free** | Green | `price` is `0` or absent | The resource costs nothing to access |
 | **New** | Blue | `feedbackCount` is `0` **and** no rating recorded | No ratings yet — freshly published |
 | **Top Rated** | Amber | `averageScore >= 4.5` (requires at least one review) | Community-verified high quality |
-| **Verified** | Indigo | `material.verified === true` | Creator or admin has confirmed accuracy |
+| **Verified** | Indigo | `material.author?.credential?.status === "active"` and not expired | Creator is actively verified with valid credential |
 | **Popular** | Purple | `likes >= 1000` | Widely saved or liked by the community |
 | **Draft** | Gray | `visibility === "private"` | Not published — only visible to the creator |
 | **Unlisted** | Orange | `visibility === "unlisted"` | Accessible by direct link but not discoverable |

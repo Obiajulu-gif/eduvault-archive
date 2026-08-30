@@ -52,7 +52,7 @@ const BADGE_STYLES = {
 const BADGE_TOOLTIPS = {
   Free: "No cost — freely available to all learners",
   New: "Recently listed with no ratings yet",
-  Verified: "Content reviewed and verified by the creator",
+  Verified: "Creator is actively verified with valid credential",
   "Top Rated": "Average score of 4.5 or higher",
   Popular: "Over 1,000 learner likes",
   Draft: "Private draft — not publicly listed",
@@ -83,7 +83,9 @@ export function deriveBadges(material) {
     badges.push("Top Rated");
   }
 
-  if (material.verified) {
+  const credential = material?.author?.credential || material?.creator?.credential;
+  const isVerified = credential?.status === "active" && (!credential?.expiresAt || new Date(credential.expiresAt) > new Date());
+  if (isVerified) {
     badges.push("Verified");
   }
 
