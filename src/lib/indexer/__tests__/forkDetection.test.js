@@ -84,6 +84,78 @@ describe("detectFork", () => {
   });
 });
 
+describe("detectFork (deep reorgs)", () => {
+  const checkpoints = [
+    { ledger: 90, hash: "h90" },
+    { ledger: 100, hash: "h100" },
+    { ledger: 110, hash: "h110" },
+  ];
+
+  it("reports no fork when the most recent checkpoint still matches", async () => {
+    const canonical = { 90: "h90", 100: "h100", 110: "h110" };
+    const result = await detectFork(null, {
+      checkpoints,
+      getLedgerHash: async (l) => ({ sequence: l, hash: canonical[l] }),
+    });
+    expect(result).toEqual({ forked: false });
+  });
+
+  it("identifies the true divergence ledger for a one-checkpoint-deep reorg", async () => {
+    const canonical = { 90: "h90", 100: "h100", 110: "other" };
+    const result = await detectFork(null, {
+      checkpoints,
+      getLedgerHash: async (l) => ({ sequence: l, hash: canonical[l] }),
+    });
+    expect(result).toEqual({ forked: true, divergenceLedger: 101, canonicalHash: "other" });
+  });
+
+  it("walks back multiple checkpoints for a deep reorg", async () => {
+    // 110 and 100 both diverged; 90 still matches canonical.
+    const canonical = { 90: "h90", 100: "other2", 110: "other1" };
+    const result = await detectFork(null, {
+      checkpoints,
+      getLedgerHash: async (l) => ({ sequence: l, hash: canonical[l] }),
+    });
+    expect(result).toEqual({ forked: true, divergenceLedger: 91, canonicalHash: "other2" });
+  });
+
+  it("reports divergence at the oldest retained checkpoint when nothing matches", async () => {
+    const result = await detectFork(null, {
+      checkpoints,
+      getLedgerHash: async () => ({ sequence: 0, hash: "different" }),
+    });
+    expect(result).toEqual({ forked: true, divergenceLedger: 90, canonicalHash: "different" });
+  });
+
+  it("skips checkpoints that aged out of retention while walking back", async () => {
+    // 110 aged out (unverifiable); 100 mismatches; 90 still matches.
+    const canonical = { 90: "h90", 100: "other" };
+    const result = await detectFork(null, {
+      checkpoints,
+      getLedgerHash: async (l) => (canonical[l] ? { sequence: l, hash: canonical[l] } : null),
+    });
+    expect(result).toEqual({ forked: true, divergenceLedger: 91, canonicalHash: "other" });
+  });
+
+  it("does not declare a fork when only unverifiable checkpoints precede a match", async () => {
+    // 110 aged out; 100 matches canonical — no observed mismatch, so no fork.
+    const canonical = { 100: "h100" };
+    const result = await detectFork(null, {
+      checkpoints,
+      getLedgerHash: async (l) => (canonical[l] ? { sequence: l, hash: canonical[l] } : null),
+    });
+    expect(result).toEqual({ forked: false });
+  });
+
+  it("reports no fork when every checkpoint aged out of retention", async () => {
+    const result = await detectFork(null, {
+      checkpoints,
+      getLedgerHash: async () => null,
+    });
+    expect(result).toEqual({ forked: false });
+  });
+});
+
 describe("rewindAfterFork", () => {
   it("orphans materials and purchases at or after the divergence ledger, and rewinds the cursor", async () => {
     const db = createFakeDb();
@@ -109,5 +181,27 @@ describe("rewindAfterFork", () => {
     expect(state.lastLedger).toBeNull();
     expect(state.lastLedgerHash).toBeNull();
     expect(state.lastForkDivergenceLedger).toBe(90);
+  });
+
+  it("retains checkpoints below the divergence point and drops the rest", async () => {
+    const db = createFakeDb();
+    db.collection(COLLECTIONS.syncState)._seed("stellar:events", {
+      cursor: "c",
+      lastLedger: 110,
+      lastLedgerHash: "h110",
+      checkpoints: [
+        { ledger: 90, hash: "h90" },
+        { ledger: 100, hash: "h100" },
+        { ledger: 110, hash: "h110" },
+      ],
+    });
+
+    await rewindAfterFork(db, { source: "stellar", divergenceLedger: 101 });
+
+    const state = db.collection(COLLECTIONS.syncState)._all().find((s) => s._id === "stellar:events");
+    expect(state.checkpoints).toEqual([
+      { ledger: 90, hash: "h90" },
+      { ledger: 100, hash: "h100" },
+    ]);
   });
 });

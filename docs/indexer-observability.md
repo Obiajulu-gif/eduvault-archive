@@ -11,7 +11,10 @@ suggested alert thresholds.
 | --- | --- |
 | `lastLedger` | Sequence of the last ledger the indexer fully applied all events from. |
 | `lastLedgerHash` | That ledger's hash, as last confirmed against the canonical chain. Used for fork detection on the next batch. |
+| `checkpoints` | Bounded history of the last `FORK_DETECTION_DEPTH` (default 8) checkpointed `{ ledger, hash }` pairs, oldest first. `detectFork` walks this history backward to detect reorgs several checkpoints deep, not just at the tip. |
 | `lastCheckpointAt` | Timestamp of the last successful checkpoint write. |
+| `lastBackfillCheckpointAt` | Timestamp of the last successful backfill checkpoint write. |
+| `backfillRange` | Bounded ledger range `[start, end]` currently being replayed by a backfill operation. |
 | `lag` | `currentLedger - lastLedger`, when the caller supplies `currentLedger` from its own RPC/Horizon client. `null` if not supplied — the indexer does not make an extra network call just to measure this. |
 | `deadLetterRetryableCount` | Number of dead-lettered events still eligible for automatic retry. |
 | `deadLetterFailedCount` | Number of dead-lettered events classified as poison, or that exhausted `INDEXER_MAX_RETRIES` — these need operator attention (see `scripts/reprocess-deadletter.mjs`), not automatic retry. |
@@ -66,11 +69,15 @@ excluded from automatic retry.
 
 ## Known scope limits
 
-- Fork detection only compares the single most-recently-checkpointed ledger's
-  hash against the canonical chain (a *shallow* reorg check), not a deeper
-  walk back through checkpoint history. See the module doc comment in
-  `src/lib/indexer/forkDetection.js` for how to extend this if a deeper check
-  becomes necessary.
+- Fork detection compares the last `FORK_DETECTION_DEPTH` (default 8)
+  checkpoints' hashes against the canonical chain, walking backward from the
+  most recent checkpoint until a hash still matches. A reorg deeper than the
+  retained history (e.g. the indexer was down across more than
+  `FORK_DETECTION_DEPTH` checkpoint intervals) is detected at the oldest
+  retained checkpoint, which rewinds everything retained — an operator with
+  very long downtime should seed a fresh cursor via
+  `scripts/run-stellar-indexer.mjs recover` as with any rewind. The bound
+  keeps the per-batch verification cost constant.
 - A rewind resets the cursor to `null` (full resync from the event source's
   beginning) rather than resuming at a computed intermediate position, since
   Soroban RPC cursors are opaque pagination tokens, not ledger sequences.

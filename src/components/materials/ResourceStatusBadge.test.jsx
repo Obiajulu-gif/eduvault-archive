@@ -10,6 +10,27 @@ describe("deriveBadges — live availability/entitlement badges (#676)", () => {
     expect(badges).not.toContain("Stale");
   });
 
+  it("derives Verified badge for material with valid creator credential", () => {
+    const futureDate = new Date();
+    futureDate.setFullYear(futureDate.getFullYear() + 1);
+    const badges = deriveBadges({ author: { credential: { status: "active", expiresAt: futureDate.toISOString() } } });
+    expect(badges).toContain("Verified");
+  });
+
+  it("does not derive Verified badge when creator credential is expired", () => {
+    const pastDate = new Date();
+    pastDate.setFullYear(pastDate.getFullYear() - 1);
+    const badges = deriveBadges({ author: { credential: { status: "active", expiresAt: pastDate.toISOString() } } });
+    expect(badges).not.toContain("Verified");
+  });
+
+  it("does not derive Verified badge when creator credential is revoked", () => {
+    const futureDate = new Date();
+    futureDate.setFullYear(futureDate.getFullYear() + 1);
+    const badges = deriveBadges({ author: { credential: { status: "revoked", expiresAt: futureDate.toISOString() } } });
+    expect(badges).not.toContain("Verified");
+  });
+
   it("shows Unavailable when the indexer marked the material orphaned by a chain reorg", () => {
     const badges = deriveBadges({ price: 10, syncStatus: "orphaned" });
     expect(badges).toContain("Unavailable");

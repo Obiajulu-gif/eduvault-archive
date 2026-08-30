@@ -86,6 +86,19 @@ This process rebuilds:
 - Search indexes
 - Derived marketplace metadata
 
+### Step 3b: Partial Ledger Replay (Backfill)
+
+To replay a bounded ledger range (e.g. after bugs or outages) without rebuilding the entire index, run the partial backfill command:
+
+```bash
+npm run indexer:stellar:backfill -- --start=LEDGER_START --end=LEDGER_END
+```
+
+The backfill process:
+- Uses stable keys to ignore duplicate events preserving idempotency.
+- Operates on a defined checkpoint and backfill state model independent of the main indexer cursor.
+- Automatically handles missing checkpoints or interrupted backfills by tracking `backfillRange`.
+
 ### Step 4: Verify Restoration Success
 
 Confirm that indexing completed successfully by reviewing system logs:
@@ -185,6 +198,56 @@ the report without writing.
 Mismatches are the highest-signal failure: they mean the cache and the chain
 disagree on who *should* have access — resolve before reopening traffic.
 
+---
+
+## 6. Protected Material & Entitlement Restore Verification Drill (Issue #715)
+
+Backups are only valid if restored protected materials remain accessible to entitled buyers and access control policy is accurately enforced post-restore.
+
+### Verification Procedure
+
+Execute the extended verification script on the restored database:
+
+```bash
+MONGODB_URI="$STAGING_URI" JWT_SECRET="$JWT_SECRET" node scripts/restore-verification.mjs ./eduvault_backup.archive
+```
+
+The script automatically validates:
+1. **Secret & Key Integrity:** Verifies required decryption and token signing secrets (`JWT_SECRET` ≥ 32 characters, `MONGODB_URI`).
+2. **Content Hash & Storage References:** Confirms every protected material (paid or private) has a valid CID/storage reference and uncorrupted file hash.
+3. **Zero-Trust Entitlement Decisions:**
+   - Proves entitled buyers (with active cache or settled purchase) are granted access.
+   - Proves synthetic unentitled callers are strictly denied access.
+   - Confirms refunded/revoked purchases cannot access protected content.
+
+### Secret and Key Handling During Restore Drills
+
+> [!IMPORTANT]
+> - **Production Decryption Secrets:** Never export unencrypted production keys or write raw `JWT_SECRET` strings to temporary restore drill log files or shell histories.
+> - **Staging Isolation:** Always execute restore drills against isolated staging databases (`MONGODB_DB=eduvault_dr_test`).
+> - **Secret Verification:** Ensure `JWT_SECRET` matches the key used by the target API instance; a key mismatch will prevent legitimate buyers from decrypting material links.
+
+### Operator Restore Drill Checklist
+
+- [ ] Obtain database backup archive (`.archive` / `.gz`).
+- [ ] Restore archive to isolated staging MongoDB instance using `mongorestore --drop`.
+- [ ] Export required secrets (`MONGODB_URI`, `JWT_SECRET`, `PINATA_JWT`).
+- [ ] Run `node scripts/restore-verification.mjs <archive.gz>` and confirm exit code `0`.
+- [ ] Execute `node scripts/check-ipfs-integrity.mjs` to verify IPFS pin availability.
+- [ ] Execute automated backend restore verification tests: `node --test tests/backend/restore-verification.test.mjs`.
+
+### Failure Actions & Remediation Matrix
+
+| Verification Failure | Root Cause | Operator Action |
+|---|---|---|
+| **Secret check failed (`JWT_SECRET`)** | `JWT_SECRET` missing or < 32 characters in environment | Configure valid `JWT_SECRET` environment variable (≥ 32 chars) matching API environment. |
+| **Missing file reference / CID** | Material document restored without `storageKey` or `ipfsCid` | Check indexer sync state or re-fetch material metadata from Stellar contract registry. |
+| **Content hash mismatch / corruption** | `fileHash` or `contentHash` invalid or truncated | Re-pin asset on Pinata via `node scripts/check-ipfs-integrity.mjs AUTO_REPAIR=true` and update hash. |
+| **Entitled buyer access denied** | Discrepancy between `purchases` and `entitlement_cache` | Run `node scripts/rebuild-entitlement-cache.mjs --rebuild` to synchronize cache with purchases. |
+| **Unentitled access leak** | Active cache record exists for non-purchaser | Drop invalid `entitlement_cache` entries and re-run indexer/cache rebuild. |
+
+---
+
 ## Recovery Completion Criteria
 
 The recovery process can be considered complete when:
@@ -194,6 +257,7 @@ The recovery process can be considered complete when:
 - Stellar event caches have been fully rebuilt.
 - Search indexes have been regenerated.
 - Security scans pass without findings.
+- Restore verification script (`restore-verification.mjs`) reports 0 violations.
 - Application health checks report normal operational status.
 - User-facing functionality has been validated in the restored environment.
 - Monitoring and alerting systems are operational.
@@ -207,3 +271,4 @@ The recovery process can be considered complete when:
 - Stellar Soroban RPC Documentation
 - EduVault Indexer Operations Guide
 - Internal Security Incident Response Procedures
+

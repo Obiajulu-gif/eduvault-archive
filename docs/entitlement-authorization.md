@@ -236,3 +236,10 @@ Delayed events, missing events, and revoked entitlements all resolve to safe den
 Once `authorizeMaterialAccess()` allows a request, `GET /api/download` (`app/api/download/route.js`) issues a short-lived **capability token** — bound to the buyer, material, and requested byte range — rather than handing back a bare, indefinitely-usable IPFS URL. The token is HMAC-SHA256 signed (`lib/downloads/capabilityToken.js`, `DOWNLOAD_CAPABILITY_SECRET`) so none of its fields (buyer, byte range, expiry) can be altered client-side without invalidating the signature, and it expires after `CAPABILITY_TTL_MS` (default 15s).
 
 Every issuance and every denial is written to the `download_access_log` collection (`lib/downloads/accessLog.js`) — who requested what, when, and the outcome. The raw capability token and the signed gateway URL it appears in are never persisted; only the token's `jti` (a correlation id, not a usable credential) is logged.
+
+To provide clear traceability for data privacy investigations and to help creators distinguish legitimate support or administrative access from buyer usage (Issue #712), access events explicitly record:
+- **Reason Code:** `preview`, `buyer_download`, `admin_review`, or `support`.
+- **Actor Details:** User ID, assigned wallet/admin role.
+- **Resource Details:** Material ID, version, and correlated purchase ID.
+
+All sensitive credential strings and full capability URLs are aggressively redacted from operational audit logs.

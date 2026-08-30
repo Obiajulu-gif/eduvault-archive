@@ -181,6 +181,25 @@ npx vercel --prod
 
 Or push to the `main` branch — Vercel auto-deploys on every push.
 
+### 4d. Post-Deploy Smoke Tests
+
+After deploying both contracts and backend changes, maintainers must run a smoke test on the target network. This verifies the complete purchase lifecycle: material publish, quote, purchase, entitlement, download, and refund-readiness.
+
+```bash
+# Export the required environment variables first
+export NEXT_PUBLIC_APP_URL="https://eduvault.vercel.app"
+export NEXT_PUBLIC_STELLAR_NETWORK="testnet"
+export NEXT_PUBLIC_MATERIAL_REGISTRY_CONTRACT_ID="..."
+export NEXT_PUBLIC_PURCHASE_MANAGER_CONTRACT_ID="..."
+
+# Run the automated smoke test
+bash scripts/smoke-test.sh
+```
+
+The script will fail the release if critical smoke tests fail and will record transaction hashes and contract IDs to `deployment-smoke-metadata.log`. This file should be saved with your deployment metadata.
+
+**Rollback Criteria:** If the smoke test fails for any core purchase flow feature (publish, purchase, entitlement, download, refunds), follow the [Rollback Procedure](#8-rollback-procedure) immediately.
+
 ---
 
 ## 5. CI/CD — GitHub Actions
@@ -229,12 +248,13 @@ mongorestore \
 
 ### Recovery testing checklist
 
-Run this checklist after every significant schema migration:
+Run this checklist after every significant schema migration or disaster recovery drill (#715):
 
 - [ ] Create a fresh backup with `node scripts/backup-mongodb.mjs`.
 - [ ] Spin up a separate MongoDB instance (e.g., `docker run -p 27018:27017 mongo:7`).
 - [ ] Restore the backup to the test instance.
-- [ ] Start the app pointing at the test instance and verify core flows (login, list materials, purchase).
+- [ ] Run `node scripts/restore-verification.mjs <backup.gz>` to verify secrets, collection schemas, protected material content hashes, and zero-trust entitlement enforcement.
+- [ ] Start the app pointing at the test instance and verify core flows (login, list materials, purchase, protected download).
 - [ ] Delete the test instance.
 
 ---

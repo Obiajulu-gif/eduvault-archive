@@ -14,11 +14,15 @@ const STOP_WORDS = new Set([
   "notes", "complete", "lecture", "lectures", "summary", "guide", "slides", "workbook", "workbooks", "template", "templates", "useful", "practice", "exam", "student", "students", "paper", "papers"
 ]);
 
-function cleanText(text) {
+const MAX_TITLE_LEN = 1000;
+const MAX_DESC_LEN = 20000;
+
+function cleanText(text, maxLen = MAX_DESC_LEN) {
   if (!text) return "";
-  return String(text)
+  const sliced = String(text).slice(0, maxLen);
+  return sliced
     .toLowerCase()
-    .replace(/[^\w\s-]/g, " ")
+    .replace(/[^\p{L}\p{N}\s-]/gu, " ")
     .replace(/\s+/g, " ")
     .trim();
 }
@@ -36,6 +40,7 @@ export function getTagPool() {
     const clean = tag.trim();
     if (!clean) return;
     const lower = clean.toLowerCase();
+    if (STOP_WORDS.has(lower)) return;
     if (!seenLower.has(lower)) {
       seenLower.add(lower);
       tags.add(clean);
@@ -75,8 +80,8 @@ export function getTagPool() {
 export function suggestTags(title, description) {
   const startTime = performance.now();
 
-  const cleanTitle = cleanText(title);
-  const cleanDescription = cleanText(description);
+  const cleanTitle = cleanText(title, MAX_TITLE_LEN);
+  const cleanDescription = cleanText(description, MAX_DESC_LEN);
 
   const paddedTitle = ` ${cleanTitle} `;
   const paddedDesc = ` ${cleanDescription} `;
@@ -147,8 +152,10 @@ export function suggestTags(title, description) {
     for (const item of sortedKeywords) {
       if (recommendations.length >= 5) break;
       const kwLower = item.word.toLowerCase();
+      if (STOP_WORDS.has(kwLower)) continue;
+
       let formattedWord = item.word;
-      if (/^[a-z]{3}\d{3}$/i.test(formattedWord)) {
+      if (/^[a-z]{2,4}-?\d{3,4}$/i.test(formattedWord)) {
         formattedWord = formattedWord.toUpperCase();
       } else {
         formattedWord = formattedWord.charAt(0).toUpperCase() + formattedWord.slice(1);
@@ -169,3 +176,4 @@ export function suggestTags(title, description) {
     durationMs
   };
 }
+

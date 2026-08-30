@@ -66,12 +66,20 @@ export async function POST(request) {
     );
 
     if (action === "approve") {
+      const expiresAt = new Date();
+      expiresAt.setFullYear(expiresAt.getFullYear() + 1); // 1 year expiry
+
       await profiles.updateOne(
         { uuid: application.userUuid },
         {
           $set: {
             profileType: application.requestedType || "institution",
-            verifiedAt: new Date(),
+            credential: {
+              issuer: admin.sub || admin._id,
+              evidence: `urn:eduvault:verification:${applicationId}`,
+              expiresAt: expiresAt,
+              status: "active"
+            },
             updatedAt: new Date(),
           },
         }

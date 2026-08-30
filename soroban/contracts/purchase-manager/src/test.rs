@@ -1291,7 +1291,7 @@ fn rejects_unauthorized_platform_config_change() {
     let (_, client) = install_and_init_contract(&env, &admin, &registry, &treasury, 500);
 
     let new_treasury = Address::generate(&env);
-    let result = client.try_set_platform_config(&unauthorized_user, &new_treasury, &600, &false);
+    let result = client.try_propose_platform_config(&unauthorized_user, &new_treasury, &600, &false);
     assert_eq!(result, Err(Ok(PurchaseError::NotAuthorized)));
 }
 
@@ -4034,3 +4034,39 @@ fn test_partial_bulk_refund_preserves_remaining_entitlement_payment_state() {
         kept_idx += 1;
     }
 }
+
+ # [ t e s t ] 
+ f n   t e s t _ p l a t f o r m _ c o n f i g _ m u l t i s t e p _ a p p r o v a l ( )   { 
+         l e t   e n v   =   E n v : : d e f a u l t ( ) ; 
+         e n v . m o c k _ a l l _ a u t h s ( ) ; 
+ 
+         l e t   a d m i n   =   A d d r e s s : : g e n e r a t e ( & e n v ) ; 
+         l e t   a d m i n 2   =   A d d r e s s : : g e n e r a t e ( & e n v ) ; 
+         l e t   r e g i s t r y   =   A d d r e s s : : g e n e r a t e ( & e n v ) ; 
+         l e t   t r e a s u r y   =   A d d r e s s : : g e n e r a t e ( & e n v ) ; 
+         l e t   n e w _ t r e a s u r y   =   A d d r e s s : : g e n e r a t e ( & e n v ) ; 
+ 
+         l e t   ( _ ,   c l i e n t )   =   i n s t a l l _ a n d _ i n i t _ c o n t r a c t ( & e n v ,   & a d m i n ,   & r e g i s t r y ,   & t r e a s u r y ,   5 0 0 ) ; 
+ 
+         / /   a d m i n   p r o p o s e s   n e w   c o n f i g 
+         c l i e n t . p r o p o s e _ p l a t f o r m _ c o n f i g ( & a d m i n ,   & n e w _ t r e a s u r y ,   & 6 0 0 ,   & f a l s e ) ; 
+ 
+         / /   a d m i n   c a n n o t   a p p r o v e   t h e i r   o w n   p r o p o s a l 
+         l e t   r e s u l t   =   c l i e n t . t r y _ a p p r o v e _ p l a t f o r m _ c o n f i g ( & a d m i n ) ; 
+         a s s e r t _ e q ! ( r e s u l t ,   E r r ( O k ( P u r c h a s e E r r o r : : C a n n o t A p p r o v e O w n P r o p o s a l ) ) ) ; 
+ 
+         / /   t r a n s f e r   a d m i n   t o   a d m i n 2 
+         c l i e n t . t r a n s f e r _ a d m i n ( & a d m i n ,   & a d m i n 2 ,   & 8 6 4 0 0 ) ; 
+         e n v . l e d g e r ( ) . s e t _ t i m e s t a m p ( e n v . l e d g e r ( ) . t i m e s t a m p ( ) . s a t u r a t i n g _ a d d ( 8 6 4 0 1 ) ) ; 
+         c l i e n t . a c c e p t _ a d m i n ( & a d m i n 2 ) ; 
+ 
+         / /   a d m i n 2   a p p r o v e s   t h e   p r o p o s a l 
+         c l i e n t . a p p r o v e _ p l a t f o r m _ c o n f i g ( & a d m i n 2 ) ; 
+ 
+         / /   V e r i f y   t h e   c o n f i g   i s   u p d a t e d 
+         l e t   c o n f i g   =   c l i e n t . g e t _ p l a t f o r m _ c o n f i g ( ) ; 
+         a s s e r t _ e q ! ( c o n f i g . t r e a s u r y ,   n e w _ t r e a s u r y ) ; 
+         a s s e r t _ e q ! ( c o n f i g . p l a t f o r m _ f e e _ b p s ,   6 0 0 ) ; 
+ } 
+  
+ 

@@ -28,6 +28,14 @@ export const COLLECTIONS = {
   indexerQuarantine: "indexer_quarantine",
   indexerOperatorAudit: "indexer_operator_audit",
   materialPreviews: "material_previews",
+  // Off-chain mirrors maintained by the indexer for event types added in
+  // #598 (payouts/escrow/dispute resolutions and the scholarship subsystem).
+  bulkPurchases: "bulk_purchases",
+  scholarshipGrants: "scholarship_grants",
+  scholarshipRedemptions: "scholarship_redemptions",
+  scholarshipConfig: "scholarship_config",
+  creatorTiers: "creator_tiers",
+  adminTransfers: "admin_transfers",
 };
 
 export const REQUIRED_INDEXES = {
