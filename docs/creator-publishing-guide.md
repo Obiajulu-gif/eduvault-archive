@@ -110,6 +110,14 @@ Configure the pricing terms for your material:
 
 The platform fee is applied automatically by the `PurchaseManager` contract and is not part of the creator-defined payout split.
 
+## Step 5b: Configure Previews (Paid Content)
+
+For paid materials, creators must define preview bounds so buyers can sample content without accessing the full protected file:
+- **Preview Metadata**: Define which sections or pages are visible before purchase.
+- **Preview Length**: Set a maximum percentage (e.g., 10%) or absolute limit (e.g., first 5 pages, first 30 seconds of video).
+- **Watermarking**: Previews are automatically rendered with watermarks.
+- Server-side enforcement ensures that preview endpoints never serve protected full assets before a confirmed purchase.
+
 ## Step 6: Review and Confirm
 
 1. The wizard presents a summary of all material details: file, metadata, pricing, and payout configuration.
@@ -145,7 +153,16 @@ After publishing, manage your materials from the dashboard:
 
 - **My Materials** (`/dashboard/my-materials`) — View, pause, or archive existing materials.
 - **Market** (`/dashboard/market`) — See marketplace performance and buyer activity.
-- **Analytics** (`/dashboard/analytics`) — Track views, purchases, and earnings over time.
+### Managing Revenue and Analytics
+
+The **Analytics** (`/dashboard/analytics`) and Revenue views separate your earnings into distinct balance states to provide a clear financial picture:
+- **Pending**: Purchases that are processing or waiting for settlement.
+- **Settled**: Payouts that have successfully cleared and are available.
+- **Refunded**: Deductions from your balance due to buyer refunds.
+- **Disputed**: Funds held in custody during an active dispute.
+- **Fees**: Platform fees deducted from the gross purchase amount.
+
+These totals reconcile precisely with underlying purchase, payout, and refund events. You can export these records for accounting purposes.
 
 ### Updating Material Details
 
@@ -159,12 +176,16 @@ You can update pricing and payout shares after publication:
 
 **Note:** Creator ownership, metadata hash, and rights hash are immutable after initial registration. Only sale terms and material status can be changed.
 
-### Pausing or Archiving
+### Pausing, Archiving or Rolling Back
 
 - **Pause** — Temporarily disables new purchases while preserving existing entitlements.
 - **Archive** — Permanently hides the material from the marketplace.
+- **Version Rollback** — Revert a material to a previous safe version after a bad upload (e.g., incorrect or corrupt content).
+  - Preserves immutable purchase references so historical receipts remain accurate.
+  - Exposes `current`, `rolled-back`, and `deprecated` version states.
+  - Buyers retain access to the version they purchased according to policy.
 
-Both actions require a signed on-chain transaction via `MaterialRegistry.set_material_status()`.
+These actions require a signed on-chain transaction via `MaterialRegistry.set_material_status()`.
 
 ## Error Handling
 

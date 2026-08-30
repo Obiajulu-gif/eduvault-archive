@@ -40,6 +40,7 @@ sequenceDiagram
 - Polls Stellar RPC for events related to Soroban contracts
 - Writes sync events into `sync_events` to ensure idempotency
 - Applies event side-effects (materials, purchases, entitlement_cache)
+- Supports partial ledger range replay (backfill) for targeted recovery without full rebuilds.
 - On transient failures: records retry metadata in `dead_letter_events`
 - Provides operator tooling via `scripts/indexer-deadletter.mjs` for list/retry/quarantine flows (#668)
 - Provides a `reprocess-deadletter.mjs` script for maintainers to reprocess

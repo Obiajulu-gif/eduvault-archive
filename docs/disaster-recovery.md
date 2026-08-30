@@ -86,6 +86,19 @@ This process rebuilds:
 - Search indexes
 - Derived marketplace metadata
 
+### Step 3b: Partial Ledger Replay (Backfill)
+
+To replay a bounded ledger range (e.g. after bugs or outages) without rebuilding the entire index, run the partial backfill command:
+
+```bash
+npm run indexer:stellar:backfill -- --start=LEDGER_START --end=LEDGER_END
+```
+
+The backfill process:
+- Uses stable keys to ignore duplicate events preserving idempotency.
+- Operates on a defined checkpoint and backfill state model independent of the main indexer cursor.
+- Automatically handles missing checkpoints or interrupted backfills by tracking `backfillRange`.
+
 ### Step 4: Verify Restoration Success
 
 Confirm that indexing completed successfully by reviewing system logs:
