@@ -107,3 +107,4 @@ Run focused checks before opening a pull request, and add broader checks when yo
 - `npm run indexer:stellar` starts the Stellar indexer prototype.
 - `node scripts/reprocess-deadletter.mjs` retries dead-lettered indexer events.
 - `node scripts/backup-mongodb.mjs` runs the MongoDB backup helper when configured.
+- `bash scripts/smoke-test.sh` runs the post-deploy purchase lifecycle smoke test (verifies material publish, quote, purchase, entitlement, download, and refunds).

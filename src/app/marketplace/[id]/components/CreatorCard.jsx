@@ -4,8 +4,11 @@ function CreatorCard({ author, creator, createdAt }) {
   const authorName = author?.name || creator || "Anonymous creator";
   const institution = author?.institution || "Independent educator";
   const level = author?.level || "All learners";
-  const badgeText = author?.verified ? "Verified creator" : "Creator profile unverified";
-  const badgeTone = author?.verified
+  const credential = author?.credential;
+  const isVerified = credential?.status === "active" && (!credential?.expiresAt || new Date(credential.expiresAt) > new Date());
+  
+  const badgeText = isVerified ? "Verified creator" : "Creator profile unverified";
+  const badgeTone = isVerified
     ? "text-emerald-700 bg-emerald-50 border border-emerald-200 dark:text-emerald-300 dark:bg-emerald-900/30 dark:border-emerald-800"
     : "text-amber-700 bg-amber-50 border border-amber-200 dark:text-amber-300 dark:bg-amber-900/30 dark:border-amber-800";
 

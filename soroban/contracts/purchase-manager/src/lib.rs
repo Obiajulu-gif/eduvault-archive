@@ -145,6 +145,16 @@ pub struct MaterialRecord {
     pub payout_shares: Vec<PayoutShare>,
 }
 
+/// Proposed platform configuration pending approval
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PendingPlatformConfigState {
+    pub treasury: Address,
+    pub platform_fee_bps: u32,
+    pub paused: bool,
+    pub proposer: Address,
+}
+
 /// Platform configuration stored in PurchaseManager
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -311,6 +321,7 @@ enum DataKey {
     /// Instance storage (#464 Tier A) — shares the contract instance's own
     /// TTL, so it never needs independent renewal.
     PlatformConfig,
+    PendingPlatformConfig,
     PurchaseNonce,
     PendingAdmin,
     AllowedAsset(Address),
@@ -413,6 +424,8 @@ pub enum PurchaseError {
     NotAuthorized = 40,
     InvalidTreasury = 41,
     UpgradeFailed = 42,
+    NoPendingPlatformConfig = 43,
+    CannotApproveOwnProposal = 44,
 
     // Escrow errors
     EscrowLocked = 50,
@@ -522,13 +535,27 @@ pub struct AssetPolicyUpdatedEvent {
     pub enabled: bool,
 }
 
+/// Event: admin.platform_config_proposed
+#[contractevent(topics = ["admin", "platform_config_proposed"], data_format = "vec")]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PlatformConfigProposedEvent {
+    pub treasury: Address,
+    pub platform_fee_bps: u32,
+    pub paused: bool,
+    pub proposer: Address,
+}
+
 /// Event: admin.platform_config_updated
 #[contractevent(topics = ["admin", "platform_config_updated"], data_format = "vec")]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PlatformConfigUpdatedEvent {
-    pub treasury: Address,
-    pub platform_fee_bps: u32,
-    pub paused: bool,
+    pub old_treasury: Address,
+    pub new_treasury: Address,
+    pub old_platform_fee_bps: u32,
+    pub new_platform_fee_bps: u32,
+    pub old_paused: bool,
+    pub new_paused: bool,
+    pub approver: Address,
 }
 
 /// Event: escrow.created
@@ -1957,8 +1984,8 @@ impl PurchaseManager {
         Ok(())
     }
 
-    /// Update platform configuration (admin only)
-    pub fn set_platform_config(
+    /// Propose platform configuration (admin only)
+    pub fn propose_platform_config(
         env: Env,
         admin: Address,
         treasury: Address,
@@ -1975,22 +2002,64 @@ impl PurchaseManager {
             return Err(PurchaseError::InvalidTreasury);
         }
 
+        let pending_config = PendingPlatformConfigState {
+            treasury: treasury.clone(),
+            platform_fee_bps,
+            paused,
+            proposer: admin.clone(),
+        };
+
+        env.storage().instance().set(&DataKey::PendingPlatformConfig, &pending_config);
+
+        PlatformConfigProposedEvent {
+            treasury,
+            platform_fee_bps,
+            paused,
+            proposer: admin,
+        }
+        .publish(&env);
+
+        Ok(())
+    }
+
+    /// Approve pending platform configuration (admin only, must be different from proposer)
+    pub fn approve_platform_config(
+        env: Env,
+        admin: Address,
+    ) -> Result<(), PurchaseError> {
+        auth::require_admin(&env, &admin)?;
+
+        let pending_config: PendingPlatformConfigState = env
+            .storage()
+            .instance()
+            .get(&DataKey::PendingPlatformConfig)
+            .ok_or(PurchaseError::NoPendingPlatformConfig)?;
+
+        if pending_config.proposer == admin {
+            return Err(PurchaseError::CannotApproveOwnProposal);
+        }
+
         let current_config = get_platform_config(&env)?;
 
         let new_config = PlatformConfig {
             registry: current_config.registry,
-            treasury: treasury.clone(),
-            platform_fee_bps,
-            paused,
+            treasury: pending_config.treasury.clone(),
+            platform_fee_bps: pending_config.platform_fee_bps,
+            paused: pending_config.paused,
             oracle: current_config.oracle,
         };
 
         put_platform_config(&env, &new_config);
+        env.storage().instance().remove(&DataKey::PendingPlatformConfig);
 
         PlatformConfigUpdatedEvent {
-            treasury,
-            platform_fee_bps,
-            paused,
+            old_treasury: current_config.treasury,
+            new_treasury: pending_config.treasury,
+            old_platform_fee_bps: current_config.platform_fee_bps,
+            new_platform_fee_bps: pending_config.platform_fee_bps,
+            old_paused: current_config.paused,
+            new_paused: pending_config.paused,
+            approver: admin,
         }
         .publish(&env);
 
