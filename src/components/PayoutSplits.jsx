@@ -149,9 +149,17 @@ export default function PayoutSplits({ onChange, initialSplits = [] }) {
             <div className="flex-1">
               <input
                 type="text"
+                id={`split-address-${index}`}
                 value={split.address}
                 onChange={(e) => handleAddressChange(index, e.target.value)}
                 placeholder="Stellar wallet address (G...)"
+                aria-label={`Co-author ${index + 1} Stellar wallet address`}
+                aria-describedby={
+                  errors[`address_${index}`]
+                    ? `address-error-${index}`
+                    : undefined
+                }
+                aria-invalid={!!errors[`address_${index}`]}
                 className={`w-full border rounded-md px-3 py-2 text-sm focus:ring-2 focus:ring-blue-100 focus:border-blue-500 ${
                   errors[`address_${index}`]
                     ? "border-red-500"
@@ -159,7 +167,7 @@ export default function PayoutSplits({ onChange, initialSplits = [] }) {
                 }`}
               />
               {errors[`address_${index}`] && (
-                <p className="text-red-600 text-xs mt-1">
+                <p id={`address-error-${index}`} className="text-red-600 text-xs mt-1">
                   {errors[`address_${index}`]}
                 </p>
               )}
@@ -167,11 +175,19 @@ export default function PayoutSplits({ onChange, initialSplits = [] }) {
             <div className="w-24">
               <input
                 type="number"
+                id={`split-percentage-${index}`}
                 value={split.percentage}
                 onChange={(e) => handlePercentageChange(index, e.target.value)}
                 min="0"
                 max="100"
                 step="0.01"
+                aria-label={`Co-author ${index + 1} payout percentage`}
+                aria-describedby={
+                  errors[`percentage_${index}`]
+                    ? `percentage-error-${index}`
+                    : undefined
+                }
+                aria-invalid={!!errors[`percentage_${index}`]}
                 className={`w-full border rounded-md px-3 py-2 text-sm focus:ring-2 focus:ring-blue-100 focus:border-blue-500 ${
                   errors[`percentage_${index}`]
                     ? "border-red-500"
@@ -179,7 +195,7 @@ export default function PayoutSplits({ onChange, initialSplits = [] }) {
                 }`}
               />
               {errors[`percentage_${index}`] && (
-                <p className="text-red-600 text-xs mt-1">
+                <p id={`percentage-error-${index}`} className="text-red-600 text-xs mt-1">
                   {errors[`percentage_${index}`]}
                 </p>
               )}
@@ -189,9 +205,9 @@ export default function PayoutSplits({ onChange, initialSplits = [] }) {
               onClick={() => handleRemoveSplit(index)}
               disabled={splits.length === 1}
               className="p-2 text-red-600 hover:bg-red-50 rounded-md disabled:opacity-30 disabled:cursor-not-allowed mt-1"
-              aria-label="Remove split"
+              aria-label={`Remove co-author split ${index + 1}`}
             >
-              <FaTrash className="text-sm" />
+              <FaTrash aria-hidden="true" className="text-sm" />
             </button>
           </div>
         ))}
@@ -214,14 +230,15 @@ export default function PayoutSplits({ onChange, initialSplits = [] }) {
           <button
             type="button"
             onClick={handleAddSplit}
+            aria-label="Add co-author revenue split"
             className="flex items-center gap-2 text-sm text-blue-600 hover:text-blue-700 font-medium"
           >
-            <FaPlus className="text-xs" />
+            <FaPlus aria-hidden="true" className="text-xs" />
             Add Co-Author
           </button>
         </div>
         {errors.total && (
-          <p className="text-red-600 text-xs mt-2">{errors.total}</p>
+          <p id="splits-total-error" role="alert" className="text-red-600 text-xs mt-2">{errors.total}</p>
         )}
       </div>
     </div>

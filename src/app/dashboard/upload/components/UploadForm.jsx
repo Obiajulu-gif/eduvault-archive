@@ -299,6 +299,7 @@ export default function UploadForm() {
   return (
     <form
       onSubmit={handleSubmit}
+      noValidate
       className="bg-white border border-gray-200 rounded-xl p-8 shadow-sm"
     >
       <h2 className="text-xl font-bold mb-6">Create a New Study Resource</h2>
@@ -319,10 +320,12 @@ export default function UploadForm() {
           className={`w-full border rounded-md px-3 py-2 text-sm focus:ring-2 focus:ring-blue-100 focus:border-blue-500 ${fieldErrors.title ? "border-red-500" : "border-gray-300"}`}
           maxLength={160}
           required
+          aria-required="true"
+          aria-invalid={!!fieldErrors.title}
           aria-describedby={fieldErrors.title ? "title-error" : undefined}
         />
         {fieldErrors.title && (
-          <p id="title-error" className="text-red-600 text-xs mt-1">
+          <p id="title-error" role="alert" className="text-red-600 text-xs mt-1">
             {fieldErrors.title}
           </p>
         )}
@@ -340,12 +343,13 @@ export default function UploadForm() {
           rows={3}
           maxLength={5000}
           className={`w-full border rounded-md px-3 py-2 text-sm resize-none focus:ring-2 focus:ring-blue-100 focus:border-blue-500 ${fieldErrors.description ? "border-red-500" : "border-gray-300"}`}
+          aria-invalid={!!fieldErrors.description}
           aria-describedby={
             fieldErrors.description ? "description-error" : undefined
           }
         />
         {fieldErrors.description && (
-          <p id="description-error" className="text-red-600 text-xs mt-1">
+          <p id="description-error" role="alert" className="text-red-600 text-xs mt-1">
             {fieldErrors.description}
           </p>
         )}
@@ -363,12 +367,12 @@ export default function UploadForm() {
             />
           )}
           {fieldErrors.thumb && (
-            <p id="thumb-error" className="text-red-600 text-xs mt-1">
+            <p id="thumb-error" role="alert" className="text-red-600 text-xs mt-1">
               {fieldErrors.thumb}
             </p>
           )}
           {thumbPreview && showCropper && (
-            <div className="rounded-lg border border-gray-200 bg-gray-50 p-3">
+            <div className="rounded-lg border border-gray-200 bg-gray-50 p-3" role="region" aria-label="Cover image cropper">
               <p className="text-xs text-gray-600 mb-2">
                 Crop cover image (locked 16:9 ratio for marketplace cards)
               </p>
@@ -386,19 +390,25 @@ export default function UploadForm() {
                 />
               </div>
               <div className="mt-3 flex items-center gap-3">
-                <label className="text-xs text-gray-600">Zoom</label>
+                <label htmlFor="cover-zoom-slider" className="text-xs text-gray-600">Zoom</label>
                 <input
+                  id="cover-zoom-slider"
                   type="range"
                   min={1}
                   max={3}
                   step={0.1}
                   value={thumbZoom}
+                  aria-label="Cover image zoom level"
+                  aria-valuemin={1}
+                  aria-valuemax={3}
+                  aria-valuenow={thumbZoom}
                   onChange={(event) => setThumbZoom(Number(event.target.value))}
                 />
                 <button
                   type="button"
                   onClick={() => setShowCropper(false)}
-                  className="ml-auto rounded-md border border-gray-300 px-3 py-1 text-xs hover:bg-white"
+                  aria-label="Apply cropped cover image"
+                  className="ml-auto rounded-md border border-gray-300 px-3 py-1 text-xs hover:bg-white focus-visible:ring-2 focus-visible:ring-blue-500"
                 >
                   Use Crop
                 </button>
@@ -419,7 +429,8 @@ export default function UploadForm() {
               <button
                 type="button"
                 onClick={() => setShowCropper(true)}
-                className="rounded-md border border-gray-300 px-3 py-2 text-xs hover:bg-gray-100"
+                aria-label="Re-crop cover image"
+                className="rounded-md border border-gray-300 px-3 py-2 text-xs hover:bg-gray-100 focus-visible:ring-2 focus-visible:ring-blue-500"
               >
                 Re-crop cover
               </button>
@@ -430,7 +441,8 @@ export default function UploadForm() {
                   replaceThumbPreview(null);
                   setShowCropper(false);
                 }}
-                className="rounded-md border border-gray-300 px-3 py-2 text-xs hover:bg-gray-100 text-red-600"
+                aria-label="Remove cover image"
+                className="rounded-md border border-gray-300 px-3 py-2 text-xs hover:bg-gray-100 text-red-600 focus-visible:ring-2 focus-visible:ring-red-500"
               >
                 Remove
               </button>
@@ -440,29 +452,31 @@ export default function UploadForm() {
       </div>
 
       <div className="mb-5">
-        <label className="block text-sm font-medium mb-2">
+        <label htmlFor="file-upload" className="block text-sm font-medium mb-2">
           Upload Your File
         </label>
-        <p className="text-xs text-gray-500 mb-2">
+        <p id="file-upload-hint" className="text-xs text-gray-500 mb-2">
           Max file size: 50MB. Accepted types: PDF, ZIP, EPUB, MP4.
         </p>
         <div
-          className={`border-2 border-dashed rounded-lg p-6 text-center transition ${fieldErrors.file ? "border-red-500 hover:border-red-600 bg-red-50" : "border-gray-300 hover:border-blue-400"}`}
+          className={`border-2 border-dashed rounded-lg p-6 text-center transition focus-within:ring-2 focus-within:ring-blue-500 focus-within:ring-offset-2 ${fieldErrors.file ? "border-red-500 hover:border-red-600 bg-red-50" : "border-gray-300 hover:border-blue-400"}`}
         >
           <input
             type="file"
             id="file-upload"
-            className="hidden"
+            className="sr-only"
             onChange={handleDocChange}
             accept=".pdf,.zip,.epub,.mp4"
             aria-label="Upload document file"
-            aria-describedby={fieldErrors.file ? "file-error" : undefined}
+            aria-required="true"
+            aria-invalid={!!fieldErrors.file}
+            aria-describedby={fieldErrors.file ? "file-error file-upload-hint" : "file-upload-hint"}
           />
           <label
             htmlFor="file-upload"
             className="cursor-pointer flex flex-col items-center justify-center"
           >
-            <FaCloudUploadAlt className="text-3xl text-blue-500 mb-2" />
+            <FaCloudUploadAlt aria-hidden="true" className="text-3xl text-blue-500 mb-2" />
             <p className="text-sm text-gray-600 mb-2">
               {docFileName ? (
                 <span className="font-medium text-gray-800">{docFileName}</span>
@@ -481,7 +495,7 @@ export default function UploadForm() {
           </label>
         </div>
         {fieldErrors.file && (
-          <p id="file-error" className="text-red-600 text-xs mt-1">
+          <p id="file-error" role="alert" className="text-red-600 text-xs mt-1">
             {fieldErrors.file}
           </p>
         )}
@@ -494,6 +508,7 @@ export default function UploadForm() {
             id="material-category"
             value={category}
             onChange={(e) => setCategory(e.target.value)}
+            aria-label="Material category"
             className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:ring-2 focus:ring-blue-100 focus:border-blue-500"
           >
             <option value="">Select a category</option>
@@ -514,14 +529,16 @@ export default function UploadForm() {
             type="number"
             value={price}
             onChange={(e) => setPrice(e.target.value)}
-            placeholder="amount"
+            placeholder="amount in XLM"
             min="0"
             step="0.01"
+            aria-label="Material price in XLM"
+            aria-invalid={!!fieldErrors.price}
             className={`w-full border rounded-md px-3 py-2 text-sm focus:ring-2 focus:ring-blue-100 focus:border-blue-500 ${fieldErrors.price ? "border-red-500" : "border-gray-300"}`}
             aria-describedby={fieldErrors.price ? "price-error" : undefined}
           />
           {fieldErrors.price && (
-            <p id="price-error" className="text-red-600 text-xs mt-1">
+            <p id="price-error" role="alert" className="text-red-600 text-xs mt-1">
               {fieldErrors.price}
             </p>
           )}
@@ -532,6 +549,7 @@ export default function UploadForm() {
             id="material-usage-rights"
             value={usageRights}
             onChange={(e) => setUsageRights(e.target.value)}
+            aria-label="Usage rights and licensing"
             className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:ring-2 focus:ring-blue-100 focus:border-blue-500"
           >
             <option>Standard License (download only)</option>
@@ -545,6 +563,7 @@ export default function UploadForm() {
             id="material-level"
             value={level}
             onChange={(e) => setLevel(e.target.value)}
+            aria-label="Educational difficulty level"
             className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:ring-2 focus:ring-blue-100 focus:border-blue-500"
           >
             <option value="">Select Level</option>
@@ -556,33 +575,35 @@ export default function UploadForm() {
         </div>
       </div>
 
-      <div className="mb-6">
-        <label className="block text-sm font-medium mb-2">Visibility</label>
+      <fieldset className="mb-6">
+        <legend className="block text-sm font-medium mb-2">Visibility</legend>
         <div className="flex flex-col gap-2 text-sm">
-          <label className="flex items-center gap-2">
+          <label className="flex items-center gap-2 cursor-pointer">
             <input
               type="radio"
-              id="public"
+              id="visibility-public"
               name="visibility"
+              value="public"
               checked={visibility === "public"}
               onChange={() => setVisibility("public")}
               className="accent-blue-600"
             />
-            Public (default) - Anyone can view or download.
+            <span>Public (default) - Anyone can view or download.</span>
           </label>
-          <label className="flex items-center gap-2">
+          <label className="flex items-center gap-2 cursor-pointer">
             <input
               type="radio"
-              id="private"
+              id="visibility-private"
               name="visibility"
+              value="private"
               checked={visibility === "private"}
               onChange={() => setVisibility("private")}
               className="accent-blue-600"
             />
-            Private - Only you and invited users can access.
+            <span>Private - Only you and invited users can access.</span>
           </label>
         </div>
-      </div>
+      </fieldset>
 
       <div className="mb-6">
         <PayoutSplits
@@ -593,14 +614,22 @@ export default function UploadForm() {
           initialSplits={payoutSplits || []}
         />
         {fieldErrors.payoutSplits && (
-          <p className="text-red-600 text-xs mt-2">
+          <p id="payout-splits-error" role="alert" className="text-red-600 text-xs mt-2">
             {fieldErrors.payoutSplits}
           </p>
         )}
       </div>
 
-      {error && <p className="text-red-600 text-sm mb-4">{error}</p>}
-      {success && <p className="text-green-600 text-sm mb-4">{success}</p>}
+      {error && (
+        <div role="alert" aria-live="assertive" className="p-3 mb-4 bg-red-50 border border-red-200 rounded-md">
+          <p className="text-red-600 text-sm">{error}</p>
+        </div>
+      )}
+      {success && (
+        <div role="status" aria-live="polite" className="p-3 mb-4 bg-green-50 border border-green-200 rounded-md">
+          <p className="text-green-600 text-sm">{success}</p>
+        </div>
+      )}
 
       <div className="mb-5">
         <TransactionStatusPanel
@@ -614,7 +643,17 @@ export default function UploadForm() {
         <button
           type="submit"
           disabled={submitting}
-          className="px-5 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition text-sm font-medium disabled:opacity-60"
+          aria-busy={submitting}
+          aria-label={
+            activeTransaction.status === TransactionStatus.PendingConfirmation
+              ? "Awaiting transaction confirmation"
+              : submitting
+                ? "Submitting material upload"
+                : savedUploadData
+                  ? "Retry publishing material"
+                  : "Submit material upload"
+          }
+          className="px-5 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition text-sm font-medium disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2"
         >
           {activeTransaction.status === TransactionStatus.PendingConfirmation
             ? "Awaiting confirmation..."
