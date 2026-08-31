@@ -489,3 +489,80 @@ export async function getOutboxStats() {
     byIntentType: Object.fromEntries(byIntentType.map(s => [s._id, s.count])),
   };
 }
+
+export async function getOutboxHealth(db) {
+  const database = db || await getDb();
+  const now = new Date();
+
+  const statusCounts = await database.collection(OUTBOX_COLLECTION).aggregate([
+    {
+      $group: {
+        _id: '$status',
+        count: { $sum: 1 },
+      },
+    },
+  ]).toArray();
+
+  const byStatus = Object.fromEntries(statusCounts.map(s => [s._id, s.count]));
+
+  const oldestUnresolved = await database.collection(OUTBOX_COLLECTION)
+    .find({ status: { $ne: 'delivered' } })
+    .sort({ createdAt: 1 })
+    .limit(1)
+    .toArray();
+
+  let oldestUnresolvedAgeMs = 0;
+  if (oldestUnresolved.length > 0) {
+    oldestUnresolvedAgeMs = now.getTime() - oldestUnresolved[0].createdAt.getTime();
+  }
+
+  return {
+    pending: byStatus['pending'] || 0,
+    leased: byStatus['leased'] || 0,
+    failed: byStatus['dead_letter'] || 0,
+    delivered: byStatus['delivered'] || 0,
+    oldestUnresolvedAgeMs,
+  };
+}
+export async function retryFailedOutboxEntry(db, entryId, authorizedBy) {
+  const database = db || await getDb();
+  
+  if (!authorizedBy) {
+    throw new Error('Retry requires an authorizedBy identifier for audit purposes');
+  }
+
+  const intent = await database.collection(OUTBOX_COLLECTION).findOne({ _id: entryId });
+  if (!intent) return { outcome: 'not_found' };
+  
+  if (intent.status !== 'dead_letter') {
+    return { outcome: 'not_failed', intent };
+  }
+
+  const now = new Date();
+  
+  const result = await database.collection(OUTBOX_COLLECTION).findOneAndUpdate(
+    { _id: entryId, status: 'dead_letter' },
+    {
+      $set: {
+        status: 'pending',
+        attemptCount: 0,
+        nextAttemptAt: now,
+        lastError: `Manual retry by ${authorizedBy}`,
+        updatedAt: now
+      }
+    },
+    { returnDocument: 'after' }
+  );
+
+  if (result) {
+    auditLog({
+      event: 'outbox_manual_retry',
+      actor: authorizedBy,
+      intentId: String(entryId),
+      deliveryId: intent.deliveryId
+    });
+    return { outcome: 'retried', intent: result };
+  }
+
+  return { outcome: 'conflict' };
+}

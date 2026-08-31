@@ -188,6 +188,18 @@ export function WalletProvider({ children }) {
     };
   }, [clearPersistedSession, loadPersistedSession, persistSession]);
 
+  const apiLogout = useCallback(async () => {
+    try {
+      await fetch('/api/auth/logout', { method: 'POST' });
+    } catch (err) {
+      console.error('Logout failed', err);
+    }
+    // Redirect to home if on dashboard
+    if (window.location.pathname.startsWith('/dashboard')) {
+      window.location.href = '/';
+    }
+  }, []);
+
   useEffect(() => {
     const unsubSelected = StellarWalletsKit.on(
       KitEventType.WALLET_SELECTED,
@@ -215,6 +227,13 @@ export function WalletProvider({ children }) {
           return;
         }
 
+        const currentConnectedAddress = stateRef.current.status === WalletStatus.Connected ? stateRef.current.session.address : null;
+
+        // If the address changed (account switch), we must invalidate the previous session.
+        if (currentConnectedAddress && currentConnectedAddress !== address) {
+          apiLogout();
+        }
+
         setState({
           status: WalletStatus.Connected,
           session: {
@@ -237,6 +256,7 @@ export function WalletProvider({ children }) {
         lastWalletIdRef.current = null;
         clearPersistedSession();
         setState({ status: WalletStatus.Idle });
+        apiLogout();
       },
     );
 
@@ -245,7 +265,7 @@ export function WalletProvider({ children }) {
       unsubState();
       unsubDisconnect();
     };
-  }, [clearPersistedSession, persistSession]);
+  }, [clearPersistedSession, persistSession, apiLogout]);
 
   // -------------------------------------------------------------------------
   // Actions
@@ -297,7 +317,8 @@ export function WalletProvider({ children }) {
     lastWalletIdRef.current = null;
     clearPersistedSession();
     setState({ status: WalletStatus.Idle });
-  }, [clearPersistedSession]);
+    apiLogout();
+  }, [clearPersistedSession, apiLogout]);
 
   const assertConnected = useCallback(() => {
     const current = stateRef.current;
