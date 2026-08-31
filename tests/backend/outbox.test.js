@@ -439,4 +439,42 @@ describe('outbox', () => {
       await expect(replaySource('material', 'm-rl', 'burst-actor-2')).rejects.toThrow(/rate limit/i);
     });
   });
+
+  describe('terminal failure and admin retry', () => {
+    it('exhausted outbox entries transition to dead_letter and can be manually retried', async () => {
+      const db = await getDb();
+      // Enqueue a test entry
+      const entry = await enqueueSideEffect({
+        sourceAggregate: 'test-retry',
+        sourceId: 'r1',
+        intent: { type: 'test' }
+      });
+
+      // Force attemptCount to one below max
+      await db.collection('side_effect_outbox').updateOne(
+        { _id: entry._id },
+        { $set: { attemptCount: 4, nextAttemptAt: new Date(Date.now() - 1000) } } // Assuming maxAttempts is 5
+      );
+
+      // Leasing it should push attemptCount to 5, transitioning it to dead_letter, returning null
+      const leased = await leaseNextIntent('worker-1', { maxAttempts: 5, leaseTtlMs: 1000 });
+      expect(leased).toBeNull(); // Should return null because it's dead lettered
+
+      const dead = await db.collection('side_effect_outbox').findOne({ _id: entry._id });
+      expect(dead.status).toBe('dead_letter');
+      expect(dead.lastError).toBe('Max attempts exceeded');
+
+      // Manual retry
+      const { retryFailedOutboxEntry } = await import('../../src/lib/backend/outbox.js');
+      const retryResult = await retryFailedOutboxEntry(db, entry._id, 'admin-123');
+      expect(retryResult.outcome).toBe('retried');
+      expect(retryResult.intent.status).toBe('pending');
+      expect(retryResult.intent.attemptCount).toBe(0);
+
+      // Should be leasable again
+      const releasable = await leaseNextIntent('worker-2', { maxAttempts: 5, leaseTtlMs: 1000 });
+      expect(releasable._id.toString()).toBe(entry._id.toString());
+    });
+  });
 });
+
