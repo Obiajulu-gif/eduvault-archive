@@ -194,6 +194,35 @@ export function buildMarketplaceDiscoveryQuery(searchParams, { now = new Date() 
   return query;
 }
 
+/**
+ * Rank a page of search results so materials the buyer already owns sink
+ * below ones they don't, while marking every item with `owned` (#707).
+ *
+ * Product rule: discovery value comes first — a buyer browsing the
+ * marketplace is looking for something new, so already-owned materials are
+ * demoted rather than removed (a buyer revisiting a listing they own can
+ * still find and re-open it, just after the unowned results). The
+ * reordering is a stable partition: relative order within "owned" and
+ * "not owned" is preserved from the incoming (already DB-sorted) list, so
+ * this only reranks within a page and never disturbs the primary sort
+ * (price/rating/newest) used to compute pagination cursors.
+ *
+ * @param {object[]} items - Already-sanitized result documents for one page.
+ * @param {Set<string>} ownedIds - Material ids the viewing wallet owns.
+ * @returns {object[]} the same items, each with an `owned` boolean, reordered.
+ */
+export function applyOwnershipRanking(items, ownedIds) {
+  const owned = [];
+  const notOwned = [];
+  for (const item of items) {
+    const materialId = String(item?.materialId ?? item?._id ?? "");
+    const isOwned = ownedIds.has(materialId);
+    const marked = { ...item, owned: isOwned };
+    (isOwned ? owned : notOwned).push(marked);
+  }
+  return [...notOwned, ...owned];
+}
+
 export function buildMarketplaceSort(sortBy) {
   switch (sortBy) {
     case "price_asc":

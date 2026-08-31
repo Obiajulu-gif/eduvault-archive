@@ -127,15 +127,25 @@ When a buyer requests a material download, the backend checks `entitlement_cache
 - [Purchase Flow Architecture](purchase-flow-architecture.md)
 - [Stellar Integration Guide](stellar-integration.md)
 
-## Stale quote invalidation (#681)
+## Checkout quote binding and expiry (#681, #701)
 
 Every material carries a monotonic **sale-terms version** in the registry (`MaterialRegistry::get_sale_terms_version`), bumped on registration and on every `update_sale_terms`.
 
-- Buyers/UIs call `PurchaseManager::record_quote(buyer, material_id)` when a quote is rendered; the current version is stored for that `(buyer, material_id)`.
-- At purchase time the stored version is compared against the registry's current version; a mismatch rejects the attempt with `StaleSaleTermsQuote` so the buyer re-quotes and sees the refreshed price/asset before signing.
-- `PurchaseManager::verify_quote_version(material_id, quoted_version)` exposes the check directly for UI preflight.
+- Buyers/UIs call `PurchaseManager::record_quote(buyer, material_id, asset)` when a quote is rendered. The contract snapshots that asset's current price, the registry's sale-terms version, and a deterministic expiry (`issued_at + QUOTE_TTL_SECONDS`, currently 15 minutes) into a `QuoteRecord` keyed by `(buyer, material_id)`.
+- At purchase time, if a quote was recorded, `purchase()` rejects the attempt when:
+  - the asset differs from what was quoted (`StaleQuoteAsset`),
+  - the price differs from what was quoted (`InvalidQuoteAmount`),
+  - the sale-terms version has moved since the quote was recorded (`StaleSaleTermsQuote`), or
+  - the quote's expiry has passed (`QuoteExpired`).
+- Recording a quote is optional — a buyer who never calls `record_quote` purchases against the material's live terms with no additional binding, exactly as before #701.
+- A quote is scoped to the wallet that recorded it: another buyer's purchase is never affected by someone else's stale or expired quote.
+- `PurchaseManager::verify_quote_version(material_id, quoted_version)` still exposes the version-only check directly, unchanged, for callers that only need that narrower comparison.
 
-Price updates, asset changes, and stale-quote submissions are all rejected by the same version guard.
+Price updates, asset changes, elapsed quote expiry, and stale sale-terms submissions are all rejected before any funds move.
+
+## Checkout preflight (#706)
+
+`PurchaseManager::simulate_purchase(buyer, material_id, asset, expected_amount)` runs the exact same validation `purchase()` does — contract-paused, asset-allowlisted, existing entitlement, pending mobile checkout, material-active, price/asset match, and recorded-quote staleness/expiry — through a single shared internal check, so the two paths can never validate differently. It requires no wallet auth and writes no state, so the frontend can call it (via `try_simulate_purchase` on the generated client) before the buyer's wallet is even asked to sign, and show the specific reason a checkout would fail.
 
 ## Canonical asset decimal handling (#710)
 

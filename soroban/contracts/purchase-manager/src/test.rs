@@ -201,7 +201,12 @@ fn install_and_init_contract<'a>(
     (contract_id, client)
 }
 
-fn setup_purchase(
+/// Registers a contract, registry, and an Active material with a single
+/// accepted asset (1_000_000 units), but does not purchase it — used by
+/// tests that need to drive `record_quote` / `purchase` / `simulate_purchase`
+/// themselves (#701, #706) instead of starting from an already-completed
+/// purchase.
+fn setup_unpurchased(
     env: &Env,
 ) -> (
     Address,
@@ -210,7 +215,8 @@ fn setup_purchase(
     Address,
     Address,
     BytesN<32>,
-    u64,
+    MockRegistryClient<'_>,
+    Address,
 ) {
     env.mock_all_auths();
 
@@ -257,6 +263,32 @@ fn setup_purchase(
 
     let (contract_id, client) = install_and_init_contract(env, &admin, &registry, &treasury, 500);
     client.set_asset_allowed(&admin, &asset, &AssetKind::Token, &true);
+
+    (
+        contract_id,
+        client,
+        buyer,
+        creator,
+        asset,
+        material_id,
+        registry_client,
+        admin,
+    )
+}
+
+fn setup_purchase(
+    env: &Env,
+) -> (
+    Address,
+    PurchaseManagerClient<'_>,
+    Address,
+    Address,
+    Address,
+    BytesN<32>,
+    u64,
+) {
+    let (contract_id, client, buyer, creator, asset, material_id, _registry_client, _admin) =
+        setup_unpurchased(env);
 
     let purchase_id = client.purchase(
         &buyer,
@@ -4035,38 +4067,346 @@ fn test_partial_bulk_refund_preserves_remaining_entitlement_payment_state() {
     }
 }
 
- # [ t e s t ] 
- f n   t e s t _ p l a t f o r m _ c o n f i g _ m u l t i s t e p _ a p p r o v a l ( )   { 
-         l e t   e n v   =   E n v : : d e f a u l t ( ) ; 
-         e n v . m o c k _ a l l _ a u t h s ( ) ; 
- 
-         l e t   a d m i n   =   A d d r e s s : : g e n e r a t e ( & e n v ) ; 
-         l e t   a d m i n 2   =   A d d r e s s : : g e n e r a t e ( & e n v ) ; 
-         l e t   r e g i s t r y   =   A d d r e s s : : g e n e r a t e ( & e n v ) ; 
-         l e t   t r e a s u r y   =   A d d r e s s : : g e n e r a t e ( & e n v ) ; 
-         l e t   n e w _ t r e a s u r y   =   A d d r e s s : : g e n e r a t e ( & e n v ) ; 
- 
-         l e t   ( _ ,   c l i e n t )   =   i n s t a l l _ a n d _ i n i t _ c o n t r a c t ( & e n v ,   & a d m i n ,   & r e g i s t r y ,   & t r e a s u r y ,   5 0 0 ) ; 
- 
-         / /   a d m i n   p r o p o s e s   n e w   c o n f i g 
-         c l i e n t . p r o p o s e _ p l a t f o r m _ c o n f i g ( & a d m i n ,   & n e w _ t r e a s u r y ,   & 6 0 0 ,   & f a l s e ) ; 
- 
-         / /   a d m i n   c a n n o t   a p p r o v e   t h e i r   o w n   p r o p o s a l 
-         l e t   r e s u l t   =   c l i e n t . t r y _ a p p r o v e _ p l a t f o r m _ c o n f i g ( & a d m i n ) ; 
-         a s s e r t _ e q ! ( r e s u l t ,   E r r ( O k ( P u r c h a s e E r r o r : : C a n n o t A p p r o v e O w n P r o p o s a l ) ) ) ; 
- 
-         / /   t r a n s f e r   a d m i n   t o   a d m i n 2 
-         c l i e n t . t r a n s f e r _ a d m i n ( & a d m i n ,   & a d m i n 2 ,   & 8 6 4 0 0 ) ; 
-         e n v . l e d g e r ( ) . s e t _ t i m e s t a m p ( e n v . l e d g e r ( ) . t i m e s t a m p ( ) . s a t u r a t i n g _ a d d ( 8 6 4 0 1 ) ) ; 
-         c l i e n t . a c c e p t _ a d m i n ( & a d m i n 2 ) ; 
- 
-         / /   a d m i n 2   a p p r o v e s   t h e   p r o p o s a l 
-         c l i e n t . a p p r o v e _ p l a t f o r m _ c o n f i g ( & a d m i n 2 ) ; 
- 
-         / /   V e r i f y   t h e   c o n f i g   i s   u p d a t e d 
-         l e t   c o n f i g   =   c l i e n t . g e t _ p l a t f o r m _ c o n f i g ( ) ; 
-         a s s e r t _ e q ! ( c o n f i g . t r e a s u r y ,   n e w _ t r e a s u r y ) ; 
-         a s s e r t _ e q ! ( c o n f i g . p l a t f o r m _ f e e _ b p s ,   6 0 0 ) ; 
- } 
-  
- 
+#[test]
+fn test_platform_config_multistep_approval() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let admin2 = Address::generate(&env);
+    let registry = Address::generate(&env);
+    let treasury = Address::generate(&env);
+    let new_treasury = Address::generate(&env);
+
+    let (_, client) = install_and_init_contract(&env, &admin, &registry, &treasury, 500);
+
+    // admin proposes new config
+    client.propose_platform_config(&admin, &new_treasury, &600, &false);
+
+    // admin cannot approve their own proposal
+    let result = client.try_approve_platform_config(&admin);
+    assert_eq!(result, Err(Ok(PurchaseError::CannotApproveOwnProposal)));
+
+    // transfer admin to admin2
+    client.transfer_admin(&admin, &admin2, &86400);
+    env.ledger().set_timestamp(env.ledger().timestamp().saturating_add(86401));
+    client.accept_admin(&admin2);
+
+    // admin2 approves the proposal
+    client.approve_platform_config(&admin2);
+
+    // Verify the config is updated
+    let config = client.get_platform_config().unwrap();
+    assert_eq!(config.treasury, new_treasury);
+    assert_eq!(config.platform_fee_bps, 600);
+}
+
+// ── Checkout quote expiry & binding (#701) ─────────────────────────────────
+
+#[test]
+fn record_quote_binds_price_asset_version_and_expiry() {
+    let env = Env::default();
+    let (_contract_id, client, buyer, _creator, asset, material_id, _registry, _admin) =
+        setup_unpurchased(&env);
+
+    let quote = client.record_quote(&buyer, &material_id, &asset);
+
+    assert_eq!(quote.material_id, material_id);
+    assert_eq!(quote.buyer, buyer);
+    assert_eq!(quote.asset, asset);
+    assert_eq!(quote.amount, 1_000_000);
+    assert_eq!(quote.sale_terms_version, 1);
+    assert_eq!(quote.issued_at, env.ledger().timestamp());
+    assert_eq!(quote.expires_at, quote.issued_at + QUOTE_TTL_SECONDS);
+}
+
+#[test]
+fn purchase_succeeds_with_valid_unexpired_quote() {
+    let env = Env::default();
+    let (_contract_id, client, buyer, _creator, asset, material_id, _registry, _admin) =
+        setup_unpurchased(&env);
+
+    client.record_quote(&buyer, &material_id, &asset);
+
+    // Still well within QUOTE_TTL_SECONDS.
+    let mut ledger = env.ledger().get();
+    ledger.timestamp += QUOTE_TTL_SECONDS / 2;
+    env.ledger().set(ledger);
+
+    client.purchase(
+        &buyer,
+        &material_id,
+        &asset,
+        &1_000_000,
+        &sample_transaction_id(&env),
+    );
+    assert!(client.has_entitlement(&material_id, &buyer));
+}
+
+#[test]
+fn purchase_fails_when_sale_terms_version_changes_after_quote() {
+    let env = Env::default();
+    let (_contract_id, client, buyer, _creator, asset, material_id, registry, _admin) =
+        setup_unpurchased(&env);
+
+    client.record_quote(&buyer, &material_id, &asset);
+
+    // Creator updates sale terms (price/asset unchanged here, but the
+    // version bumps — e.g. a metadata or rights update): the registry's
+    // sale-terms version moves on from what the quote captured.
+    registry.set_material_immutable(
+        &material_id,
+        &MockImmutableSnapshot {
+            metadata_uri: soroban_sdk::String::from_str(&env, "ipfs://metadata-v2"),
+            metadata_hash: bytes32(&env, 11),
+            rights_hash: bytes32(&env, 22),
+        },
+        &2,
+    );
+
+    let result = client.try_purchase(
+        &buyer,
+        &material_id,
+        &asset,
+        &1_000_000,
+        &sample_transaction_id(&env),
+    );
+    assert_eq!(result, Err(Ok(PurchaseError::StaleSaleTermsQuote)));
+}
+
+#[test]
+fn purchase_fails_when_quote_asset_differs_from_recorded() {
+    let env = Env::default();
+    let (_contract_id, client, buyer, creator, asset_a, material_id, registry, admin) =
+        setup_unpurchased(&env);
+
+    // A second accepted asset for the same material, allowlisted at the
+    // contract level just like the first.
+    let asset_b = env.register(MockAsset, ());
+    client.set_asset_allowed(&admin, &asset_b, &AssetKind::Token, &true);
+
+    let material = MaterialRecord {
+        material_id: material_id.clone(),
+        creator: creator.clone(),
+        paused: false,
+        status: MaterialStatus::Active,
+        quotes: vec![
+            &env,
+            AssetQuote {
+                asset: asset_a.clone(),
+                amount: 1_000_000,
+            },
+            AssetQuote {
+                asset: asset_b.clone(),
+                amount: 2_000_000,
+            },
+        ],
+        payout_shares: vec![
+            &env,
+            PayoutShare {
+                recipient: creator.clone(),
+                share_bps: 10_000,
+            },
+        ],
+    };
+    registry.set_material(&material_id, &material);
+
+    client.record_quote(&buyer, &material_id, &asset_a);
+
+    // Buyer switches to the other accepted asset without re-quoting.
+    let result = client.try_purchase(
+        &buyer,
+        &material_id,
+        &asset_b,
+        &2_000_000,
+        &sample_transaction_id(&env),
+    );
+    assert_eq!(result, Err(Ok(PurchaseError::StaleQuoteAsset)));
+}
+
+#[test]
+fn purchase_fails_when_quote_expired() {
+    let env = Env::default();
+    let (_contract_id, client, buyer, _creator, asset, material_id, _registry, _admin) =
+        setup_unpurchased(&env);
+
+    client.record_quote(&buyer, &material_id, &asset);
+
+    let mut ledger = env.ledger().get();
+    ledger.timestamp += QUOTE_TTL_SECONDS + 1;
+    env.ledger().set(ledger);
+
+    let result = client.try_purchase(
+        &buyer,
+        &material_id,
+        &asset,
+        &1_000_000,
+        &sample_transaction_id(&env),
+    );
+    assert_eq!(result, Err(Ok(PurchaseError::QuoteExpired)));
+}
+
+/// A quote is scoped to the wallet that recorded it (#701 acceptance
+/// criteria: "wrong buyer"). A different buyer who never called
+/// `record_quote` is unaffected by another wallet's (even expired) quote.
+#[test]
+fn quote_is_scoped_to_the_recording_buyer() {
+    let env = Env::default();
+    let (_contract_id, client, buyer_a, _creator, asset, material_id, _registry, _admin) =
+        setup_unpurchased(&env);
+    let buyer_b = Address::generate(&env);
+
+    client.record_quote(&buyer_a, &material_id, &asset);
+
+    // Expire buyer_a's quote.
+    let mut ledger = env.ledger().get();
+    ledger.timestamp += QUOTE_TTL_SECONDS + 1;
+    env.ledger().set(ledger);
+
+    // buyer_b never recorded a quote, so buyer_a's expiry doesn't touch them.
+    client.purchase(
+        &buyer_b,
+        &material_id,
+        &asset,
+        &1_000_000,
+        &sample_transaction_id(&env),
+    );
+    assert!(client.has_entitlement(&material_id, &buyer_b));
+
+    // buyer_a is still blocked by their own expired quote.
+    let result = client.try_purchase(
+        &buyer_a,
+        &material_id,
+        &asset,
+        &1_000_000,
+        &sample_transaction_id(&env),
+    );
+    assert_eq!(result, Err(Ok(PurchaseError::QuoteExpired)));
+}
+
+#[test]
+fn purchase_succeeds_without_ever_recording_a_quote() {
+    let env = Env::default();
+    let (_contract_id, client, buyer, _creator, asset, material_id, _registry, _admin) =
+        setup_unpurchased(&env);
+
+    // record_quote is optional: purchasing without ever calling it must
+    // still work exactly as before #701.
+    client.purchase(
+        &buyer,
+        &material_id,
+        &asset,
+        &1_000_000,
+        &sample_transaction_id(&env),
+    );
+    assert!(client.has_entitlement(&material_id, &buyer));
+}
+
+// ── Read-only checkout preflight (#706) ────────────────────────────────────
+
+#[test]
+fn simulate_purchase_returns_ok_for_valid_checkout() {
+    let env = Env::default();
+    let (_contract_id, client, buyer, _creator, asset, material_id, _registry, _admin) =
+        setup_unpurchased(&env);
+
+    let result = client.simulate_purchase(&buyer, &material_id, &asset, &1_000_000);
+    assert_eq!(result, 1);
+
+    // A pure read: no entitlement was created by the simulation.
+    assert!(!client.has_entitlement(&material_id, &buyer));
+}
+
+#[test]
+fn simulate_purchase_reports_entitlement_already_exists() {
+    let env = Env::default();
+    let (_contract_id, client, buyer, _creator, asset, material_id, _registry, _admin) =
+        setup_unpurchased(&env);
+
+    client.purchase(
+        &buyer,
+        &material_id,
+        &asset,
+        &1_000_000,
+        &sample_transaction_id(&env),
+    );
+
+    let result = client.try_simulate_purchase(&buyer, &material_id, &asset, &1_000_000);
+    assert_eq!(result, Err(Ok(PurchaseError::EntitlementAlreadyExists)));
+}
+
+#[test]
+fn simulate_purchase_reports_price_mismatch() {
+    let env = Env::default();
+    let (_contract_id, client, buyer, _creator, asset, material_id, _registry, _admin) =
+        setup_unpurchased(&env);
+
+    let result = client.try_simulate_purchase(&buyer, &material_id, &asset, &999);
+    assert_eq!(result, Err(Ok(PurchaseError::InvalidQuoteAmount)));
+}
+
+#[test]
+fn simulate_purchase_reports_material_not_active() {
+    let env = Env::default();
+    let (_contract_id, client, buyer, creator, asset, material_id, registry, _admin) =
+        setup_unpurchased(&env);
+
+    let material = MaterialRecord {
+        material_id: material_id.clone(),
+        creator: creator.clone(),
+        paused: false,
+        status: MaterialStatus::Paused,
+        quotes: vec![
+            &env,
+            AssetQuote {
+                asset: asset.clone(),
+                amount: 1_000_000,
+            },
+        ],
+        payout_shares: vec![
+            &env,
+            PayoutShare {
+                recipient: creator.clone(),
+                share_bps: 10_000,
+            },
+        ],
+    };
+    registry.set_material(&material_id, &material);
+
+    let result = client.try_simulate_purchase(&buyer, &material_id, &asset, &1_000_000);
+    assert_eq!(result, Err(Ok(PurchaseError::MaterialNotActive)));
+}
+
+#[test]
+fn simulate_purchase_reports_asset_not_accepted() {
+    let env = Env::default();
+    let (_contract_id, client, buyer, _creator, _asset, material_id, _registry, admin) =
+        setup_unpurchased(&env);
+    // Allowlisted at the contract level, but not part of this material's
+    // own quotes — isolates AssetNotAcceptedForMaterial from AssetNotAllowed.
+    let other_asset = env.register(MockAsset, ());
+    client.set_asset_allowed(&admin, &other_asset, &AssetKind::Token, &true);
+
+    let result = client.try_simulate_purchase(&buyer, &material_id, &other_asset, &1_000_000);
+    assert_eq!(result, Err(Ok(PurchaseError::AssetNotAcceptedForMaterial)));
+}
+
+/// simulate_purchase() must be a pure read: no wallet auth and no state
+/// mutation, so the frontend can call it before a wallet is even connected.
+#[test]
+fn simulate_purchase_does_not_mutate_state_or_require_auth() {
+    let env = Env::default();
+    let (_contract_id, client, buyer, _creator, asset, material_id, _registry, _admin) =
+        setup_unpurchased(&env);
+
+    // Drop every recorded auth from setup: the simulate call below must
+    // succeed without any of them.
+    env.set_auths(&[]);
+
+    let result = client.simulate_purchase(&buyer, &material_id, &asset, &1_000_000);
+    assert_eq!(result, 1);
+
+    // Still no entitlement, no pending checkout — nothing was written.
+    assert!(!client.has_entitlement(&material_id, &buyer));
+}
+
