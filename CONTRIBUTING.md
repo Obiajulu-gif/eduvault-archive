@@ -21,12 +21,31 @@ EduVault is an in-development educational content marketplace with a current web
 
 ## Local Setup
 
+**Package Manager**: `npm` is the canonical package manager for this repository. Please do not use `pnpm`, `bun`, or `yarn`. The canonical lockfile is `package-lock.json`.
+
 ```bash
 npm install
 cp .env.example .env.local
 docker compose up -d mongodb
 npm run dev
 ```
+
+### Windows Setup Notes
+If you are using Windows PowerShell, you may encounter script execution policy errors when running `npx` or `npm` scripts. To resolve this, run PowerShell as Administrator and enable script execution:
+```powershell
+Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
+```
+Alternatively, use `cmd.exe` or Git Bash for development commands.
+
+## CI Command Contract
+
+GitHub Actions CI uses deterministic dependency installation. Pull requests must pass the following mandatory quality gates:
+- **Lint**: `npm run lint`
+- **Build**: `npm run build`
+- **Typecheck**: `npm run typecheck`
+- **Tests**: `npm run test:frontend`, `npm run test:backend`, `npm run test:contracts`, `npm run test:integration`
+
+The CI environment installs dependencies using `npm ci`. Ensure your `package-lock.json` is up-to-date and committed. Pull requests failing these gates will be blocked from merging.
 
 ### Soroban Contract Setup
 

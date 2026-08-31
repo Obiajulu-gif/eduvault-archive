@@ -96,7 +96,7 @@ jobs:
 
       - name: Install dependencies
         if: steps.detect_solidity.outputs.present == 'true'
-        run: npm install
+        run: npm ci
 
       - name: Detect Solidity toolchains
         id: detect_toolchains
