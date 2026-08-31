@@ -46,6 +46,13 @@ export function middleware(request) {
   const requestHeaders = new Headers(request.headers);
   requestHeaders.set('x-nonce', nonce);
 
+  // If the user tries to access /dashboard but has no auth_token, redirect them.
+  if (request.nextUrl.pathname.startsWith('/dashboard') && !request.cookies.has('auth_token')) {
+    const url = request.nextUrl.clone();
+    url.pathname = '/';
+    return NextResponse.redirect(url);
+  }
+
   const response = NextResponse.next({
     request: { headers: requestHeaders },
   });
