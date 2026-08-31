@@ -4,8 +4,9 @@ import { NextResponse } from "next/server";
 import { auditLog } from "@/lib/api/audit";
 import { withApiHardening } from "@/lib/api/hardening";
 import { parsePagination } from "@/lib/api/validation";
-import { buildMarketplaceDiscoveryQuery, buildMarketplaceSort } from "@/lib/backend/marketplaceDiscovery";
+import { applyOwnershipRanking, buildMarketplaceDiscoveryQuery, buildMarketplaceSort } from "@/lib/backend/marketplaceDiscovery";
 import { MATERIAL_SEARCH_COLLECTION } from "@/lib/backend/materialSearchProjection";
+import { getOwnedMaterialIds } from "@/lib/entitlement";
 import { getDb } from "@/lib/mongodb";
 import { ObjectId } from "mongodb";
 import { cacheGet, cacheSet } from "@/lib/cache/redis";
@@ -73,8 +74,13 @@ export async function GET(request) {
     const pagination = parsePagination(url.searchParams);
     const { pageSize, paginationType } = pagination;
 
+    // Entitlement-aware ranking (#707): when the viewing wallet is supplied,
+    // results are personalized (owned materials marked/reranked), so the
+    // shared anonymous-browse cache is bypassed for this request.
+    const buyerAddress = (url.searchParams.get("buyerAddress") || "").trim() || null;
+
     const cacheKey = `market-materials:${url.searchParams.toString()}`;
-    const cached = await cacheGet(cacheKey);
+    const cached = buyerAddress ? null : await cacheGet(cacheKey);
     if (cached) {
       return NextResponse.json(cached, { status: 200 });
     }
@@ -200,26 +206,39 @@ export async function GET(request) {
       totalPages = Math.max(1, Math.ceil(total / pageSize));
     }
 
-    const normalized = items.map(sanitizeMaterial);
+    let normalized = items.map(sanitizeMaterial);
 
-    const payload = paginationType === "cursor" 
-      ? { 
-          items: normalized, 
-          pageSize, 
-          hasNextPage, 
+    // Entitlement-aware ranking (#707): mark and rerank this page's results
+    // by whether the viewing wallet already owns each material. Best-effort
+    // — a lookup failure just leaves the page unranked, never blocks it.
+    if (buyerAddress) {
+      const materialIds = normalized
+        .map((item) => String(item.materialId ?? item._id ?? ""))
+        .filter(Boolean);
+      const ownedIds = await getOwnedMaterialIds({ db, buyerAddress, materialIds });
+      normalized = applyOwnershipRanking(normalized, ownedIds);
+    }
+
+    const payload = paginationType === "cursor"
+      ? {
+          items: normalized,
+          pageSize,
+          hasNextPage,
           nextCursor,
           paginationType: "cursor"
         }
-      : { 
-          items: normalized, 
-          page: pagination.page, 
-          pageSize, 
-          total, 
+      : {
+          items: normalized,
+          page: pagination.page,
+          pageSize,
+          total,
           totalPages,
           paginationType: "offset"
         };
 
-    await cacheSet(cacheKey, payload, 600);
+    if (!buyerAddress) {
+      await cacheSet(cacheKey, payload, 600);
+    }
 
     return NextResponse.json(payload, { status: 200 });
   } catch (err) {

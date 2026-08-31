@@ -13,7 +13,7 @@ EduVault supports three primary product paths: creators publish resources, learn
 
 ## Learner Workflow
 
-1. **Browse the marketplace**: learners search and filter educational materials by topic, creator, format, and price.
+1. **Browse the marketplace**: learners search and filter educational materials by topic (title/description/subject text search), subject, level, language, creator, content format, and price (`GET /api/market-materials`, filters built in `buildMarketplaceDiscoveryQuery`). When the request carries the viewing wallet's address, results are entitlement-aware (#707): materials the wallet already owns are marked `owned: true` and reranked after not-yet-owned results on the page, so browsing surfaces new content first while still keeping already-purchased materials reachable.
 2. **Review a material**: learners open a material detail page to inspect the description, rights, creator information, and purchase requirements.
 3. **Start checkout**: the learner connects a supported wallet and confirms the purchase flow.
 4. **Complete payment**: the current prototype models marketplace access in the application, while the planned Stellar flow submits a Soroban transaction for XLM or supported Stellar-asset settlement.

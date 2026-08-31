@@ -44,6 +44,11 @@ const MAX_MAINTENANCE_BATCH: u32 = 25;
 const TIER1_FEE_BPS: u32 = 250;
 const TIER2_FEE_BPS: u32 = 150;
 
+/// Default lifetime of a recorded checkout quote (#701): long enough for a
+/// buyer to review and sign in their wallet, short enough to bound how long
+/// a price/asset snapshot stays valid after it was rendered.
+const QUOTE_TTL_SECONDS: u64 = 900;
+
 /// Material status from registry (replicated here to avoid circular deps)
 #[contracttype]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -192,6 +197,23 @@ pub struct PurchaseSnapshot {
     pub purchase_ledger: u32,
 }
 
+/// A buyer's checkout quote (#701), recorded by `record_quote` and checked
+/// by `purchase()` / `simulate_purchase()`. Binds the price, asset,
+/// sale-terms version, and issuing wallet the quote was rendered for, plus
+/// a deterministic expiry so a quote can't be replayed indefinitely after
+/// its price or terms have moved on.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct QuoteRecord {
+    pub material_id: BytesN<32>,
+    pub buyer: Address,
+    pub asset: Address,
+    pub amount: i128,
+    pub sale_terms_version: u32,
+    pub issued_at: u64,
+    pub expires_at: u64,
+}
+
 /// Escrow record holding creator payout funds during the cooling-off period
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -338,10 +360,12 @@ enum DataKey {
     /// pending attempt state so an interrupted wallet signing can be resumed
     /// or safely cancelled, and duplicates are blocked while pending.
     PendingCheckout((Address, BytesN<32>)),
-    /// The sale-terms version a buyer's quote was rendered at (#681):
-    /// `(buyer, material_id)` -> u32. Compared against the registry's current
-    /// version at purchase time; a mismatch rejects the stale quote.
-    QuotedSaleTermsVersion((Address, BytesN<32>)),
+    /// A buyer's recorded checkout quote (#681, #701):
+    /// `(buyer, material_id)` -> `QuoteRecord`. Checked against the live
+    /// material and registry state at purchase time; a mismatch on asset,
+    /// price, sale-terms version, or an elapsed expiry rejects the stale
+    /// quote so the buyer re-quotes and sees refreshed terms before signing.
+    Quote((Address, BytesN<32>)),
     /// The admin address that called `transfer_admin`, so `accept_admin` can
     /// revoke that specific admin's role once the transfer completes (#463).
     PendingAdminFrom,
@@ -469,9 +493,12 @@ pub enum PurchaseError {
     InvalidExpiry = 99,
     TooManyActiveGrants = 100,
 
-    // Quote invalidation (#681)
+    // Quote invalidation (#681, #701)
     StaleSaleTermsQuote = 110,
     StaleQuoteAsset = 111,
+    /// A recorded quote's `expires_at` has passed (#701): the buyer must
+    /// call `record_quote` again to bind a fresh price/asset snapshot.
+    QuoteExpired = 112,
 
     // Refund signer versioning (#666)
     RefundAuthorizationExpired = 120,
@@ -899,9 +926,13 @@ impl PurchaseManager {
         extend_instance_ttl(&env);
 
         PlatformConfigUpdatedEvent {
-            treasury,
-            platform_fee_bps,
-            paused: false,
+            old_treasury: treasury.clone(),
+            new_treasury: treasury,
+            old_platform_fee_bps: platform_fee_bps,
+            new_platform_fee_bps: platform_fee_bps,
+            old_paused: false,
+            new_paused: false,
+            approver: admin,
         }
         .publish(&env);
 
@@ -919,63 +950,15 @@ impl PurchaseManager {
     ) -> Result<u64, PurchaseError> {
         buyer.require_auth();
 
-        let config = get_platform_config(&env)?;
-
-        if config.paused {
-            return Err(PurchaseError::ContractPaused);
-        }
-
-        if !is_asset_allowed(&env, &asset) {
-            return Err(PurchaseError::AssetNotAllowed);
-        }
-
-        if has_entitlement_internal(&env, &material_id, &buyer) {
-            return Err(PurchaseError::EntitlementAlreadyExists);
-        }
+        let (config, material, sale_terms_version) =
+            validate_checkout(&env, &buyer, &material_id, &asset, expected_amount)?;
 
         // Mobile checkout recovery (#684): a pending attempt blocks duplicate
-        // submission until it is resumed or cancelled.
+        // submission until it is resumed or cancelled; cleared once the
+        // purchase below completes.
         let checkout_key = DataKey::PendingCheckout((buyer.clone(), material_id.clone()));
-        if env.storage().instance().has(&checkout_key) {
-            return Err(PurchaseError::CheckoutPending);
-        }
 
-        let material: MaterialRecord = config
-            .registry
-            .get_material(&env, &material_id)
-            .map_err(|_| PurchaseError::MaterialNotFound)?;
-
-        if material.status != MaterialStatus::Active || material.paused {
-            return Err(PurchaseError::MaterialNotActive);
-        }
-
-        let quote = find_quote(&material.quotes, &asset)
-            .ok_or(PurchaseError::AssetNotAcceptedForMaterial)?;
-
-        if quote.amount != expected_amount {
-            return Err(PurchaseError::InvalidQuoteAmount);
-        }
-        if quote.amount <= 0 {
-            return Err(PurchaseError::InvalidQuoteAmount);
-        }
-
-        // Bind the purchase to the current sale-terms version (#681): if the
-        // creator changed price or asset since the buyer's quote was rendered,
-        // the version moved and this attempt is rejected.
-        let quoted_version: Option<u32> = env
-            .storage()
-            .instance()
-            .get(&DataKey::QuotedSaleTermsVersion((buyer.clone(), material_id.clone())));
-        if let Some(quoted) = quoted_version {
-            let current = config.registry.get_sale_terms_version(&env, &material_id)?;
-            if quoted != current {
-                return Err(PurchaseError::StaleSaleTermsQuote);
-            }
-        }
-
-        validate_payout_shares(&material.payout_shares)?;
-
-        let gross = quote.amount;
+        let gross = expected_amount;
         let effective_fee_bps =
             get_effective_fee_bps(&env, &material.creator, config.platform_fee_bps);
         let platform_fee = (gross * effective_fee_bps as i128) / BASIS_POINTS as i128;
@@ -983,7 +966,6 @@ impl PurchaseManager {
 
         let purchase_id = get_and_increment_purchase_nonce(&env)?;
         let current_ledger = env.ledger().sequence();
-        let sale_terms_version = config.registry.get_sale_terms_version(&env, &material_id)?;
         let immutable = config
             .registry
             .get_material_immutable(&env, &material_id)?;
@@ -1090,11 +1072,12 @@ impl PurchaseManager {
         }
         .publish(&env);
 
-        // A completed purchase clears any pending mobile checkout state (#684).
+        // A completed purchase clears any pending mobile checkout state (#684)
+        // and the recorded quote (#701), if either was set.
         env.storage().instance().remove(&checkout_key);
         env.storage()
             .instance()
-            .remove(&DataKey::QuotedSaleTermsVersion((buyer, material_id)));
+            .remove(&DataKey::Quote((buyer, material_id)));
 
         Ok(purchase_id)
     }
@@ -1482,26 +1465,71 @@ impl PurchaseManager {
         Ok(())
     }
 
-    /// Record the sale-terms version a buyer's quote was rendered at (#681).
-    /// The buyer calls this (or the UI calls it) when a quote is shown; the
-    /// version is then checked at purchase time so a creator-side terms
-    /// update invalidates the pending purchase attempt.
+    /// Record a buyer's checkout quote (#681, #701). The buyer (or the UI on
+    /// their behalf) calls this when a quote is rendered for a chosen asset;
+    /// the material's current price for that asset, the registry's
+    /// sale-terms version, and a deterministic expiry (`QUOTE_TTL_SECONDS`
+    /// from now) are all snapshotted and bound to `(buyer, material_id)`.
+    /// `purchase()` and `simulate_purchase()` reject the attempt if the
+    /// asset, price, or sale-terms version have since moved, or if the quote
+    /// has expired — so a buyer always signs against terms they actually saw.
     pub fn record_quote(
         env: Env,
         buyer: Address,
         material_id: BytesN<32>,
-    ) -> Result<u32, PurchaseError> {
+        asset: Address,
+    ) -> Result<QuoteRecord, PurchaseError> {
         buyer.require_auth();
         let config = get_platform_config(&env)?;
-        let current = config
+        let material: MaterialRecord = config
+            .registry
+            .get_material(&env, &material_id)
+            .map_err(|_| PurchaseError::MaterialNotFound)?;
+        let quote = find_quote(&material.quotes, &asset)
+            .ok_or(PurchaseError::AssetNotAcceptedForMaterial)?;
+        let sale_terms_version = config
             .registry
             .get_sale_terms_version(&env, &material_id)
             .map_err(|_| PurchaseError::MaterialNotFound)?;
-        env.storage().instance().set(
-            &DataKey::QuotedSaleTermsVersion((buyer.clone(), material_id.clone())),
-            &current,
-        );
-        Ok(current)
+
+        let issued_at = env.ledger().timestamp();
+        let record = QuoteRecord {
+            material_id: material_id.clone(),
+            buyer: buyer.clone(),
+            asset,
+            amount: quote.amount,
+            sale_terms_version,
+            issued_at,
+            expires_at: issued_at + QUOTE_TTL_SECONDS,
+        };
+        env.storage()
+            .instance()
+            .set(&DataKey::Quote((buyer, material_id)), &record);
+        Ok(record)
+    }
+
+    /// Read-only checkout preflight (#706). Runs the exact same validation
+    /// `purchase()` performs — contract-paused, asset-allowed, existing
+    /// entitlement, pending-checkout, material-active, price/asset match,
+    /// and recorded-quote staleness/expiry — without requiring the buyer's
+    /// auth or writing any state, so the frontend can explain a likely
+    /// failure before asking the wallet to sign. Because it shares
+    /// `validate_checkout` with `purchase()`, the two can never drift apart.
+    /// Returns `Ok(sale_terms_version)` when the checkout would succeed, or
+    /// the specific `PurchaseError` `purchase()` would reject it with
+    /// otherwise — the same shape every other fallible entry point on this
+    /// contract uses, so callers (and `try_simulate_purchase` on the
+    /// generated client) handle it identically.
+    pub fn simulate_purchase(
+        env: Env,
+        buyer: Address,
+        material_id: BytesN<32>,
+        asset: Address,
+        expected_amount: i128,
+    ) -> Result<u32, PurchaseError> {
+        let (_, _, sale_terms_version) =
+            validate_checkout(&env, &buyer, &material_id, &asset, expected_amount)?;
+        Ok(sale_terms_version)
     }
 
     /// Begin a mobile checkout attempt (#684): records a pending state for
@@ -2150,14 +2178,19 @@ impl PurchaseManager {
         }
 
         let mut config = get_platform_config(&env)?;
+        let old_platform_fee_bps = config.platform_fee_bps;
         config.platform_fee_bps = new_platform_fee_bps;
 
         put_platform_config(&env, &config);
 
         PlatformConfigUpdatedEvent {
-            treasury: config.treasury.clone(),
-            platform_fee_bps: new_platform_fee_bps,
-            paused: config.paused,
+            old_treasury: config.treasury.clone(),
+            new_treasury: config.treasury,
+            old_platform_fee_bps,
+            new_platform_fee_bps,
+            old_paused: config.paused,
+            new_paused: config.paused,
+            approver: admin,
         }
         .publish(&env);
 
@@ -2169,14 +2202,19 @@ impl PurchaseManager {
         auth::require_admin(&env, &admin)?;
 
         let mut config = get_platform_config(&env)?;
+        let old_paused = config.paused;
         config.paused = true;
 
         put_platform_config(&env, &config);
 
         PlatformConfigUpdatedEvent {
-            treasury: config.treasury,
-            platform_fee_bps: config.platform_fee_bps,
-            paused: true,
+            old_treasury: config.treasury.clone(),
+            new_treasury: config.treasury,
+            old_platform_fee_bps: config.platform_fee_bps,
+            new_platform_fee_bps: config.platform_fee_bps,
+            old_paused,
+            new_paused: true,
+            approver: admin,
         }
         .publish(&env);
 
@@ -2188,14 +2226,19 @@ impl PurchaseManager {
         auth::require_admin(&env, &admin)?;
 
         let mut config = get_platform_config(&env)?;
+        let old_paused = config.paused;
         config.paused = false;
 
         put_platform_config(&env, &config);
 
         PlatformConfigUpdatedEvent {
-            treasury: config.treasury,
-            platform_fee_bps: config.platform_fee_bps,
-            paused: false,
+            old_treasury: config.treasury.clone(),
+            new_treasury: config.treasury,
+            old_platform_fee_bps: config.platform_fee_bps,
+            new_platform_fee_bps: config.platform_fee_bps,
+            old_paused,
+            new_paused: false,
+            approver: admin,
         }
         .publish(&env);
 
@@ -3235,6 +3278,90 @@ fn find_quote(quotes: &Vec<AssetQuote>, asset: &Address) -> Option<AssetQuote> {
         index += 1;
     }
     None
+}
+
+/// Shared read-only validation for a checkout attempt (#706), covering every
+/// check `purchase()` performs before it starts moving funds: contract
+/// paused, asset allowlisted, no existing entitlement, no pending mobile
+/// checkout, material found and active, the asset's quote matches
+/// `expected_amount`, and — when a quote was recorded via `record_quote` —
+/// that quote's asset, price, sale-terms version, and expiry all still hold
+/// (#681, #701). `purchase()` and `simulate_purchase()` both call this so
+/// the state-changing and read-only paths can never validate differently.
+fn validate_checkout(
+    env: &Env,
+    buyer: &Address,
+    material_id: &BytesN<32>,
+    asset: &Address,
+    expected_amount: i128,
+) -> Result<(PlatformConfig, MaterialRecord, u32), PurchaseError> {
+    let config = get_platform_config(env)?;
+
+    if config.paused {
+        return Err(PurchaseError::ContractPaused);
+    }
+
+    if !is_asset_allowed(env, asset) {
+        return Err(PurchaseError::AssetNotAllowed);
+    }
+
+    if has_entitlement_internal(env, material_id, buyer) {
+        return Err(PurchaseError::EntitlementAlreadyExists);
+    }
+
+    // Mobile checkout recovery (#684): a pending attempt blocks duplicate
+    // submission until it is resumed or cancelled.
+    let checkout_key = DataKey::PendingCheckout((buyer.clone(), material_id.clone()));
+    if env.storage().instance().has(&checkout_key) {
+        return Err(PurchaseError::CheckoutPending);
+    }
+
+    let material: MaterialRecord = config
+        .registry
+        .get_material(env, material_id)
+        .map_err(|_| PurchaseError::MaterialNotFound)?;
+
+    if material.status != MaterialStatus::Active || material.paused {
+        return Err(PurchaseError::MaterialNotActive);
+    }
+
+    let quote = find_quote(&material.quotes, asset)
+        .ok_or(PurchaseError::AssetNotAcceptedForMaterial)?;
+
+    if quote.amount != expected_amount || quote.amount <= 0 {
+        return Err(PurchaseError::InvalidQuoteAmount);
+    }
+
+    let sale_terms_version = config
+        .registry
+        .get_sale_terms_version(env, material_id)?;
+
+    // Bind the purchase to the buyer's recorded quote (#681, #701): if the
+    // creator changed price or asset, the sale-terms version moved, or the
+    // quote's deterministic expiry has passed, this attempt is rejected so
+    // the buyer re-quotes and sees the refreshed terms before signing.
+    let quote_record: Option<QuoteRecord> = env
+        .storage()
+        .instance()
+        .get(&DataKey::Quote((buyer.clone(), material_id.clone())));
+    if let Some(recorded) = quote_record {
+        if recorded.asset != *asset {
+            return Err(PurchaseError::StaleQuoteAsset);
+        }
+        if recorded.amount != expected_amount {
+            return Err(PurchaseError::InvalidQuoteAmount);
+        }
+        if recorded.sale_terms_version != sale_terms_version {
+            return Err(PurchaseError::StaleSaleTermsQuote);
+        }
+        if env.ledger().timestamp() > recorded.expires_at {
+            return Err(PurchaseError::QuoteExpired);
+        }
+    }
+
+    validate_payout_shares(&material.payout_shares)?;
+
+    Ok((config, material, sale_terms_version))
 }
 
 fn get_and_increment_purchase_nonce(env: &Env) -> Result<u64, PurchaseError> {

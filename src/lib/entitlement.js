@@ -45,7 +45,11 @@ import {
   STELLAR_RPC_URL,
   NETWORK_PASSPHRASE,
 } from './config/chain.js';
-import { isCompletedPurchaseStatus, normalizeBuyerAddress } from './purchases/access.js';
+import {
+  COMPLETED_PURCHASE_STATUSES,
+  isCompletedPurchaseStatus,
+  normalizeBuyerAddress,
+} from './purchases/access.js';
 import logger from './logger.js';
 
 // Imported lazily (not as a static top-level import) so callers that always
@@ -584,6 +588,59 @@ export async function resolveEntitlement({ db, materialId, buyerAddress, purchas
   } catch (err) {
     logger.warn({ event: 'entitlement_resolve_error', materialId, buyerAddress: normalised, err: err?.message }, 'entitlement resolution failed closed');
     return { state: ENTITLEMENT_STATE.UNAVAILABLE, hasAccess: false, source: 'error' };
+  }
+}
+
+/**
+ * Bulk, best-effort ownership lookup for a page of search/browse results
+ * (#707). Returns the subset of `materialIds` the wallet already holds a
+ * completed, non-revoked purchase for.
+ *
+ * This is a UX marker for ranking/badging search results, not an
+ * authorization decision — unlike {@link resolveEntitlement}, it does a
+ * single bulk local-DB query and deliberately skips the on-chain fallback
+ * (an RPC round trip per result would make a search page unusable). Callers
+ * gating a download must still go through {@link authorizeMaterialAccess} /
+ * {@link resolveEntitlement}, which fail closed.
+ *
+ * @param {object} params
+ * @param {object} [params.db] - Mongo db handle; defaults to the shared connection.
+ * @param {string} params.buyerAddress - The viewing wallet's address.
+ * @param {string[]} params.materialIds - Candidate material ids for this page.
+ * @returns {Promise<Set<string>>} materialIds the buyer already owns.
+ */
+export async function getOwnedMaterialIds({ db, buyerAddress, materialIds } = {}) {
+  const ids = Array.isArray(materialIds) ? materialIds.filter(Boolean) : [];
+  if (!buyerAddress || ids.length === 0) return new Set();
+
+  const normalised = normalizeBuyerAddress(buyerAddress);
+
+  try {
+    const database = db || (await getDb());
+    const purchases = await database
+      .collection('purchases')
+      .find({
+        buyerAddress: normalised,
+        materialId: { $in: ids },
+        status: { $in: Array.from(COMPLETED_PURCHASE_STATUSES) },
+      })
+      .project({ materialId: 1, settlementState: 1 })
+      .toArray();
+
+    const owned = new Set();
+    for (const purchase of purchases) {
+      if (purchase.settlementState && REVOKING_SETTLEMENT_STATES.has(purchase.settlementState)) {
+        continue;
+      }
+      owned.add(purchase.materialId);
+    }
+    return owned;
+  } catch (err) {
+    logger.warn(
+      { event: 'get_owned_material_ids_failed', buyerAddress: normalised, err: err?.message },
+      'bulk ownership lookup failed; treating page as unowned'
+    );
+    return new Set();
   }
 }
 
