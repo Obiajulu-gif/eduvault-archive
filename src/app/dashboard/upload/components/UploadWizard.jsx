@@ -16,11 +16,10 @@ import {
   FaExclamationTriangle,
 } from "react-icons/fa";
 import { useAccount, useWriteContract, useWaitForTransactionReceipt, useSwitchChain } from "wagmi";
+import { isChainSupported } from "@/lib/web3/chains";
 
 import { useWallet } from "@/hooks/useWallet";
 import { validateThumbnail } from "@/lib/upload/validateThumbnail";
-import { abi } from "../../../../../contracts/EduVaultAbi.js";
-import { parseAbiItem } from "viem";
 import { useCreateMaterial, useUploadFile } from "@/hooks/api/useMaterials";
 import TransactionStatusPanel from "@/components/transactions/TransactionStatusPanel";
 import { useTransactionCenter } from "@/providers/TransactionProvider";
@@ -36,6 +35,7 @@ const STEPS = [
 
 export default function UploadWizard() {
   const { address } = useWallet();
+  const { chainId } = useAccount();
 
   const [currentStep, setCurrentStep] = useState(1);
 
@@ -74,7 +74,7 @@ export default function UploadWizard() {
     clearTransaction,
   } = useTransactionCenter();
 
-  const chainMismatch = address && chainId && !isUploadChain(chainId);
+  const chainMismatch = address && chainId && !isChainSupported(chainId);
 
   useEffect(() => {
     async function loadTaxonomy() {

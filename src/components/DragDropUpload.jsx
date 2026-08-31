@@ -37,29 +37,50 @@ export default function DragDropUpload({ onFileSelect, error }) {
     }
   };
 
+  const inputRef = React.useRef(null);
+
+  const handleClick = () => {
+    inputRef.current?.click();
+  };
+
+  const handleKeyDown = (e) => {
+    if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      inputRef.current?.click();
+    }
+  };
+
   return (
     <div
+      role="button"
+      tabIndex={0}
+      aria-label="Upload cover image"
+      aria-describedby={error ? "thumb-error" : undefined}
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
-      className={`border-2 border-dashed rounded-lg p-6 text-center transition cursor-pointer flex flex-col items-center justify-center min-h-[140px] ${
+      onClick={handleClick}
+      onKeyDown={handleKeyDown}
+      className={`border-2 border-dashed rounded-lg p-6 text-center transition cursor-pointer flex flex-col items-center justify-center min-h-[140px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 ${
         isDragActive
           ? "border-blue-500 bg-blue-50 dark:bg-blue-900/30"
           : error
           ? "border-red-500 bg-red-50 dark:bg-red-900/30 hover:border-red-600"
           : "border-gray-300 dark:border-border-strong hover:border-blue-400"
       }`}
-      onClick={() => document.getElementById("cover-image-upload").click()}
     >
       <input
+        ref={inputRef}
         id="cover-image-upload"
         type="file"
         accept="image/*"
         onChange={handleChange}
         className="hidden"
+        aria-label="Cover image file input"
         aria-describedby={error ? "thumb-error" : undefined}
       />
       <FaImage
+        aria-hidden="true"
         className={`text-3xl mb-3 ${
           isDragActive ? "text-blue-500" : "text-gray-400 dark:text-muted-foreground"
         }`}
