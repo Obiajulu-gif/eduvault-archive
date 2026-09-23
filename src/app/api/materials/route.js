@@ -9,6 +9,7 @@ import { getDb } from "@/lib/mongodb";
 import { ObjectId } from "mongodb";
 import { buildMaterialHistoryEntry, EDITABLE_MATERIAL_FIELDS } from "@/lib/backend/schemaContracts";
 import { enqueueMaterialSearchProjection } from "@/lib/backend/materialSearchProjection";
+import { evaluateAndQueueListing } from "@/lib/backend/manipulationScoring";
 
 export const runtime = "nodejs";
 
@@ -53,9 +54,10 @@ export async function POST(request) {
         };
 
         const result = await db.collection("materials").insertOne(doc);
+        const assessment = await evaluateAndQueueListing(db, { _id: result.insertedId, ...doc });
         await enqueueMaterialSearchProjection({
           db,
-          material: { _id: result.insertedId, ...doc },
+          material: { _id: result.insertedId, ...doc, ...(assessment.flagged ? { moderationStatus: "pending_review" } : {}) },
           reason: "material_created",
         });
         auditLog({ event: "material_created", route: "materials", method: "POST", status: 201, actor: user.sub });
@@ -145,6 +147,8 @@ export async function PUT(request) {
           { returnDocument: "after" }
         );
         const updatedMaterial = result?.value || result || { ...existing, ...updateDoc };
+        const assessment = await evaluateAndQueueListing(db, updatedMaterial, { now });
+        if (assessment.flagged) updatedMaterial.moderationStatus = "pending_review";
         await enqueueMaterialSearchProjection({
           db,
           material: updatedMaterial,
