@@ -119,6 +119,10 @@ export async function GET(request) {
             viewCount: 1,
             downloads: 1,
             downloadCount: 1,
+            trustedViewCount: 1,
+            filteredViewCount: 1,
+            trustedDownloadCount: 1,
+            filteredDownloadCount: 1,
             reviewsCount: 1,
             reviewCount: 1,
           },
@@ -320,6 +324,10 @@ export async function GET(request) {
           revenue: formatCurrency(totals.revenue),
           visibility: material.visibility || "private",
           uploadedAt: material.createdAt || null,
+          trustedViews: material.trustedViewCount || 0,
+          filteredViews: material.filteredViewCount || 0,
+          trustedDownloads: material.trustedDownloadCount || 0,
+          filteredDownloads: material.filteredDownloadCount || 0,
         };
       })
       .sort((a, b) => {
@@ -417,6 +425,13 @@ export async function GET(request) {
       topMaterials,
       recentOrders,
       withdrawals,
+      analyticsMethodology: {
+        dedupeWindowMs: 30 * 60 * 1000,
+        trustedViews: creatorMaterials.reduce((sum, material) => sum + (material.trustedViewCount || 0), 0),
+        filteredViews: creatorMaterials.reduce((sum, material) => sum + (material.filteredViewCount || 0), 0),
+        trustedDownloads: creatorMaterials.reduce((sum, material) => sum + (material.trustedDownloadCount || 0), 0),
+        filteredDownloads: creatorMaterials.reduce((sum, material) => sum + (material.filteredDownloadCount || 0), 0),
+      },
       dateRange: {
         from: from.toISOString(),
         to: to.toISOString(),
