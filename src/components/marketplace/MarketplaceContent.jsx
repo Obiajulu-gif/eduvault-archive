@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useMarketplaceMaterials } from "@/hooks/api/useMaterials";
+import { useInfiniteMarketplaceMaterials } from "@/hooks/api/useMaterials";
 import { useCart } from "@/hooks/useCart";
 import { useComparison } from "@/hooks/useComparison";
 import dynamic from "next/dynamic";
@@ -164,7 +164,10 @@ export function MarketplaceContent() {
     isLoading,
     isError,
     error,
-  } = useMarketplaceMaterials(queryParams);
+    hasNextPage,
+    isFetchingNextPage,
+    fetchNextPage,
+  } = useInfiniteMarketplaceMaterials({ ...queryParams, page: undefined });
 
   // Filter change handlers
   const handleSearchChange = (search) => {
@@ -263,9 +266,7 @@ export function MarketplaceContent() {
     return <MarketplaceFiltersSkeleton />;
   }
 
-  const materials = materialsData?.items || [];
-  const total = materialsData?.total;
-  const totalPages = materialsData?.totalPages || 1;
+  const materials = materialsData?.pages?.flatMap((page) => page.items || []) || [];
 
   return (
     <>
@@ -316,7 +317,7 @@ export function MarketplaceContent() {
           isError={isError}
           error={error}
           materials={materials}
-          total={total}
+          total={materials.length}
           activeSubject={activeSubject}
           searchQuery={searchQuery}
           cartItems={cartItems}
@@ -327,7 +328,10 @@ export function MarketplaceContent() {
           onBrowseAll={handleBrowseAll}
           onSearchSubject={handleSearchSubject}
           currentPage={currentPage}
-          totalPages={totalPages}
+          totalPages={hasNextPage ? 2 : 1}
+          hasNextPage={hasNextPage}
+          isFetchingNextPage={isFetchingNextPage}
+          onLoadMore={() => fetchNextPage()}
           onPageChange={handlePageChange}
         />
         <div className="mt-12">
