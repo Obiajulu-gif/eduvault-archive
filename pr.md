@@ -1,102 +1,58 @@
-# Pull Request: Backend Platform Hardening & Automation
+# Pull Request: Marketplace Trust, Discovery, and Analytics Hardening
 
 ## Summary
 
-This PR implements four backend features covering upload security, automated admin reporting, account suspension notifications, and backup integrity verification.
-
----
+This PR closes #768, #769, #770, and #771 by replacing unstable marketplace pagination, adding incremental discovery indexing safeguards, introducing creator-facing ranking-manipulation review, and separating raw analytics events from trusted counters.
 
 ## Changes
 
-### #365 — Upload checks validating files pinned to Pinata
+### #768 - Cursor-based marketplace pagination
 
-**Files:**
-- `src/lib/ipfs/uploadValidator.js` *(new)*
-- `src/app/api/materials/upload/route.js` *(new)*
+- Marketplace pagination now defaults to opaque cursor/keyset pagination.
+- Sorts use stable compound keys with `_id` tie-breaking for newest, price, rating, and popular views.
+- Invalid cursors return `400` instead of silently restarting from the first page.
+- The marketplace client uses `useInfiniteQuery` and a Load more flow, avoiding numbered offsets.
+- Added cursor tests covering compound ordering and concurrent insertion behavior.
 
-**What changed:**
-Introduced a byte-stream validator that inspects magic number / file header signatures before any file is dispatched to Pinata. The new `src/app/api/materials/upload` route applies this validation in addition to the existing MIME type allowlist and size checks. Files whose headers do not match their declared MIME type are rejected with HTTP 422 before pinning. Invalid files never reach Pinata, and no MongoDB records are written for rejected uploads.
+### #769 - Search-ranking manipulation detection
 
-**Supported signatures:** PDF, ZIP, OLE2 compound documents (.doc/.xls/.ppt), OOXML containers (.docx/.xlsx/.pptx), JPEG, PNG, WEBP. Plain-text files are validated via a binary-null-byte heuristic.
+- Added tunable heuristic scoring for keyword-density anomalies and near-duplicate listings within a creator catalog.
+- Flagged listings are marked `pending_review` and routed to `moderation_cases`; they are not automatically rejected.
+- Added policy-versioned assessments and near-duplicate evidence for admin review.
+- Updated the moderation dashboard actions to use the existing propose-then-approve workflow.
 
----
+### #770 - Incremental discovery index updates
 
-### #363 — Weekly marketplace performance email reports to admins
+- Existing material edit/create outbox projection flow is retained and invoked after listing changes.
+- Monotonic projection versions prevent out-of-order updates from overwriting newer search documents.
+- Existing retry, dead-letter, and reconciliation behavior is documented and operationally indexed.
+- Search projections now exclude listings pending manipulation review.
+- Added documented propagation-latency measurement using material `updatedAt` and projection `projectedAt`.
 
-**Files:**
-- `src/lib/email/adminReport.js` *(new)*
-- `scripts/weekly-admin-stats.mjs` *(new)*
+### #771 - Bot-resistant analytics
 
-**What changed:**
-Added an aggregator service (`adminReport.js`) that queries MongoDB for the previous week's completed sales, total revenue, new user registrations, new material uploads, and active listing counts. A clean HTML summary email (with plain-text fallback) is generated and sent to all addresses in `ADMIN_REPORT_EMAILS`.
+- Added asynchronous view/download event ingestion through the existing side-effect outbox worker.
+- Raw events are retained in `material_analytics_events` with hashed viewer identity and a unique dedupe key.
+- Events are deduplicated per material/viewer/event type within a 30-minute window.
+- Known bot agents, non-browser requests, unengaged loads, and creator traffic are counted as filtered rather than trusted.
+- Creator analytics exposes trusted and filtered views/downloads plus the dedupe-window methodology.
+- Download capability issuance now feeds the same analytics pipeline.
 
-The companion cron script (`weekly-admin-stats.mjs`) is a standalone Node.js entrypoint with no Next.js dependency, intended to run every Monday via cron:
+## Files and operational notes
 
-```
-0 8 * * 1  node scripts/weekly-admin-stats.mjs
-```
+- Run `scripts/setup-db-indexes.js` against the projection database to create cursor and analytics indexes.
+- Run the existing search reconciliation route/job periodically with repair enabled to detect and repair projection drift.
+- Tune manipulation thresholds with `MANIPULATION_MAX_KEYWORD_DENSITY` and `MANIPULATION_NEAR_DUPLICATE_SIMILARITY`.
+- Set `ANALYTICS_HASH_SECRET` in production so viewer hashes are stable without persisting raw viewer identifiers.
 
-Structured JSON is logged at every step so output can be piped into any log aggregator and delivery is confirmed in the log output.
+## Test plan
 
----
+- `node --check` passes for all modified server modules.
+- VS Code diagnostics report no errors in touched files.
+- Added focused tests for analytics deduplication, manipulation scoring, and cursor mutation safety.
+- Full Vitest execution remains pending because the workspace dependency installation is blocked by the existing lockfile `undici` mismatch and a restricted remote JSR dependency.
 
-### #369 — Email notifications for account suspension
-
-**Files:**
-- `src/lib/email/suspensionNotifier.js` *(new)*
-- `src/app/api/admin/users/suspend/route.js` *(new)*
-
-**What changed:**
-Added a `suspensionNotifier` module exporting `sendSuspensionEmail` and `sendReactivationEmail`. Each sends a branded HTML email (with plain-text fallback) explaining the status change, the stated reason, appeal instructions, and a link to community guidelines.
-
-The new `POST /api/admin/users/suspend` route accepts `{ userId, action, reason }`, updates the user's `status` field in MongoDB, writes an audit log entry, then dispatches the appropriate notification email. Email failures are caught and logged without blocking the admin action response. The `emailSent` boolean is returned in the response payload for confirmation.
-
----
-
-### #364 — Database backup collection archives verification script
-
-**Files:**
-- `scripts/verify-backup.mjs` *(new)*
-
-**What changed:**
-Added a standalone verification script that:
-1. Locates the most recent `.gz` backup archive (or accepts an explicit path via CLI argument).
-2. Runs `mongorestore --dryRun` against it to confirm the archive is well-formed and parseable without writing any data.
-3. Probes the extracted dump directory for required collections (`users`, `materials`, `purchases`).
-4. Emits a structured JSON summary of all checks (pass/fail) to stdout.
-5. Sends a failure alert email to `ADMIN_REPORT_EMAILS` if any check fails.
-6. Deletes the temp extraction directory on exit regardless of outcome.
-
-Exit code `0` = all checks passed. Exit code `1` = at least one check failed.
-
-Intended to run automatically after each backup job:
-```
-node scripts/backup-mongodb.mjs && node scripts/verify-backup.mjs
-```
-
----
-
-## Environment Variables Added
-
-| Variable | Used by | Purpose |
-|---|---|---|
-| `ADMIN_REPORT_EMAILS` | #363, #364 | Comma-separated admin email recipients |
-| `SUPPORT_EMAIL` | #369 | Appeal contact address shown in suspension emails |
-
-All existing `SMTP_*` / `EMAIL_*` variables are reused for email dispatch.
-
----
-
-## Test Plan
-
-- [ ] Upload a PDF with a `.pdf` extension but JPEG header bytes → expect HTTP 422
-- [ ] Upload a valid PDF → passes validation and is pinned to Pinata
-- [ ] Run `node scripts/weekly-admin-stats.mjs` with `MONGODB_URI` and `ADMIN_REPORT_EMAILS` set → confirm email received with correct stats
-- [ ] `POST /api/admin/users/suspend` with `action: "suspend"` → user `status` becomes `"suspended"`, suspension email delivered
-- [ ] `POST /api/admin/users/suspend` with `action: "reactivate"` → user `status` becomes `"active"`, reactivation email delivered
-- [ ] Run `node scripts/verify-backup.mjs` against a valid `.gz` backup → exits 0 with PASSED summary
-- [ ] Run `node scripts/verify-backup.mjs` against a corrupt archive → exits 1 and sends alert email
-
----
-
-Closes #363, #364, #365, #369
+Closes #768
+Closes #769
+Closes #770
+Closes #771
