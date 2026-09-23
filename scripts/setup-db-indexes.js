@@ -3,7 +3,7 @@ import { getDb } from "../src/lib/mongodb.js";
 async function setupMarketplaceIndexes() {
   console.log("=== Setting up Marketplace Indexes for Cursor-Based Pagination ===");
   const db = await getDb();
-  const collection = db.collection("materials");
+  const collection = db.collection("material_search_documents");
 
   try {
     // Create indexes for different sort patterns used in marketplace
@@ -21,7 +21,7 @@ async function setupMarketplaceIndexes() {
     // 2. Price ascending sort - compound index
     console.log("Creating index for price ascending sort (price: 1, _id: 1)...");
     await collection.createIndex(
-      { price: 1, _id: 1 },
+      { price: 1, createdAt: -1, _id: 1 },
       { 
         name: "marketplace_price_asc_cursor",
         background: true 
@@ -31,7 +31,7 @@ async function setupMarketplaceIndexes() {
     // 3. Price descending sort - compound index
     console.log("Creating index for price descending sort (price: -1, _id: -1)...");
     await collection.createIndex(
-      { price: -1, _id: -1 },
+      { price: -1, createdAt: -1, _id: -1 },
       { 
         name: "marketplace_price_desc_cursor",
         background: true 
@@ -41,7 +41,7 @@ async function setupMarketplaceIndexes() {
     // 4. Rating descending sort - compound index
     console.log("Creating index for rating sort (rating: -1, _id: -1)...");
     await collection.createIndex(
-      { rating: -1, _id: -1 },
+      { rating: -1, createdAt: -1, _id: -1 },
       { 
         name: "marketplace_rating_cursor",
         background: true 
@@ -51,7 +51,7 @@ async function setupMarketplaceIndexes() {
     // 5. Popular sort (likes + rating) - compound index
     console.log("Creating index for popular sort (likes: -1, rating: -1, _id: -1)...");
     await collection.createIndex(
-      { likes: -1, rating: -1, _id: -1 },
+      { likes: -1, rating: -1, createdAt: -1, _id: -1 },
       { 
         name: "marketplace_popular_cursor",
         background: true 
@@ -80,6 +80,11 @@ async function setupMarketplaceIndexes() {
           creatorSuspended: { $ne: true }
         }
       }
+    );
+
+    await db.collection("material_analytics_events").createIndex(
+      { eventKey: 1 },
+      { name: "material_analytics_event_key", unique: true, background: true }
     );
 
     console.log("✅ All marketplace indexes created successfully!");
