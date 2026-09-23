@@ -11,7 +11,7 @@ export default function MarketplaceGrid({
   cartItems, comparedItems,
   onAddToCart, onAddToComparison,
   onResetFilters, onBrowseAll, onSearchSubject,
-  currentPage, totalPages, onPageChange,
+  currentPage, totalPages, onPageChange, hasNextPage, isFetchingNextPage, onLoadMore,
 }) {
   if (isLoading) {
     return (
@@ -110,7 +110,9 @@ export default function MarketplaceGrid({
       </motion.div>
 
       {totalPages > 1 && (
-        <PaginationBar currentPage={currentPage} totalPages={totalPages} onPageChange={onPageChange} />
+        <button type="button" onClick={onLoadMore} disabled={isFetchingNextPage} className="mx-auto mt-8 block rounded-lg border px-5 py-2 text-sm font-medium">
+          {isFetchingNextPage ? "Loading..." : hasNextPage ? "Load more" : "All materials loaded"}
+        </button>
       )}
     </>
   );

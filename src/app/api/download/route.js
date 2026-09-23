@@ -42,6 +42,7 @@ import {
   CAPABILITY_MAX_BYTES,
 } from '@/lib/downloads/capabilityToken';
 import { recordDownloadAccess } from '@/lib/downloads/accessLog';
+import { buildAnalyticsEvent, enqueueAnalyticsEvent } from '@/lib/backend/analyticsEvents';
 
 export { CAPABILITY_TTL_MS, CAPABILITY_MAX_BYTES };
 
@@ -210,6 +211,19 @@ export async function GET(request) {
     byteRangeEnd,
     capabilityId: capabilityPayload.jti,
     ipAddress,
+  });
+  await enqueueAnalyticsEvent({
+    db,
+    event: buildAnalyticsEvent({
+      materialId,
+      eventType: 'download',
+      viewerId: buyerAddress,
+      ipAddress,
+      userAgent: request.headers.get('user-agent') || '',
+      headers: { accept: request.headers.get('accept') || '' },
+      dwellMs: 1000,
+      interactionCount: 1,
+    }),
   });
 
   return NextResponse.json(
