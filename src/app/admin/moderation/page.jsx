@@ -1,3 +1,21 @@
+                    <button
+                      className="action-btn deny"
+                      onClick={() => handleAction(itemId, 'propose')}
+                    >
+                      Propose suspension
+                    </button>
+                    <button
+                      className="action-btn suspend"
+                      onClick={() => handleAction(itemId, 'approve')}
+                    >
+                      Approve sanction
+                    </button>
+                    <button
+                      className="action-btn approve"
+                      onClick={() => handleAction(itemId, 'approve')}
+                    >
+                      Approve / sanction
+                    </button>
 "use client";
 
 import React, { useState, useEffect } from 'react';
@@ -73,7 +91,7 @@ function ModerationDashboard({ user }) {
       const res = await fetch('/api/admin/moderation', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: action.toLowerCase(), caseId: id }),
+        body: JSON.stringify({ action, caseId: id, sanction: action === 'propose' ? 'suspend_material' : undefined }),
       });
       if (!res.ok) throw new Error('Failed to perform moderation action');
       setItems((prev) => prev.filter((i) => (i._id || i.id) !== id));
@@ -132,22 +150,16 @@ function ModerationDashboard({ user }) {
                   <td>{item.reporter || item.reportedBy || 'Anonymous'}</td>
                   <td className="action-cell">
                     <button
-                      className="action-btn approve"
-                      onClick={() => handleAction(itemId, 'Approve')}
-                    >
-                      Approve
-                    </button>
-                    <button
                       className="action-btn deny"
-                      onClick={() => handleAction(itemId, 'Deny')}
+                      onClick={() => handleAction(itemId, 'propose')}
                     >
-                      Deny
+                      Propose suspension
                     </button>
                     <button
                       className="action-btn suspend"
-                      onClick={() => handleAction(itemId, 'Suspend')}
+                      onClick={() => handleAction(itemId, 'approve')}
                     >
-                      Suspend
+                      Approve sanction
                     </button>
                   </td>
                 </tr>
