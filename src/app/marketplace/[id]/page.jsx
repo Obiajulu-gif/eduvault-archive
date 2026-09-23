@@ -81,8 +81,14 @@ export default function MaterialDetailsPage() {
   useEffect(() => {
     if (materialQuery.data) {
       trackRecentlyViewed(materialQuery.data);
+      fetch(`/api/materials/${id}/analytics`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ eventType: "view", dwellMs: 1000, interactionCount: 1 }),
+        keepalive: true,
+      }).catch(() => {});
     }
-  }, [materialQuery.data]);
+  }, [id, materialQuery.data]);
 
   return (
     <>
