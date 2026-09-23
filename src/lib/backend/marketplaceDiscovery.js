@@ -1,3 +1,5 @@
+import { ObjectId } from "mongodb";
+
 export const LICENSE_OPTIONS = [
   { id: "standard", label: "Standard License (download only)", value: "Standard License (download only)" },
   { id: "creative-commons", label: "Creative Commons", value: "Creative Commons" },
@@ -226,15 +228,55 @@ export function applyOwnershipRanking(items, ownedIds) {
 export function buildMarketplaceSort(sortBy) {
   switch (sortBy) {
     case "price_asc":
-      return { price: 1, createdAt: -1 };
+      return { price: 1, createdAt: -1, _id: 1 };
     case "price_desc":
-      return { price: -1, createdAt: -1 };
+      return { price: -1, createdAt: -1, _id: -1 };
     case "rating_desc":
-      return { rating: -1, createdAt: -1 };
+      return { rating: -1, createdAt: -1, _id: -1 };
     case "popular":
-      return { likes: -1, rating: -1, createdAt: -1 };
+      return { likes: -1, rating: -1, createdAt: -1, _id: -1 };
     case "newest":
     default:
-      return { createdAt: -1 };
+      return { createdAt: -1, _id: -1 };
   }
+}
+
+export function encodeMarketplaceCursor(item, sort) {
+  const data = { _id: String(item._id) };
+  for (const [field] of Object.entries(sort)) {
+    if (field !== "_id") data[field] = item[field] instanceof Date ? item[field].toISOString() : item[field];
+  }
+  return Buffer.from(JSON.stringify(data), "utf8").toString("base64url");
+}
+
+export function decodeMarketplaceCursor(cursor, sort) {
+  if (!cursor) return null;
+  let data;
+  try {
+    data = JSON.parse(Buffer.from(cursor, "base64url").toString("utf8"));
+  } catch {
+    throw new Error("Invalid marketplace cursor");
+  }
+  if (!data?._id || !ObjectId.isValid(data._id)) throw new Error("Invalid marketplace cursor");
+  for (const field of Object.keys(sort)) {
+    if (field !== "_id" && data[field] === undefined) throw new Error("Invalid marketplace cursor");
+  }
+  return data;
+}
+
+export function buildMarketplaceCursorClause(cursorData, sort) {
+  const fields = Object.entries(sort);
+  const clauses = [];
+  for (let index = 0; index < fields.length; index += 1) {
+    const [field, direction] = fields[index];
+    const prefix = {};
+    for (let prior = 0; prior < index; prior += 1) {
+      const priorField = fields[prior][0];
+      prefix[priorField] = priorField === "createdAt" ? new Date(cursorData[priorField]) : (priorField === "_id" ? new ObjectId(cursorData._id) : cursorData[priorField]);
+    }
+    const value = field === "_id" ? cursorData._id : (field === "createdAt" ? new Date(cursorData[field]) : cursorData[field]);
+    prefix[field] = { [direction === 1 ? "$gt" : "$lt"]: field === "_id" ? new ObjectId(value) : value };
+    clauses.push(prefix);
+  }
+  return { $or: clauses };
 }

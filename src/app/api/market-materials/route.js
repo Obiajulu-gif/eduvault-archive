@@ -4,7 +4,7 @@ import { NextResponse } from "next/server";
 import { auditLog } from "@/lib/api/audit";
 import { withApiHardening } from "@/lib/api/hardening";
 import { parsePagination } from "@/lib/api/validation";
-import { applyOwnershipRanking, buildMarketplaceDiscoveryQuery, buildMarketplaceSort } from "@/lib/backend/marketplaceDiscovery";
+import { applyOwnershipRanking, buildMarketplaceDiscoveryQuery, buildMarketplaceSort, decodeMarketplaceCursor, buildMarketplaceCursorClause } from "@/lib/backend/marketplaceDiscovery";
 import { MATERIAL_SEARCH_COLLECTION } from "@/lib/backend/materialSearchProjection";
 import { getOwnedMaterialIds } from "@/lib/entitlement";
 import { getDb } from "@/lib/mongodb";
@@ -101,60 +101,11 @@ export async function GET(request) {
       // Add cursor filter to query if provided
       if (cursor) {
         try {
-          // Decode the cursor - it contains the _id and sort field values
-          const cursorData = JSON.parse(Buffer.from(cursor, 'base64').toString('utf8'));
-          
-          // Build cursor query based on sort field
-          if (sort.createdAt) {
-            // For createdAt sort (newest first), we want documents older than cursor
-            if (sort.createdAt === -1) {
-              query.$and = query.$and || [];
-              query.$and.push({
-                $or: [
-                  { createdAt: { $lt: new Date(cursorData.createdAt) } },
-                  { 
-                    createdAt: new Date(cursorData.createdAt),
-                    _id: { $lt: new ObjectId(cursorData._id) }
-                  }
-                ]
-              });
-            }
-          } else if (sort.price) {
-            // For price sort, handle price + _id compound cursor
-            const priceOperator = sort.price === 1 ? '$gt' : '$lt';
-            const idOperator = sort.price === 1 ? '$gt' : '$lt';
-            
-            query.$and = query.$and || [];
-            query.$and.push({
-              $or: [
-                { price: { [priceOperator]: cursorData.price } },
-                { 
-                  price: cursorData.price,
-                  _id: { [idOperator]: new ObjectId(cursorData._id) }
-                }
-              ]
-            });
-          } else if (sort.rating || sort.likes) {
-            // For rating/popularity sort
-            const sortField = sort.rating ? 'rating' : 'likes';
-            const sortOrder = sort[sortField];
-            const operator = sortOrder === -1 ? '$lt' : '$gt';
-            const idOperator = sortOrder === -1 ? '$lt' : '$gt';
-            
-            query.$and = query.$and || [];
-            query.$and.push({
-              $or: [
-                { [sortField]: { [operator]: cursorData[sortField] } },
-                { 
-                  [sortField]: cursorData[sortField],
-                  _id: { [idOperator]: new ObjectId(cursorData._id) }
-                }
-              ]
-            });
-          }
-        } catch (e) {
-          // Invalid cursor - ignore and start from beginning
-          console.warn('Invalid cursor provided:', cursor);
+          const cursorData = decodeMarketplaceCursor(cursor, sort);
+          query.$and = query.$and || [];
+          query.$and.push(buildMarketplaceCursorClause(cursorData, sort));
+        } catch {
+          return NextResponse.json({ error: "Invalid cursor" }, { status: 400 });
         }
       }
 
@@ -175,20 +126,7 @@ export async function GET(request) {
       // Generate next cursor if there are more items
       if (hasNextPage && items.length > 0) {
         const lastItem = items[items.length - 1];
-        const cursorData = { _id: lastItem._id.toString() };
-        
-        // Add sort field to cursor
-        if (sort.createdAt) {
-          cursorData.createdAt = lastItem.createdAt.toISOString();
-        } else if (sort.price) {
-          cursorData.price = lastItem.price;
-        } else if (sort.rating) {
-          cursorData.rating = lastItem.rating || lastItem.averageScore || 0;
-        } else if (sort.likes) {
-          cursorData.likes = lastItem.likes || 0;
-        }
-        
-        nextCursor = Buffer.from(JSON.stringify(cursorData)).toString('base64');
+        nextCursor = Buffer.from(JSON.stringify({ _id: lastItem._id.toString(), ...Object.fromEntries(Object.keys(sort).filter((field) => field !== "_id").map((field) => [field, lastItem[field] instanceof Date ? lastItem[field].toISOString() : lastItem[field]])) })).toString('base64url');
       }
     } else {
       // Legacy offset-based pagination

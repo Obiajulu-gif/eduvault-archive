@@ -340,9 +340,7 @@ export function parsePagination(searchParams, { defaultPageSize = 12, maxPageSiz
     return { cursor, pageSize, paginationType: "cursor" };
   }
 
-  // Fall back to offset-based pagination for backward compatibility
-  const page = Math.max(1, Number(searchParams.get("page") || "1"));
-  return { page, pageSize, paginationType: "offset" };
+  return { cursor: null, pageSize, paginationType: "cursor" };
 }
 
 export function escapeRegExp(value) {
