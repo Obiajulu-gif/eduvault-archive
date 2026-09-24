@@ -28,6 +28,14 @@ export const ProfileSchema = {
           bsonType: "string",
           description: "Optional email address for notifications and recovery",
         },
+        recoveryContactHash: {
+          bsonType: "string",
+          description: "Hash of an independently verified recovery contact; never the raw contact",
+        },
+        recoveryNoticeAccepted: {
+          bsonType: "bool",
+          description: "Creator acknowledged that wallet loss without recovery is unrecoverable",
+        },
         avatarCid: {
           bsonType: "string",
           description: "IPFS Content Identifier for the user's profile avatar",
