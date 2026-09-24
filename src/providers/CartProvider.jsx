@@ -114,9 +114,13 @@ export function CartProvider({ children }) {
 
       for (const item of cartItems) {
         const materialId = item._id || item.id;
+        const quote = await purchaseService.createPurchase({
+          action: 'quote', buyerAddress: address, materialId,
+        });
+        const quotedItem = { ...item, price: quote.price, asset: quote.asset };
         const unsignedXdr = await buildPurchaseTransactionXdr({
           buyerAddress: address,
-          item,
+          item: quotedItem,
           transactionReference: `cart:${materialId}:${Date.now()}`,
         });
         const { hash } = await execute(unsignedXdr, {
@@ -126,10 +130,11 @@ export function CartProvider({ children }) {
         const purchase = await purchaseService.createPurchase({
           buyerAddress: address,
           materialId,
+          quoteId: quote.quoteId,
           transactionHash: hash,
           email: email || undefined,
-          amount: item.price,
-          asset: item.asset || item.assetCode || undefined,
+          amount: quote.price,
+          asset: quote.asset,
         });
         confirmedPurchases.push(purchase);
       }

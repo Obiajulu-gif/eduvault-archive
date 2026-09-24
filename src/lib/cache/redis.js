@@ -34,3 +34,20 @@ export async function cacheDel(key) {
   if (!redis) return;
   try { await redis.del(key); } catch { /* no-op */ }
 }
+
+const CATALOG_REVISION_KEY = 'market-materials:revision';
+
+export async function catalogCacheKey(query) {
+  const redis = await getRedisClient();
+  let revision = '0';
+  if (redis) {
+    try { revision = (await redis.get(CATALOG_REVISION_KEY)) || '0'; } catch { /* fallback */ }
+  }
+  return `market-materials:v${revision}:${query}`;
+}
+
+export async function invalidateCatalogCache() {
+  const redis = await getRedisClient();
+  if (!redis) return;
+  try { await redis.incr(CATALOG_REVISION_KEY); } catch { /* TTL still bounds stale entries */ }
+}

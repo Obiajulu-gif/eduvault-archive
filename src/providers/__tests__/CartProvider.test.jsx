@@ -54,7 +54,9 @@ function Harness() {
 describe('CartProvider checkout', () => {
   it('records purchases only with a confirmed Stellar transaction hash', async () => {
     mockExecute.mockResolvedValue({ hash: 'real-stellar-hash' });
-    mockCreatePurchase.mockResolvedValue({ success: true });
+    mockCreatePurchase
+      .mockResolvedValueOnce({ quoteId: 'quote-1', price: 2, asset: 'XLM' })
+      .mockResolvedValueOnce({ success: true });
 
     render(
       <CartProvider>
@@ -65,13 +67,14 @@ describe('CartProvider checkout', () => {
     await userEvent.click(screen.getByRole('button', { name: 'add' }));
     await userEvent.click(screen.getByRole('button', { name: 'checkout' }));
 
-    await waitFor(() => expect(mockCreatePurchase).toHaveBeenCalled());
+    await waitFor(() => expect(mockCreatePurchase).toHaveBeenCalledTimes(2));
     expect(mockExecute).toHaveBeenCalledWith('unsigned-xdr', expect.objectContaining({
       description: 'Purchase Algebra',
     }));
     expect(mockCreatePurchase).toHaveBeenCalledWith(expect.objectContaining({
       transactionHash: 'real-stellar-hash',
+      quoteId: 'quote-1',
     }));
-    expect(mockCreatePurchase.mock.calls[0][0].transactionHash).not.toMatch(/^simulated_/);
+    expect(mockCreatePurchase.mock.calls[1][0].transactionHash).not.toMatch(/^simulated_/);
   });
 });

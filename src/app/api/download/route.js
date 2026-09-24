@@ -32,7 +32,8 @@ import { NextResponse } from 'next/server';
 import { v4 as uuidv4 } from 'uuid';
 import { authorizeMaterialAccess } from '@/lib/entitlement';
 import { getDb } from '@/lib/mongodb';
-import { getIpfsUrl } from '@/lib/config/chain';
+import { getPinningProviders } from '@/lib/pinata';
+import { resolveFromGateways } from '@/lib/storage/pinningService';
 import { ObjectId } from 'mongodb';
 import { getUserFromCookie } from '@/lib/api/auth';
 import { normalizeBuyerAddress } from '@/lib/purchases/access';
@@ -187,7 +188,9 @@ export async function GET(request) {
   });
 
   // Build the IPFS gateway URL with capability parameters
-  const baseGatewayUrl = getIpfsUrl(cid);
+  const baseGatewayUrl = /^https?:\/\//.test(cid)
+    ? cid
+    : (await resolveFromGateways(cid, getPinningProviders())).url;
   const capabilityQuery = new URLSearchParams({
     // Signed capability token
     cap: capabilityToken,

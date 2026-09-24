@@ -36,6 +36,8 @@ export const COLLECTIONS = {
   scholarshipConfig: "scholarship_config",
   creatorTiers: "creator_tiers",
   adminTransfers: "admin_transfers",
+  checkoutQuotes: "checkout_quotes",
+  storageQuotaHistory: "storage_quota_history",
 };
 
 export const REQUIRED_INDEXES = {
@@ -87,6 +89,15 @@ export const REQUIRED_INDEXES = {
     // per-creator earnings query in creator/payouts/route.js would benefit
     // from once scoped by buyerAddress/materialId alongside it.
     { keys: { status: 1, purchasedAt: 1 }, options: { name: "purchases_status_purchasedAt_idx", background: true } },
+  ],
+  checkout_quotes: [
+    { keys: { quoteId: 1 }, options: { unique: true } },
+    { keys: { expiresAt: 1 }, options: { expireAfterSeconds: 0 } },
+    { keys: { buyerAddress: 1, materialId: 1, status: 1 } },
+  ],
+  storage_quota_history: [
+    { keys: { provider: 1, checkedAt: -1 } },
+    { keys: { checkedAt: 1 }, options: { expireAfterSeconds: 31536000 } },
   ],
   payouts: [
     // #293: monthly-statements.mjs scans all payouts in a date window across

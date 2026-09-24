@@ -11,6 +11,7 @@ import {
 } from "@/lib/purchases/access";
 import { broadcastPurchaseEvent } from '@/lib/webhooks/sender';
 import { sendReceiptIfEligible } from '@/lib/email';
+import { createCheckoutQuote, consumeCheckoutQuote } from '@/lib/checkout/quotes';
 
 function duplicateKey(error) {
   return error?.code === 11000;
@@ -106,7 +107,7 @@ export async function POST(req) {
     const db = await getDb();
     const body = await req.json();
 
-    const { materialId, signedXdr, email, transactionHash, amount, asset, buyerAddress: bodyBuyerAddress } = body;
+    const { materialId, signedXdr, email, transactionHash, amount, asset, quoteId, action, buyerAddress: bodyBuyerAddress } = body;
     const buyerAddress = normalizeBuyerAddress(
       user?.walletAddress || user?.address || user?.id || bodyBuyerAddress
     );
@@ -120,12 +121,35 @@ export async function POST(req) {
       return NextResponse.json({ error: user ? "Missing buyer address" : "Unauthorized" }, { status: user ? 400 : 401 });
     }
 
-    const purchaseContext = { materialId, buyerAddress, paymentCompleted, transactionHash, signedXdr, amount, asset, email };
+    if (action === 'quote') {
+      const quote = await createCheckoutQuote(db, { materialId, buyerAddress });
+      return NextResponse.json({ quoteId: quote.quoteId, materialId: quote.materialId, ...quote.terms, expiresAt: quote.expiresAt }, { status: 201 });
+    }
+
+    const existing = await db.collection('purchases').findOne({ buyerAddress, materialId });
+    if (existing && isCompletedPurchaseStatus(existing.status)) {
+      return respondForExistingPurchase(db, existing, { materialId, buyerAddress, paymentCompleted, transactionHash, signedXdr, amount, asset, email });
+    }
+
+    if (paymentCompleted && !quoteId) {
+      return NextResponse.json({ error: 'A valid checkout quote is required. Refresh the listing and try again.' }, { status: 409 });
+    }
+
+    let quote = null;
+    if (paymentCompleted) {
+      try {
+        quote = await consumeCheckoutQuote(db, { quoteId, materialId, buyerAddress });
+      } catch (error) {
+        return NextResponse.json({ error: error.message, code: error.code }, { status: 409 });
+      }
+    }
+
+    const quotedAmount = quote?.terms?.price ?? amount;
+    const quotedAsset = quote?.terms?.asset ?? asset;
+
+    const purchaseContext = { materialId, buyerAddress, paymentCompleted, transactionHash, signedXdr, amount: quotedAmount, asset: quotedAsset, email };
 
     // Prevent duplicate purchases
-    const existing = await db
-      .collection('purchases')
-      .findOne({ buyerAddress, materialId });
     if (existing) {
       return respondForExistingPurchase(db, existing, purchaseContext);
     }
@@ -139,8 +163,10 @@ export async function POST(req) {
       status: paymentCompleted ? 'confirmed' : 'pending',
       transactionHash: transactionHash || null,
       signedXdr: signedXdr || null,
-      amount: amount ?? null,
-      asset: asset || null,
+      amount: quotedAmount ?? null,
+      asset: quotedAsset || null,
+      quoteId: quote?.quoteId || null,
+      purchaseSnapshot: quote?.terms || null,
       purchasedAt: paymentCompleted ? now : null,
       confirmedAt: paymentCompleted ? now : null,
       createdAt: now,

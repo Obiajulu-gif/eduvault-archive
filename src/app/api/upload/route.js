@@ -3,7 +3,9 @@ import { NextResponse } from 'next/server'
 import { auditLog } from '@/lib/api/audit'
 import { withApiHardening } from '@/lib/api/hardening'
 import { normalizeStringList, sanitizeObject, validateUploadPayload, validateUploadFileMetadata } from '@/lib/api/validation'
-import { pinata } from '@/lib/pinata'
+import { getPinningProviders } from '@/lib/pinata'
+import { pinWithQuorum, resolveFromGateways } from '@/lib/storage/pinningService'
+import { assertStorageCapacity } from '@/lib/storage/quotaMonitor'
 import { validatePinataResponse, validateGatewayUrl, retryWithBackoff } from '@/lib/api/storage'
 import { sanitizeRichText, isSafeUrl } from '@/lib/api/contentSanitizer'
 import { guardZipArchiveUpload } from '@/lib/backend/archiveUploadGuard'
@@ -173,11 +175,19 @@ export async function POST(request) {
         }
 
         const results = {}
+        const db = await getDb()
+        try {
+          await assertStorageCapacity(db, file.size + (image?.size || 0))
+        } catch (quotaError) {
+          auditLog({ event: 'upload_paused', route: 'upload', method: 'POST', status: 503, reason: 'storage_quota_exhausted' })
+          return NextResponse.json({ error: quotaError.message, retryable: true }, { status: 503 })
+        }
+        const pinningProviders = getPinningProviders()
 
         // 4️⃣ Upload the main file (with bounded retry/backoff)
         try {
           const uploadedFile = await retryWithBackoff(
-            () => pinata.upload.public.file(file),
+            () => pinWithQuorum(pinningProviders, 'pinFile', file),
             RETRY_ATTEMPTS,
             RETRY_DELAY_MS,
             (err, attempt) => console.warn(`[Storage] Document upload attempt ${attempt} failed: ${err.message}`)
@@ -185,7 +195,7 @@ export async function POST(request) {
           validatePinataResponse(uploadedFile, 'document')
 
           const fileUrl = await retryWithBackoff(
-            () => pinata.gateways.public.convert(uploadedFile.cid),
+            () => resolveFromGateways(uploadedFile.cid, pinningProviders).then((result) => result.url),
             RETRY_ATTEMPTS,
             RETRY_DELAY_MS,
             (err, attempt) => console.warn(`[Storage] Document gateway conversion attempt ${attempt} failed: ${err.message}`)
@@ -201,7 +211,6 @@ export async function POST(request) {
           // unavailable the record stays pending (fail-closed) and the material
           // remains hidden rather than being published unsafely.
           try {
-            const db = await getDb()
             const uploaderAddress = request.headers.get('x-wallet-address') || 'anonymous'
             const quarantine = await createQuarantineRecord({
               db,
@@ -246,7 +255,7 @@ export async function POST(request) {
         if (image) {
           try {
             const fileThumb = await retryWithBackoff(
-              () => pinata.upload.public.file(image),
+              () => pinWithQuorum(pinningProviders, 'pinFile', image),
               RETRY_ATTEMPTS,
               RETRY_DELAY_MS,
               (err, attempt) => console.warn(`[Storage] Thumbnail upload attempt ${attempt} failed: ${err.message}`)
@@ -254,7 +263,7 @@ export async function POST(request) {
             validatePinataResponse(fileThumb, 'thumbnail')
 
             const imgUrl = await retryWithBackoff(
-              () => pinata.gateways.public.convert(fileThumb.cid),
+              () => resolveFromGateways(fileThumb.cid, pinningProviders).then((result) => result.url),
               RETRY_ATTEMPTS,
               RETRY_DELAY_MS,
               (err, attempt) => console.warn(`[Storage] Thumbnail gateway conversion attempt ${attempt} failed: ${err.message}`)
@@ -340,7 +349,7 @@ export async function POST(request) {
         // 7️⃣ Upload metadata JSON to Pinata (with bounded retry/backoff)
         try {
           const uploadedJson = await retryWithBackoff(
-            () => pinata.upload.public.json(metadataJSON),
+            () => pinWithQuorum(pinningProviders, 'pinJson', metadataJSON),
             RETRY_ATTEMPTS,
             RETRY_DELAY_MS,
             (err, attempt) => console.warn(`[Storage] Metadata upload attempt ${attempt} failed: ${err.message}`)
@@ -348,7 +357,7 @@ export async function POST(request) {
           validatePinataResponse(uploadedJson, 'metadata')
 
           const jsonUrl = await retryWithBackoff(
-            () => pinata.gateways.public.convert(uploadedJson.cid),
+            () => resolveFromGateways(uploadedJson.cid, pinningProviders).then((result) => result.url),
             RETRY_ATTEMPTS,
             RETRY_DELAY_MS,
             (err, attempt) => console.warn(`[Storage] Metadata gateway conversion attempt ${attempt} failed: ${err.message}`)
@@ -364,7 +373,7 @@ export async function POST(request) {
         // 8️⃣ Return the CID as storageKey plus URLs for backwards-compatibility
         return NextResponse.json({
           success: true,
-          storageKey: results.storageKey || (uploadedFile && uploadedFile.cid),
+          storageKey: results.storageKey,
           fileUrl: results.fileUrl,
           image: results.imgUrl || '',
           metadata: results.metadataUrl,
