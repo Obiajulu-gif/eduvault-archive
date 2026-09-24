@@ -15,6 +15,7 @@ import { getUserFromCookie, sanitizeString } from "@/lib/api/auth";
 import { verifySessionWalletAddress } from "@/lib/auth/sessionVerification";
 import { sendWelcomeEmail } from "@/lib/email";
 import { getDb } from "@/lib/mongodb";
+import { invalidateCatalogCache } from '@/lib/cache/redis'
 
 export async function POST(request) {
   return withApiHardening(
@@ -217,6 +218,7 @@ export async function PATCH(request) {
         }
 
         const updatedUser = await users.findOne(updateQuery);
+        await invalidateCatalogCache();
 
         return NextResponse.json({ success: true, user: updatedUser });
       } catch (error) {

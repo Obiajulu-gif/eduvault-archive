@@ -8,6 +8,7 @@ const {
   mockBroadcastPurchaseEvent,
   mockGetMaterialAccessStatus,
   mockGetDb,
+  mockConsumeCheckoutQuote,
 } = vi.hoisted(() => ({
   mockGetUserFromCookie: vi.fn(),
   mockCreateEntitlement: vi.fn(),
@@ -15,6 +16,7 @@ const {
   mockBroadcastPurchaseEvent: vi.fn(),
   mockGetMaterialAccessStatus: vi.fn(),
   mockGetDb: vi.fn(),
+  mockConsumeCheckoutQuote: vi.fn(),
 }));
 
 vi.mock('@/lib/api/auth', () => ({ getUserFromCookie: mockGetUserFromCookie }));
@@ -29,6 +31,10 @@ vi.mock('@/lib/purchases/access', async () => {
   };
 });
 vi.mock('@/lib/mongodb', () => ({ getDb: mockGetDb }));
+vi.mock('@/lib/checkout/quotes', () => ({
+  createCheckoutQuote: vi.fn(),
+  consumeCheckoutQuote: mockConsumeCheckoutQuote,
+}));
 
 // Fake collection that mimics a Mongo unique index on { buyerAddress, materialId }:
 // insertOne throws a duplicate-key error (code 11000) if a matching doc already exists.
@@ -76,6 +82,7 @@ describe('POST /api/purchase - concurrent duplicate requests', () => {
     mockGetMaterialAccessStatus.mockResolvedValue({ hasAccess: true });
     mockCreateEntitlement.mockResolvedValue({ success: true });
     mockSendReceiptIfEligible.mockResolvedValue(undefined);
+    mockConsumeCheckoutQuote.mockResolvedValue({ quoteId: 'quote-1', terms: { price: 10, asset: 'USDC' } });
 
     const purchases = createFakePurchases();
     mockGetDb.mockResolvedValue({
@@ -91,6 +98,7 @@ describe('POST /api/purchase - concurrent duplicate requests', () => {
       materialId: 'mat-1',
       buyerAddress: 'GBUYER123',
       transactionHash: 'txhash-1',
+      quoteId: 'quote-1',
       amount: 10,
       asset: 'USDC',
     };

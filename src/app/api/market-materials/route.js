@@ -9,7 +9,7 @@ import { MATERIAL_SEARCH_COLLECTION } from "@/lib/backend/materialSearchProjecti
 import { getOwnedMaterialIds } from "@/lib/entitlement";
 import { getDb } from "@/lib/mongodb";
 import { ObjectId } from "mongodb";
-import { cacheGet, cacheSet } from "@/lib/cache/redis";
+import { cacheGet, cacheSet, catalogCacheKey } from "@/lib/cache/redis";
 
 export const runtime = "nodejs";
 
@@ -79,7 +79,7 @@ export async function GET(request) {
     // shared anonymous-browse cache is bypassed for this request.
     const buyerAddress = (url.searchParams.get("buyerAddress") || "").trim() || null;
 
-    const cacheKey = `market-materials:${url.searchParams.toString()}`;
+    const cacheKey = await catalogCacheKey(url.searchParams.toString());
     const cached = buyerAddress ? null : await cacheGet(cacheKey);
     if (cached) {
       return NextResponse.json(cached, { status: 200 });

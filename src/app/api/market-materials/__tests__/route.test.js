@@ -9,7 +9,11 @@ const { mockGetDb, mockCacheGet, mockCacheSet, mockGetOwnedMaterialIds } = vi.ho
 }));
 
 vi.mock("@/lib/mongodb", () => ({ getDb: mockGetDb }));
-vi.mock("@/lib/cache/redis", () => ({ cacheGet: mockCacheGet, cacheSet: mockCacheSet }));
+vi.mock("@/lib/cache/redis", () => ({
+  cacheGet: mockCacheGet,
+  cacheSet: mockCacheSet,
+  catalogCacheKey: async (query) => `market-materials:v0:${query}`,
+}));
 vi.mock("@/lib/entitlement", () => ({ getOwnedMaterialIds: mockGetOwnedMaterialIds }));
 
 const BUYER = "gbuyer123";
@@ -68,6 +72,16 @@ describe("GET /api/market-materials — entitlement-aware ranking (#707)", () =>
     expect(body.items.every((item) => item.owned === undefined)).toBe(true);
     // Anonymous browsing still benefits from the shared cache.
     expect(mockCacheSet).toHaveBeenCalledTimes(1);
+  });
+
+  it("serves a hot catalog query without touching MongoDB", async () => {
+    mockCacheGet.mockResolvedValueOnce({ items: [makeMaterial('cached')], paginationType: 'offset' });
+    const res = await GET(makeRequest({ page: '1' }));
+    expect(res.status).toBe(200);
+    expect((await res.json()).items[0].materialId).toBe('cached');
+    expect(mockGetDb).toHaveBeenCalledOnce();
+    // The route obtains the db handle before cache lookup, but performs no
+    // collection query on a hit; the mock would throw if collection() ran.
   });
 
   it("marks owned materials and reranks them after not-owned ones", async () => {

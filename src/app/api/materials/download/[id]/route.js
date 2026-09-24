@@ -7,8 +7,9 @@ import { getUserFromCookie } from "@/lib/api/auth";
 import { withApiHardening } from "@/lib/api/hardening";
 import { auditLog } from "@/lib/api/audit";
 import { authorizeMaterialAccess } from "@/lib/entitlement";
-import { getIpfsUrl } from "@/lib/config/chain";
 import { normalizeBuyerAddress } from "@/lib/purchases/access";
+import { getPinningProviders } from '@/lib/pinata'
+import { resolveFromGateways } from '@/lib/storage/pinningService'
 
 export async function GET(req, { params }) {
   return withApiHardening(
@@ -100,7 +101,9 @@ export async function GET(req, { params }) {
           return NextResponse.json({ error: "Material has no associated file" }, { status: 404 });
         }
 
-        const downloadUrl = getIpfsUrl(cid);
+        const downloadUrl = /^https?:\/\//.test(cid)
+          ? cid
+          : (await resolveFromGateways(cid, getPinningProviders())).url;
 
         auditLog({
           event: "download_granted",
