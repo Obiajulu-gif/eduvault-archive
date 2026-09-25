@@ -12,11 +12,67 @@ This guide describes the local setup required to run EduVault and test the main 
 - Wallet tooling for testing wallet-connected flows
 
 For contributors working on Soroban smart contracts in `soroban/`:
+
 - Rust and Cargo (stable channel via `rustup`)
 - WebAssembly target `wasm32v1-none`
 - Stellar CLI (`cargo install --locked stellar-cli --version 25.2.0`)
 - OS build tools (`build-essential` on Linux, Xcode Command Line Tools on macOS; Windows contributors using WSL 2 must install `build-essential` inside their WSL environment)
 - See the [Contribution Guide](contributing.md#rust-and-soroban-prerequisites) for full setup instructions.
+
+## One-Command Local Bootstrap
+
+The fastest path from a fresh checkout to a working local environment is the
+bootstrap script. It handles all of the steps below automatically:
+
+```bash
+bash scripts/bootstrap-local.sh
+```
+
+Or via npm:
+
+```bash
+npm run bootstrap:local
+```
+
+For a faster iteration loop that skips the Soroban contract build and smoke
+test:
+
+```bash
+npm run bootstrap:local:fast
+# equivalent: bash scripts/bootstrap-local.sh --skip-contracts --skip-smoke
+```
+
+The bootstrap script is **idempotent** — running it multiple times is safe and
+produces the same local state. It:
+
+1. Checks prerequisites (Node ≥ 20, npm, Docker, optional Rust/stellar-cli).
+2. Copies `.env.example` → `.env.local` if not present.
+3. Runs `npm install`.
+4. Starts MongoDB via `docker compose up -d mongodb`.
+5. Waits for MongoDB to be ready.
+6. Runs `node scripts/setup-db-indexes.js`.
+7. Seeds deterministic fixture data (3 creators, 3 buyers, 6 materials,
+   3 purchases, 3 entitlement entries, 2 refunds) via
+   `node scripts/seed-local-fixtures.mjs`.
+8. Optionally builds Soroban contracts (`cd soroban && bash build.sh`).
+9. Runs the local smoke test (`node scripts/smoke-local.mjs`).
+10. Prints a summary with app URL, seed account credentials, and next steps.
+
+To reseed fixture data without re-running the full bootstrap:
+
+```bash
+npm run seed:local
+# or to force-replace existing fixtures:
+FORCE_RESEED=true npm run seed:local
+```
+
+To run only the local smoke test:
+
+```bash
+npm run smoke:local
+```
+
+---
 
 ## Install Dependencies
 
@@ -36,14 +92,14 @@ cp .env.example .env.local
 
 Required local values for the main app are:
 
-| Variable | Purpose |
-| --- | --- |
-| `MONGODB_URI` | MongoDB connection string used by API routes |
-| `JWT_SECRET` | Secret used to sign local session tokens |
-| `NEXT_PUBLIC_APP_URL` | Base URL for local links, usually `http://localhost:3000` |
-| `PINATA_JWT` | Pinata API token used for uploads |
-| `NEXT_PUBLIC_GATEWAY_URL` | Public gateway URL for reading pinned content |
-| `REDIS_URL` | Redis connection URL for distributed sliding-window rate limiting and catalog cache |
+| Variable                  | Purpose                                                                             |
+| ------------------------- | ----------------------------------------------------------------------------------- |
+| `MONGODB_URI`             | MongoDB connection string used by API routes                                        |
+| `JWT_SECRET`              | Secret used to sign local session tokens                                            |
+| `NEXT_PUBLIC_APP_URL`     | Base URL for local links, usually `http://localhost:3000`                           |
+| `PINATA_JWT`              | Pinata API token used for uploads                                                   |
+| `NEXT_PUBLIC_GATEWAY_URL` | Public gateway URL for reading pinned content                                       |
+| `REDIS_URL`               | Redis connection URL for distributed sliding-window rate limiting and catalog cache |
 
 Optional values include SMTP settings, WalletConnect project configuration, and planned Stellar/Soroban settings such as `NEXT_PUBLIC_STELLAR_NETWORK`, `NEXT_PUBLIC_STELLAR_RPC_URL`, `NEXT_PUBLIC_HORIZON_URL`, and `NEXT_PUBLIC_SOROBAN_CONTRACT_ID`.
 

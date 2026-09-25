@@ -32,7 +32,13 @@
     "indexer:stellar": "node scripts/run-stellar-indexer.mjs",
     "clean:intents": "node scripts/clean-stale-intents.mjs",
     "clean:intents:dry": "DRY_RUN=true node scripts/clean-stale-intents.mjs",
-    "indexer:deadletter": "node scripts/indexer-deadletter.mjs"
+    "indexer:deadletter": "node scripts/indexer-deadletter.mjs",
+    "bootstrap:local": "bash scripts/bootstrap-local.sh",
+    "bootstrap:local:fast": "bash scripts/bootstrap-local.sh --skip-contracts --skip-smoke",
+    "db:indexes": "node scripts/setup-db-indexes.js",
+    "benchmark:marketplace": "node scripts/benchmark-marketplace-search.mjs",
+    "seed:local": "node scripts/seed-local-fixtures.mjs",
+    "smoke:local": "node scripts/smoke-local.mjs"
   },
   "dependencies": {
     "@creit-tech/stellar-wallets-kit": "npm:@jsr/creit-tech__stellar-wallets-kit@^2.1.0",
@@ -61,6 +67,7 @@
     "recharts": "^3.10.0",
     "redis": "^4.7.0",
     "sanitize-html": "^2.17.7",
+    "sharp": "^0.34.5",
     "swagger-ui-react": "^5.32.6",
     "viem": "^2.48.2",
     "wagmi": "^2.19.5",
