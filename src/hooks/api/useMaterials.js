@@ -1,4 +1,4 @@
-import { keepPreviousData, useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { keepPreviousData, useQuery, useInfiniteQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { materialService } from '@/services/materialService';
 import { queryKeys } from '@/lib/query/queryKeys';
 
@@ -28,11 +28,12 @@ export function useMaterialDetail(id) {
   });
 }
 
-export function useMaterialFeedback(id) {
+export function useMaterialFeedback(id, options = {}) {
   return useQuery({
     queryKey: queryKeys.materials.feedback(id),
     queryFn: () => materialService.getMaterialFeedback(id),
     enabled: !!id,
+    ...options,
   });
 }
 
@@ -40,6 +41,29 @@ export function useUserMaterials() {
   return useQuery({
     queryKey: queryKeys.materials.all,
     queryFn: () => materialService.getUserMaterials(),
+  });
+}
+
+/**
+ * Hook for cursor-based infinite loading of marketplace materials
+ * Provides better performance for large result sets
+ */
+export function useInfiniteMarketplaceMaterials(params = {}) {
+  return useInfiniteQuery({
+    queryKey: ['materials', 'infinite', params],
+    queryFn: async ({ pageParam = null }) => {
+      const queryParams = { 
+        ...params, 
+        cursor: pageParam,
+        page: undefined // Remove page param for cursor-based pagination
+      };
+      return materialService.getMarketplaceMaterials(queryParams);
+    },
+    initialPageParam: null,
+    getNextPageParam: (lastPage) => {
+      return lastPage?.nextCursor || null;
+    },
+    staleTime: 5 * 60 * 1000,
   });
 }
 

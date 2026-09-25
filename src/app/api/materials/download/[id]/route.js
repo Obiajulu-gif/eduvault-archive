@@ -4,76 +4,141 @@ import { getDb } from "@/lib/mongodb";
 import { NextResponse } from "next/server";
 import { ObjectId } from "mongodb";
 import { getUserFromCookie } from "@/lib/api/auth";
-import { verifyEntitlement } from "@/lib/entitlement";
-import { getIpfsUrl } from "@/lib/config/chain";
+import { withApiHardening } from "@/lib/api/hardening";
+import { auditLog } from "@/lib/api/audit";
+import { authorizeMaterialAccess } from "@/lib/entitlement";
 import { normalizeBuyerAddress } from "@/lib/purchases/access";
+import { getPinningProviders } from '@/lib/pinata'
+import { resolveFromGateways } from '@/lib/storage/pinningService'
 
 export async function GET(req, { params }) {
-  try {
-    const { id } = await params;
-    if (!ObjectId.isValid(id)) {
-      return NextResponse.json({ error: "Invalid material ID" }, { status: 400 });
-    }
+  return withApiHardening(
+    req,
+    { route: "material-download", rateLimit: { limit: 60, windowMs: 60_000 } },
+    async () => {
+      try {
+        const { id } = await params;
+        if (!id || !ObjectId.isValid(id)) {
+          auditLog({ event: "download_invalid_id", route: "material-download", method: "GET", status: 400, materialId: id });
+          return NextResponse.json({ error: "Invalid material ID" }, { status: 400 });
+        }
 
-    const user = await getUserFromCookie(req);
-    if (!user) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
+        const user = await getUserFromCookie(req);
+        if (!user) {
+          auditLog({ event: "download_auth_failed", route: "material-download", method: "GET", status: 401 });
+          return NextResponse.json({ error: "Authentication required" }, { status: 401 });
+        }
 
-    const userAddress = normalizeBuyerAddress(user.walletAddress || user.address || user.id);
-    const db = await getDb();
+        const userAddress = normalizeBuyerAddress(user.walletAddress || user.address || user.id);
+        
+        const { searchParams } = new URL(req.url);
+        let accessReason = "buyer_download";
+        if (searchParams.get("preview") === "true" || searchParams.get("reason") === "preview") {
+          accessReason = "preview";
+        } else if (searchParams.get("reason") === "support") {
+          accessReason = "support";
+        } else if (user.role === "admin") {
+          accessReason = "admin_review";
+        }
 
-    const material = await db
-      .collection("materials")
-      .findOne({ _id: new ObjectId(id) });
+        if (!userAddress) {
+          auditLog({ event: "download_no_address", route: "material-download", method: "GET", status: 400, actor: user.sub, role: user.role, reason: accessReason });
+          return NextResponse.json({ error: "No wallet address on account" }, { status: 400 });
+        }
 
-    if (!material) {
-      return NextResponse.json({ error: "Material not found" }, { status: 404 });
-    }
+        const db = await getDb();
+        const material = await db
+          .collection("materials")
+          .findOne({ _id: new ObjectId(id) });
 
-    const isOwner =
-      normalizeBuyerAddress(material.userAddress) === userAddress ||
-      normalizeBuyerAddress(material.ownerAddress) === userAddress;
+        if (!material) {
+          auditLog({ event: "download_not_found", route: "material-download", method: "GET", status: 404, materialId: id, actor: user.sub, role: user.role, reason: accessReason });
+          return NextResponse.json({ error: "Material not found" }, { status: 404 });
+        }
 
-    let hasAccess = isOwner;
+        const decision = await authorizeMaterialAccess({ db, material, buyerAddress: userAddress });
+        const accessSource = decision.source;
+        const purchaseId = decision.purchaseId;
 
-    if (!hasAccess) {
-      if (material.price > 0) {
-        // Use the centralized entitlement verification (cache → DB → chain)
-        const entitlement = await verifyEntitlement(id, userAddress);
-        hasAccess = entitlement.hasAccess;
-      } else if (material.visibility === "public") {
-        hasAccess = true;
+        if (!decision.allowed) {
+          auditLog({
+            event: decision.state === "unavailable" ? "download_unavailable" : "download_access_denied",
+            route: "material-download",
+            method: "GET",
+            status: decision.httpStatus,
+            actor: user.sub,
+            role: user.role,
+            walletAddress: userAddress,
+            materialId: id,
+            material: material.title || id,
+            version: material.version || "1.0",
+            purchase: purchaseId || null,
+            reason: accessReason,
+          });
+          return NextResponse.json(
+            decision.state === "unavailable"
+              ? { error: "Could not confirm your entitlement right now. Please try again shortly." }
+              : { error: "Access denied. You do not have permission to access this material." },
+            { status: decision.httpStatus }
+          );
+        }
+
+        const cid = material.ipfsCid ?? material.cid ?? material.fileHash ?? material.storageKey ?? material.fileUrl ?? "";
+        if (!cid) {
+          auditLog({
+            event: "download_no_file",
+            route: "material-download",
+            method: "GET",
+            status: 404,
+            actor: user.sub,
+            role: user.role,
+            materialId: id,
+            material: material.title || id,
+            version: material.version || "1.0",
+            purchase: purchaseId || null,
+            reason: accessReason,
+          });
+          return NextResponse.json({ error: "Material has no associated file" }, { status: 404 });
+        }
+
+        const downloadUrl = /^https?:\/\//.test(cid)
+          ? cid
+          : (await resolveFromGateways(cid, getPinningProviders())).url;
+
+        auditLog({
+          event: "download_granted",
+          route: "material-download",
+          method: "GET",
+          status: 200,
+          actor: user.sub,
+          role: user.role,
+          walletAddress: userAddress,
+          materialId: id,
+          material: material.title || id,
+          version: material.version || "1.0",
+          purchase: purchaseId || null,
+          reason: accessReason,
+        });
+
+        return NextResponse.json(
+          {
+            success: true,
+            downloadUrl,
+            fileName: material.fileName ?? material.title ?? id,
+            contentType: material.contentType ?? "application/octet-stream",
+            source: accessSource,
+          },
+          {
+            headers: {
+              "Cache-Control": "private, max-age=60",
+              "X-Access-Source": accessSource,
+            },
+          }
+        );
+      } catch (err) {
+        auditLog({ event: "download_error", route: "material-download", method: "GET", status: 500, reason: err?.message });
+        return NextResponse.json({ error: "Internal server error" }, { status: 500 });
       }
     }
-
-    if (!hasAccess) {
-      return NextResponse.json(
-        {
-          error: "Access denied. You do not have permission to access this material.",
-        },
-        { status: 403 }
-      );
-    }
-
-    const storageKey = material.storageKey || material.fileUrl;
-
-    if (!storageKey) {
-      return NextResponse.json({ error: "Material file reference missing" }, { status: 404 });
-    }
-
-    const downloadUrl = getIpfsUrl(storageKey);
-
-    return NextResponse.json(
-      {
-        success: true,
-        downloadUrl,
-        title: material.title,
-      },
-      { status: 200 }
-    );
-  } catch (error) {
-    console.error("Download Gate Error:", error);
-    return NextResponse.json({ error: "Internal Server Error" }, { status: 500 });
-  }
+  );
 }

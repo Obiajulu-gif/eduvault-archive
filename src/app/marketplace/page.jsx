@@ -1,129 +1,41 @@
-// Marketplace page: discovery filters are reflected in the URL for shareable searches.
+import { Suspense } from "react";
+import { Navbar } from "@/components/Navbar";
+import { ScrollToTop } from "@/components/ScrollToTop";
+import { MarketplaceContent } from "@/components/marketplace/MarketplaceContent";
 
-"use client";
+// Enable ISR with 60-second revalidation
+export const revalidate = 60;
 
-import { useEffect, useState } from "react";
-import Image from "next/image";
-import Link from "next/link";
-import { useRouter } from "next/navigation";
-import {
-  FaExchangeAlt,
-  FaFilePdf,
-  FaFilePowerpoint,
-  FaFileWord,
-  FaFilter,
-  FaHeart,
-  FaRegClock,
-  FaSearch,
-  FaShoppingCart,
-  FaStar,
-} from "react-icons/fa";
-import { motion } from "framer-motion";
-
-import Navbar from "@/components/Navbar";
-import SaveMaterialButton from "@/components/materials/SaveMaterialButton";
-import RecentlyViewedMaterials from "@/components/materials/RecentlyViewedMaterials";
-import ResourceStatusBadge from "@/components/materials/ResourceStatusBadge";
-import { useMarketplaceMaterials } from "@/hooks/api/useMaterials";
-import { useCart } from "@/hooks/useCart";
-import { useComparison } from "@/hooks/useComparison";
-
-export const dynamic = "force-dynamic";
-
-const ALL_SUBJECT = { id: "all", label: "All" };
-
-const DEFAULT_SUBJECTS = [
-  ALL_SUBJECT,
-  { id: "mathematics", label: "Math" },
-  { id: "science", label: "Science" },
-  { id: "law", label: "Law" },
-  { id: "technology", label: "Technology" },
-  { id: "business", label: "Business" },
-  { id: "medicine", label: "Medicine" },
-  { id: "arts", label: "Arts" },
-];
-
-const LEVEL_OPTIONS = [
-  { id: "", label: "Any level" },
-  { id: "beginner", label: "Beginner" },
-  { id: "intermediate", label: "Intermediate" },
-  { id: "advanced", label: "Advanced" },
-  { id: "all-levels", label: "All Levels" },
-];
-
-const CONTENT_TYPE_OPTIONS = [
-  { id: "", label: "Any type" },
-  { id: "pdf", label: "PDF" },
-  { id: "word", label: "Word" },
-  { id: "presentation", label: "Presentation" },
-  { id: "spreadsheet", label: "Spreadsheet" },
-  { id: "text", label: "Text" },
-  { id: "zip", label: "ZIP" },
-];
-
-const LICENSE_OPTIONS = [
-  { id: "", label: "Any license" },
-  { id: "standard", label: "Standard License", value: "Standard License (download only)" },
-  { id: "creative-commons", label: "Creative Commons", value: "Creative Commons" },
-  { id: "private-use", label: "Private Use Only", value: "Private Use Only" },
-];
-
-const RATING_OPTIONS = [
-  { id: "", label: "Any rating" },
-  { id: "4", label: "4+ stars" },
-  { id: "3", label: "3+ stars" },
-  { id: "2", label: "2+ stars" },
-  { id: "1", label: "1+ star" },
-];
-
-const NEWEST_OPTIONS = [
-  { id: "", label: "Any date" },
-  { id: "7d", label: "Last 7 days" },
-  { id: "30d", label: "Last 30 days" },
-  { id: "90d", label: "Last 90 days" },
-];
-
-const SORT_OPTIONS = [
-  { id: "newest", label: "Newest first" },
-  { id: "popular", label: "Popular" },
-  { id: "rating_desc", label: "Highest rated" },
-  { id: "price_asc", label: "Price: Low to High" },
-  { id: "price_desc", label: "Price: High to Low" },
-];
-
-function getPreviewImage(material) {
-  return material.coverImageUrl || material.thumbnailUrl || material.image || "/images/image1.jpg";
+// Allow static generation with different search parameter combinations
+// But limit to prevent unbounded cache entries for free-text search
+export async function generateStaticParams() {
+  // Generate static versions for common filter combinations only
+  // Exclude search params to prevent unbounded cache entries
+  return [
+    {}, // Base marketplace page
+    { subject: "mathematics" },
+    { subject: "science" }, 
+    { subject: "technology" },
+    { subject: "business" },
+    { sortBy: "newest" },
+    { sortBy: "popular" },
+  ];
 }
 
-function normalizeSubjectOptions(subjects) {
-  if (!Array.isArray(subjects) || subjects.length === 0) return DEFAULT_SUBJECTS;
+export default function MarketplacePage() {
+  return (
+    <>
+      <Navbar />
+      
+      <section className="flex flex-col lg:flex-row min-h-screen bg-background">
+        <Suspense fallback={<MarketplaceLoadingSkeleton />}>
+          <MarketplaceContent />
+        </Suspense>
+      </section>
 
-  const seen = new Set(["all"]);
-  const normalized = subjects
-    .map((subject) => {
-      if (typeof subject === "string") {
-        return subject.toLowerCase() === "all" ? ALL_SUBJECT : { id: subject, label: subject };
-      }
-
-      return {
-        id: subject?.id || subject?.label,
-        label: subject?.label || subject?.id,
-      };
-    })
-    .filter((subject) => subject.id && subject.label)
-    .filter((subject) => {
-      const key = subject.id.toLowerCase();
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    });
-
-  return [ALL_SUBJECT, ...normalized];
-}
-
-function getAverageScore(material) {
-	const score = Number(material.averageScore ?? material.rating);
-	return Number.isFinite(score) && score > 0 ? score.toFixed(1) : "New";
+      <ScrollToTop />
+    </>
+  );
 }
 
 function getFeedbackCount(material) {

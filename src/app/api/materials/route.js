@@ -8,6 +8,9 @@ import { getUserFromCookie } from "@/lib/api/auth";
 import { getDb } from "@/lib/mongodb";
 import { ObjectId } from "mongodb";
 import { buildMaterialHistoryEntry, EDITABLE_MATERIAL_FIELDS } from "@/lib/backend/schemaContracts";
+import { enqueueMaterialSearchProjection } from "@/lib/backend/materialSearchProjection";
+import { evaluateAndQueueListing } from "@/lib/backend/manipulationScoring";
+import { invalidateCatalogCache } from "@/lib/cache/redis";
 
 export const runtime = "nodejs";
 
@@ -46,11 +49,19 @@ export async function POST(request) {
         const doc = {
           userAddress,
           ...material,
+          version: 1,
           createdAt: new Date(),
           updatedAt: new Date(),
         };
 
         const result = await db.collection("materials").insertOne(doc);
+        const assessment = await evaluateAndQueueListing(db, { _id: result.insertedId, ...doc });
+        await enqueueMaterialSearchProjection({
+          db,
+          material: { _id: result.insertedId, ...doc, ...(assessment.flagged ? { moderationStatus: "pending_review" } : {}) },
+          reason: "material_created",
+        });
+        await invalidateCatalogCache();
         auditLog({ event: "material_created", route: "materials", method: "POST", status: 201, actor: user.sub });
         return NextResponse.json({ success: true, materialId: result.insertedId, ...sanitizeMaterial(doc) }, { status: 201 });
       } catch (err) {
@@ -129,13 +140,23 @@ export async function PUT(request) {
         }
 
         const now = new Date();
-        const updateDoc = { ...updates, updatedAt: now, updatedBy: userAddress };
+        const nextVersion = (existing.version || 1) + 1;
+        const updateDoc = { ...updates, updatedAt: now, updatedBy: userAddress, version: nextVersion, searchVersion: nextVersion };
 
         const result = await db.collection("materials").findOneAndUpdate(
           { _id: new ObjectId(materialId) },
           { $set: updateDoc },
           { returnDocument: "after" }
         );
+        const updatedMaterial = result?.value || result || { ...existing, ...updateDoc };
+        const assessment = await evaluateAndQueueListing(db, updatedMaterial, { now });
+        if (assessment.flagged) updatedMaterial.moderationStatus = "pending_review";
+        await enqueueMaterialSearchProjection({
+          db,
+          material: updatedMaterial,
+          reason: "material_updated",
+          now,
+        });
 
         const historyEntry = buildMaterialHistoryEntry({
           materialId,
@@ -147,9 +168,10 @@ export async function PUT(request) {
         });
 
         await db.collection("material_history").insertOne(historyEntry);
+        await invalidateCatalogCache();
 
         auditLog({ event: "material_updated", route: "materials", method: "PUT", status: 200, actor: user.sub, materialId });
-        return NextResponse.json(sanitizeMaterial(result));
+        return NextResponse.json(sanitizeMaterial(updatedMaterial));
       } catch (err) {
         if (err.name === "ValidationError") throw err;
         auditLog({ event: "material_update_failed", route: "materials", method: "PUT", status: 500, reason: err.message });

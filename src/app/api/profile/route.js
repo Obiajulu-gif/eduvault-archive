@@ -1,3 +1,4 @@
+// Resolves: Create API routes to save and update creator profiles in the database.
 export const dynamic = "force-dynamic";
 
 import { NextResponse } from "next/server";
@@ -11,8 +12,10 @@ import {
   validatePayoutSettingsPayload,
 } from "@/lib/api/validation";
 import { getUserFromCookie, sanitizeString } from "@/lib/api/auth";
+import { verifySessionWalletAddress } from "@/lib/auth/sessionVerification";
 import { sendWelcomeEmail } from "@/lib/email";
 import { getDb } from "@/lib/mongodb";
+import { invalidateCatalogCache } from '@/lib/cache/redis'
 
 export async function POST(request) {
   return withApiHardening(
@@ -40,6 +43,7 @@ export async function POST(request) {
     }
 
     const newUser = {
+      uuid: crypto.randomUUID(),
       ...profile,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
@@ -113,6 +117,14 @@ export async function PATCH(request) {
         }
 
         const profileData = await request.json();
+
+        if (profileData.walletAddress) {
+          if (!verifySessionWalletAddress(user, profileData)) {
+            auditLog({ event: "profile_update_forbidden", route: "profile", method: "PATCH", status: 403 });
+            return NextResponse.json({ error: "Forbidden: Wallet address mismatch" }, { status: 403 });
+          }
+        }
+
         const updateFields = {};
 
         if (profileData.displayName && typeof profileData.displayName === 'string') {
@@ -145,6 +157,14 @@ export async function PATCH(request) {
 
         if (profileData.websiteUrl && typeof profileData.websiteUrl === 'string') {
           updateFields.websiteUrl = sanitizeString(profileData.websiteUrl, { maxLength: 256 });
+        }
+
+        if (profileData.coverPhoto && typeof profileData.coverPhoto === 'string') {
+          updateFields.coverPhoto = sanitizeString(profileData.coverPhoto, { maxLength: 500000 });
+        }
+
+        if (profileData.coverUrl && typeof profileData.coverUrl === 'string') {
+          updateFields.coverUrl = sanitizeString(profileData.coverUrl, { maxLength: 500000 });
         }
 
         if (
@@ -198,6 +218,7 @@ export async function PATCH(request) {
         }
 
         const updatedUser = await users.findOne(updateQuery);
+        await invalidateCatalogCache();
 
         return NextResponse.json({ success: true, user: updatedUser });
       } catch (error) {

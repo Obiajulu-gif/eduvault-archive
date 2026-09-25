@@ -16,6 +16,8 @@ import {
 	FaWallet,
 	FaRocket,
 	FaGraduationCap,
+	FaDownload,
+	FaTicketAlt,
 } from "react-icons/fa";
 
 export default function Sidebar() {
@@ -31,6 +33,8 @@ export default function Sidebar() {
 		{ icon: <FaUpload />, label: "Upload Material", href: "/dashboard/upload" },
 		{ icon: <FaFileUpload />, label: "Bulk Upload", href: "/dashboard/bulk-upload" },
 		{ icon: <FaUser />, label: "My Materials", href: "/dashboard/my-materials" },
+		{ icon: <FaDownload />, label: "Download Logs", href: "/dashboard/analytics/downloads" },
+		{ icon: <FaTicketAlt />, label: "Coupon Codes", href: "/dashboard/coupons" },
 	];
 
 	const financeItems = [
@@ -39,7 +43,7 @@ export default function Sidebar() {
 	];
 
 	const learnerItems = [
-		{ icon: <FaBoxOpen />, label: "My Purchases", href: "/dashboard/purchases" },
+		{ icon: <FaBoxOpen />, label: "My Library", href: "/dashboard/library" },
 		{ icon: <FaHeart />, label: "Favourites", href: "/dashboard/favourites" },
 		{ icon: <FaHistory />, label: "History", href: "/dashboard/history" },
 	];

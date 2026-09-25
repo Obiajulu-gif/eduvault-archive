@@ -18,6 +18,7 @@ export const materials = {
         _id: "mat_draft_123",
         title: "Draft Macroeconomics Notes",
         description: "In-progress notes.",
+        userAddress: users.creator.walletAddress,
         creatorWallet: users.creator.walletAddress,
         status: "draft",
         price: "10",

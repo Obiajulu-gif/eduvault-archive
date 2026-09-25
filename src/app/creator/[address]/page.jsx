@@ -24,6 +24,8 @@ import {
   FaWallet,
 } from 'react-icons/fa';
 import { motion, AnimatePresence } from 'framer-motion';
+import SocialLinks from '@/components/SocialLinks';
+import CopyButton from '@/components/CopyButton';
 import Navbar from '@/components/Navbar';
 import { useMarketplaceMaterials } from '@/hooks/api/useMaterials';
 import { useCart } from '@/hooks/useCart';
@@ -128,6 +130,14 @@ export default function CreatorProfilePage() {
       
       if (editProfile.websiteUrl !== undefined && editProfile.websiteUrl !== creatorProfile.websiteUrl) {
         updateData.websiteUrl = editProfile.websiteUrl;
+      }
+
+      if (editProfile.discordUrl !== undefined && editProfile.discordUrl !== creatorProfile.discordUrl) {
+        updateData.discordUrl = editProfile.discordUrl;
+      }
+
+      if (editProfile.telegramUrl !== undefined && editProfile.telegramUrl !== creatorProfile.telegramUrl) {
+        updateData.telegramUrl = editProfile.telegramUrl;
       }
       
       if (Object.keys(updateData).length === 0) {
@@ -320,38 +330,7 @@ export default function CreatorProfilePage() {
             </p>
 
             {/* Social Connect Links */}
-            <div className="flex items-center gap-2.5">
-              <a
-                href={creatorProfile.twitterUrl || "#"}
-                target="_blank"
-                rel="noopener noreferrer"
-                className={`w-9 h-9 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700/60 hover:bg-slate-100 dark:hover:bg-slate-700 focus-visible:ring-2 focus-visible:ring-blue-500 ${creatorProfile.twitterUrl ? 'hover:text-blue-500' : 'text-slate-300 dark:text-slate-600 cursor-not-allowed'} flex items-center justify-center text-slate-500 dark:text-slate-400 text-sm transition-all`}
-                title="Twitter Connect"
-                aria-label={creatorProfile.twitterUrl ? `Visit ${creatorProfile.fullName}'s Twitter profile` : "Twitter profile not available"}
-              >
-                <FaTwitter />
-              </a>
-              <a
-                href={creatorProfile.githubUrl || "#"}
-                target="_blank"
-                rel="noopener noreferrer"
-                className={`w-9 h-9 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700/60 hover:bg-slate-100 dark:hover:bg-slate-700 focus-visible:ring-2 focus-visible:ring-blue-500 ${creatorProfile.githubUrl ? 'hover:text-slate-900 dark:hover:text-white' : 'text-slate-300 dark:text-slate-600 cursor-not-allowed'} flex items-center justify-center text-slate-500 dark:text-slate-400 text-sm transition-all`}
-                title="GitHub Connect"
-                aria-label={creatorProfile.githubUrl ? `Visit ${creatorProfile.fullName}'s GitHub profile` : "GitHub profile not available"}
-              >
-                <FaGithub />
-              </a>
-              <a
-                href={creatorProfile.websiteUrl || "#"}
-                target="_blank"
-                rel="noopener noreferrer"
-                className={`w-9 h-9 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700/60 hover:bg-slate-100 dark:hover:bg-slate-700 focus-visible:ring-2 focus-visible:ring-blue-500 ${creatorProfile.websiteUrl ? 'hover:text-blue-600' : 'text-slate-300 dark:text-slate-600 cursor-not-allowed'} flex items-center justify-center text-slate-500 dark:text-slate-400 text-sm transition-all`}
-                title="Personal website"
-                aria-label={creatorProfile.websiteUrl ? `Visit ${creatorProfile.fullName}'s personal website` : "Personal website not available"}
-              >
-                <FaGlobe />
-              </a>
-            </div>
+            <SocialLinks profile={creatorProfile} className="flex items-center gap-2.5" />
           </div>
         </motion.section>
 
@@ -834,6 +813,34 @@ export default function CreatorProfilePage() {
                           value={editProfile.websiteUrl || creatorProfile.websiteUrl || ''}
                           onChange={(e) => setEditProfile({...editProfile, websiteUrl: e.target.value})}
                           placeholder="https://yourwebsite.com"
+                          className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-850 border border-slate-200 dark:border-slate-800 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/50 dark:focus:ring-blue-450"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-xs font-bold text-slate-400 uppercase tracking-wider mb-1">
+                          Discord
+                        </label>
+                        <input
+                          type="url"
+                          aria-label="Discord URL"
+                          value={editProfile.discordUrl || creatorProfile.discordUrl || ''}
+                          onChange={(e) => setEditProfile({...editProfile, discordUrl: e.target.value})}
+                          placeholder="https://discord.gg/invite"
+                          className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-850 border border-slate-200 dark:border-slate-800 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/50 dark:focus:ring-blue-450"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-xs font-bold text-slate-400 uppercase tracking-wider mb-1">
+                          Telegram
+                        </label>
+                        <input
+                          type="url"
+                          aria-label="Telegram URL"
+                          value={editProfile.telegramUrl || creatorProfile.telegramUrl || ''}
+                          onChange={(e) => setEditProfile({...editProfile, telegramUrl: e.target.value})}
+                          placeholder="https://t.me/username"
                           className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-850 border border-slate-200 dark:border-slate-800 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/50 dark:focus:ring-blue-450"
                         />
                       </div>

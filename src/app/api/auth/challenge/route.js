@@ -13,12 +13,21 @@ export async function GET(request) {
       try {
         const { searchParams } = new URL(request.url);
         const address = normalizeWalletAddress(searchParams.get("address"));
+        const action = searchParams.get("action") || "default";
+        const origin = searchParams.get("origin");
+        const network = searchParams.get("network");
+        const contract = searchParams.get("contract");
 
         if (!address) {
           return NextResponse.json({ error: "Missing or invalid address" }, { status: 400 });
         }
 
-        const challenge = await issueChallenge(address);
+        const challenge = await issueChallenge(address, {
+          action,
+          origin,
+          network,
+          contract,
+        });
         return NextResponse.json(challenge);
       } catch (error) {
         return NextResponse.json({ error: "Server error" }, { status: 500 });

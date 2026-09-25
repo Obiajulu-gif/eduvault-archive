@@ -39,8 +39,12 @@ export async function GET(request) {
       try {
         const db = await getDb();
         const userAddress = user.walletAddress || user.address || user.id;
+        const includeArchived = url.searchParams.get("includeArchived") === "true";
 
-        const filter = { userAddress };
+        const filter = {
+          userAddress,
+          ...(includeArchived ? {} : { archived: { $ne: true } }),
+        };
         const [items, total] = await Promise.all([
           db.collection("materials").find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit).toArray(),
           db.collection("materials").countDocuments(filter),

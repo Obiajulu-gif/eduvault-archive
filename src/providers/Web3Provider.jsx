@@ -1,12 +1,19 @@
-'use client';
+"use client";
 
-import { useState } from 'react';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { WagmiProvider } from 'wagmi';
+import { useState } from "react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { WagmiProvider } from "wagmi";
 
-import { config } from '@/lib/web3/config';
-import { WalletProvider } from '@/providers/WalletProvider';
-import { TransactionProvider } from '@/providers/TransactionProvider';
+import dynamic from "next/dynamic";
+
+import { config } from "@/lib/web3/config";
+import { TransactionProvider } from "@/providers/TransactionProvider";
+import RainbowKitProvider from "@/providers/RainbowKitProvider";
+
+const WalletProvider = dynamic(
+  () => import("@/providers/WalletProvider").then((mod) => mod.WalletProvider),
+  { ssr: false },
+);
 
 export default function Web3Provider({ children }) {
   const [queryClient] = useState(
@@ -24,11 +31,13 @@ export default function Web3Provider({ children }) {
 
   return (
     <WagmiProvider config={config}>
-      <QueryClientProvider client={queryClient}>
-        <WalletProvider>
-          <TransactionProvider>{children}</TransactionProvider>
-        </WalletProvider>
-      </QueryClientProvider>
+      <RainbowKitProvider>
+        <QueryClientProvider client={queryClient}>
+          <WalletProvider>
+            <TransactionProvider>{children}</TransactionProvider>
+          </WalletProvider>
+        </QueryClientProvider>
+      </RainbowKitProvider>
     </WagmiProvider>
   );
 }

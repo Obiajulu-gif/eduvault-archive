@@ -46,6 +46,7 @@ export default function Footer() {
 							<h4 className="text-white font-bold mb-6 text-sm uppercase tracking-widest">Platform</h4>
 							<ul className="space-y-4 text-sm">
 								<li><Link href="/marketplace" className="hover:text-white transition">Marketplace</Link></li>
+								<li><Link href="/institutions" className="hover:text-white transition">Institutions</Link></li>
 								<li><Link href="/#howitworks" className="hover:text-white transition">How It Works</Link></li>
 								<li><Link href="/dashboard" className="hover:text-white transition">Publisher Dashboard</Link></li>
 							</ul>

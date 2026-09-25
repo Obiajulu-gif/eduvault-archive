@@ -1,6 +1,7 @@
 {
   "name": "eduvault",
   "version": "0.1.0",
+  "type": "module",
   "description": "Stellar-aligned educational content marketplace prototype for creator payments, licensing, and discovery.",
   "license": "MIT",
   "keywords": [
@@ -17,18 +18,27 @@
     "build": "next build --webpack",
     "start": "next start",
     "lint": "eslint",
+    "typecheck": "echo 'Typecheck not applicable yet (JS codebase without checkJs)'",
     "test": "vitest",
-    "test:all": "npm run test:contracts && npm run test:backend",
+    "test:frontend": "vitest run",
+    "test:all": "npm run test:contracts && npm run test:backend && npm run test:frontend",
     "test:contracts": "hardhat test",
     "test:integration": "vitest run test/integration",
-    "test:backend": "node --test tests/backend/*.test.mjs",
+    "test:backend": "npx tsx --test tests/backend/*.test.mjs",
     "audit:deps": "npm audit --audit-level=critical",
     "audit:deps:high": "npm audit --audit-level=high",
     "audit:deps:critical": "npm audit --audit-level=critical",
     "scan:secrets": "node scripts/scan-secrets.mjs",
     "indexer:stellar": "node scripts/run-stellar-indexer.mjs",
     "clean:intents": "node scripts/clean-stale-intents.mjs",
-    "clean:intents:dry": "DRY_RUN=true node scripts/clean-stale-intents.mjs"
+    "clean:intents:dry": "DRY_RUN=true node scripts/clean-stale-intents.mjs",
+    "indexer:deadletter": "node scripts/indexer-deadletter.mjs",
+    "bootstrap:local": "bash scripts/bootstrap-local.sh",
+    "bootstrap:local:fast": "bash scripts/bootstrap-local.sh --skip-contracts --skip-smoke",
+    "db:indexes": "node scripts/setup-db-indexes.js",
+    "benchmark:marketplace": "node scripts/benchmark-marketplace-search.mjs",
+    "seed:local": "node scripts/seed-local-fixtures.mjs",
+    "smoke:local": "node scripts/smoke-local.mjs"
   },
   "dependencies": {
     "@creit-tech/stellar-wallets-kit": "npm:@jsr/creit-tech__stellar-wallets-kit@^2.1.0",
@@ -37,6 +47,7 @@
     "@react-native-async-storage/async-storage": "^3.0.2",
     "@stellar/stellar-sdk": "^13.3.0",
     "@tanstack/react-query": "^5.99.2",
+    "@types/yauzl": "^2.10.3",
     "@vercel/blob": "^2.3.3",
     "@web3modal/ethereum": "^2.7.1",
     "@web3modal/wagmi": "^5.1.11",
@@ -45,6 +56,7 @@
     "mongodb": "^6.21.0",
     "next": "^16.2.7",
     "nodemailer": "^8.0.7",
+    "pdfkit": "^0.20.1",
     "pinata": "^2.5.5",
     "pino": "^10.3.1",
     "pino-pretty": "^13.1.3",
@@ -52,9 +64,14 @@
     "react-dom": "^19.2.5",
     "react-easy-crop": "^5.5.3",
     "react-icons": "^5.6.0",
+    "recharts": "^3.10.0",
+    "redis": "^4.7.0",
+    "sanitize-html": "^2.17.7",
+    "sharp": "^0.34.5",
     "swagger-ui-react": "^5.32.6",
     "viem": "^2.48.2",
-    "wagmi": "^2.19.5"
+    "wagmi": "^2.19.5",
+    "yauzl": "^3.4.0"
   },
   "devDependencies": {
     "@nomicfoundation/hardhat-ethers": "^3.1.2",
@@ -62,6 +79,7 @@
     "@testing-library/dom": "^10.4.1",
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.2",
+    "@testing-library/user-event": "^14.6.1",
     "@vitejs/plugin-react-swc": "^4.3.0",
     "@vitest/coverage-v8": "^4.1.8",
     "babel-plugin-react-compiler": "1.0.0",
@@ -71,9 +89,11 @@
     "hardhat": "^2.26.3",
     "jest-axe": "^10.0.0",
     "jsdom": "^29.0.2",
+    "mongodb-memory-server": "^11.2.0",
     "tailwindcss": "^4.2.3",
     "typescript": "^6.0.3",
-    "vitest": "^4.1.8"
+    "vitest": "^4.1.8",
+    "yazl": "^3.3.1"
   },
   "overrides": {
     "undici": "^6.13.0",

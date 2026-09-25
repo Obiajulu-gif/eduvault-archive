@@ -1,3 +1,4 @@
+import Link from "next/link";
 import WelcomeBanner from "./components/WelcomeBanner";
 import EarningsSection from "./components/EarningsSection";
 import TrendingMaterials from "./components/TrendingMaterials";
@@ -5,6 +6,7 @@ import LatestActivity from "./components/LatestActivity";
 import TopCreators from "./components/TopCreators";
 import SavedMaterialsSection from "./components/SavedMaterialsSection";
 import RecentlyViewedSection from "./components/RecentlyViewedSection";
+import RevenueChart from "@/components/dashboard/RevenueChart";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import jwt from "jsonwebtoken";
@@ -21,6 +23,8 @@ const getCachedUser = unstable_cache(
     ["user-by-id"],
     { revalidate: 60 }
 );
+
+import QuickActions from "./components/QuickActions";
 
 export default async function DashboardPage() {
     const cookieStore = await cookies();
@@ -50,6 +54,9 @@ export default async function DashboardPage() {
             {/* Top Row: Welcome & Call to Action */}
             <WelcomeBanner user={user} />
 
+            {/* Quick Actions Cards */}
+            <QuickActions />
+
             {/* Second Row: Integrated Metrics Spread */}
             <EarningsSection />
 
@@ -60,7 +67,7 @@ export default async function DashboardPage() {
                 <div className="lg:col-span-2 space-y-8">
                     <SavedMaterialsSection />
                     <LatestActivity />
-                    {/* Placeholder for future performance charts could go here */}
+                    <RevenueChart />
                 </div>
 
                 {/* Right Column (Discovery Focus - 1/3 width) */}

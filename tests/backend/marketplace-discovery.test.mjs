@@ -58,3 +58,12 @@ test("buildMarketplaceSort supports newest, rating, popular, and price order", (
   assert.deepEqual(buildMarketplaceSort("price_asc"), { price: 1, createdAt: -1 });
   assert.deepEqual(buildMarketplaceSort("price_desc"), { price: -1, createdAt: -1 });
 });
+
+test("buildMarketplaceDiscoveryQuery handles language filter and unknown language fallback", () => {
+  const queryEng = buildMarketplaceDiscoveryQuery(params({ language: "Spanish" }));
+  assert.deepEqual(queryEng.language, /^Spanish$/i);
+
+  const queryUnknown = buildMarketplaceDiscoveryQuery(params({ language: "Unknown" }));
+  assert.ok(queryUnknown.$and);
+  assert.ok(queryUnknown.$and.some(clause => clause.$or && clause.$or.some(c => c.language === "Unknown")));
+});

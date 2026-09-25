@@ -1,40 +1,127 @@
+                    <button
+                      className="action-btn deny"
+                      onClick={() => handleAction(itemId, 'propose')}
+                    >
+                      Propose suspension
+                    </button>
+                    <button
+                      className="action-btn suspend"
+                      onClick={() => handleAction(itemId, 'approve')}
+                    >
+                      Approve sanction
+                    </button>
+                    <button
+                      className="action-btn approve"
+                      onClick={() => handleAction(itemId, 'approve')}
+                    >
+                      Approve / sanction
+                    </button>
 "use client";
 
 import React, { useState, useEffect } from 'react';
 import './moderation.css';
-import { withAdminGuard } from '@/lib/auth/adminAuth';
+import { withAdminGuard, isAdmin } from '@/lib/auth/adminAuth';
 
 /**
- * Mock fetch for flagged items – in real code this would call the backend.
+ * Fetch flagged items from the server-side admin moderation route.
  */
 const fetchFlagged = async () => {
-  // Sample data
-  return [
-    { id: 1, title: 'Document A.pdf', reason: 'Inappropriate content', reporter: 'user123' },
-    { id: 2, title: 'ImageB.png', reason: 'Copyright violation', reporter: 'user456' },
-    { id: 3, title: 'VideoC.mp4', reason: 'Harassment', reporter: 'user789' },
-  ];
+  const res = await fetch('/api/admin/moderation');
+  if (!res.ok) {
+    throw new Error('Unauthorized or failed to fetch moderation cases');
+  }
+  const data = await res.json();
+  return data.cases || [];
 };
 
-function ModerationDashboard() {
+function ModerationDashboard({ user }) {
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [currentUser, setCurrentUser] = useState(user || null);
+  const [authChecked, setAuthChecked] = useState(Boolean(user));
 
   useEffect(() => {
-    fetchFlagged().then(data => {
-      setItems(data);
-      setLoading(false);
-    });
-  }, []);
+    if (user) {
+      setCurrentUser(user);
+      setAuthChecked(true);
+      return;
+    }
 
-  const handleAction = (id, action) => {
-    // In real app, send request to backend with auth
-    alert(`Action "${action}" applied to item #${id}`);
-    // Remove item from UI for demo purposes
-    setItems(prev => prev.filter(i => i.id !== id));
+    // Check user session from API if not passed via props
+    fetch('/api/profile')
+      .then((res) => {
+        if (!res.ok) throw new Error('Unauthenticated');
+        return res.json();
+      })
+      .then((data) => {
+        const u = data.user || data;
+        setCurrentUser(u);
+        setAuthChecked(true);
+      })
+      .catch(() => {
+        setCurrentUser(null);
+        setAuthChecked(true);
+        setLoading(false);
+      });
+  }, [user]);
+
+  useEffect(() => {
+    if (!authChecked) return;
+
+    if (!isAdmin(currentUser)) {
+      setLoading(false);
+      return;
+    }
+
+    setLoading(true);
+    fetchFlagged()
+      .then((data) => {
+        setItems(data);
+        setLoading(false);
+      })
+      .catch((err) => {
+        setError(err.message);
+        setLoading(false);
+      });
+  }, [authChecked, currentUser]);
+
+  const handleAction = async (id, action) => {
+    try {
+      const res = await fetch('/api/admin/moderation', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action, caseId: id, sanction: action === 'propose' ? 'suspend_material' : undefined }),
+      });
+      if (!res.ok) throw new Error('Failed to perform moderation action');
+      setItems((prev) => prev.filter((i) => (i._id || i.id) !== id));
+    } catch (e) {
+      alert(`Action failed: ${e.message}`);
+    }
   };
 
-  if (loading) return <p className="loading">Loading flagged content...</p>;
+  if (!authChecked || loading) {
+    return <p className="loading">Loading flagged content...</p>;
+  }
+
+  if (!isAdmin(currentUser)) {
+    return (
+      <div className="admin-access-denied p-8 text-center" role="alert">
+        <h2 className="text-xl font-bold text-red-600 mb-2">Access Denied</h2>
+        <p className="text-gray-700 dark:text-gray-300">
+          Administrators only. You do not have permission to view this page.
+        </p>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="admin-moderation p-6">
+        <p className="text-red-500 font-medium">Error loading moderation dashboard: {error}</p>
+      </div>
+    );
+  }
 
   return (
     <section className="admin-moderation">
@@ -53,23 +140,36 @@ function ModerationDashboard() {
             </tr>
           </thead>
           <tbody>
-            {items.map(item => (
-              <tr key={item.id}>
-                <td>{item.id}</td>
-                <td>{item.title}</td>
-                <td>{item.reason}</td>
-                <td>{item.reporter}</td>
-                <td className="action-cell">
-                  <button className="action-btn approve" onClick={() => handleAction(item.id, 'Approve')}>Approve</button>
-                  <button className="action-btn deny" onClick={() => handleAction(item.id, 'Deny')}>Deny</button>
-                  <button className="action-btn suspend" onClick={() => handleAction(item.id, 'Suspend')}>Suspend</button>
-                </td>
-              </tr>
-            ))}
+            {items.map((item) => {
+              const itemId = item._id || item.id;
+              return (
+                <tr key={itemId}>
+                  <td>{itemId}</td>
+                  <td>{item.title || item.resourceTitle || `Case #${itemId}`}</td>
+                  <td>{item.reason || item.flagReason || 'Flagged content'}</td>
+                  <td>{item.reporter || item.reportedBy || 'Anonymous'}</td>
+                  <td className="action-cell">
+                    <button
+                      className="action-btn deny"
+                      onClick={() => handleAction(itemId, 'propose')}
+                    >
+                      Propose suspension
+                    </button>
+                    <button
+                      className="action-btn suspend"
+                      onClick={() => handleAction(itemId, 'approve')}
+                    >
+                      Approve sanction
+                    </button>
+                  </td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       )}
     </section>
   );
 }
+
 export default withAdminGuard(ModerationDashboard);

@@ -59,15 +59,69 @@ export async function POST(request) {
         // Save valid records
         const db = await getDb();
         const now = new Date();
+        const quarantineCol = db.collection("quarantine");
 
-        const docs = validation.validRecords.map((record) => ({
-          ...record,
-          userAddress,
-          createdAt: now,
-          updatedAt: now,
-        }));
+        const docs = await Promise.all(
+          validation.validRecords.map(async (record) => {
+            const contentHash = record.storageKey || record.fileUrl || record.ipfsCid;
+            let quarantineState = "pending";
+            let contentManifestHash = null;
+            let contentManifestGeneration = null;
 
-        const result = await db.collection("materials").insertMany(docs);
+            if (contentHash) {
+              const existingQuarantine = await quarantineCol.findOne({ contentHash });
+              if (existingQuarantine && existingQuarantine.state === "clean") {
+                quarantineState = "clean";
+                contentManifestHash = existingQuarantine.manifestHash || null;
+                contentManifestGeneration = existingQuarantine.manifestGeneration || null;
+              } else if (!existingQuarantine) {
+                try {
+                  const { createQuarantineRecord } = await import("@/lib/publishing/quarantine");
+                  await createQuarantineRecord({
+                    db,
+                    contentHash,
+                    fileName: record.title || contentHash,
+                    mimeType: "application/octet-stream",
+                    sizeBytes: 0,
+                    uploaderAddress: userAddress,
+                  });
+                } catch (e) {
+                  // Duplicate key race or quarantine creation non-fatal error
+                }
+              } else {
+                quarantineState = existingQuarantine.state || "pending";
+              }
+            }
+
+            return {
+              ...record,
+              userAddress,
+              quarantineState,
+              contentManifestHash,
+              contentManifestGeneration,
+              createdAt: now,
+              updatedAt: now,
+            };
+          })
+        );
+
+        let insertedCount = 0;
+        let insertErrors = [];
+        try {
+          const result = await db.collection("materials").insertMany(docs, { ordered: false });
+          insertedCount = result.insertedCount || Object.keys(result.insertedIds || {}).length;
+        } catch (insertErr) {
+          if (insertErr.result && typeof insertErr.result.insertedCount === "number") {
+            insertedCount = insertErr.result.insertedCount;
+            insertErrors = (insertErr.writeErrors || []).map((e) => ({
+              index: e.index,
+              code: e.code,
+              message: e.errmsg || e.message,
+            }));
+          } else {
+            throw insertErr;
+          }
+        }
 
         auditLog({
           event: "materials_imported",
@@ -75,7 +129,7 @@ export async function POST(request) {
           method: "POST",
           status: 201,
           actor: user.sub,
-          imported: result.insertedCount,
+          imported: insertedCount,
         });
 
         return NextResponse.json({
@@ -83,9 +137,10 @@ export async function POST(request) {
           total: validation.total,
           valid: validation.valid,
           invalid: validation.invalid,
-          imported: result.insertedCount,
+          imported: insertedCount,
+          insertErrors: insertErrors.length > 0 ? insertErrors : undefined,
           invalidRows: validation.invalidRows,
-        }, { status: 201 });
+        }, { status: insertErrors.length > 0 && insertedCount === 0 ? 500 : 201 });
       } catch (err) {
         if (err instanceof ImportValidationError) {
           return NextResponse.json({ error: err.message, details: err.details }, { status: 400 });

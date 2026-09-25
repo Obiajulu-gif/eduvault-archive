@@ -1,12 +1,12 @@
 "use client";
 
 import { useState } from "react";
-import { FaSearch } from "react-icons/fa";
 import { FiUpload } from "react-icons/fi";
 import Image from "next/image";
 import Link from "next/link";
 import { motion } from "framer-motion";
 import ThemeToggle from "@/components/ThemeToggle";
+import SearchBox from "@/components/SearchBox";
 
 export default function DashboardHeader() {
 	const [activeTab, setActiveTab] = useState("User");
@@ -20,12 +20,7 @@ export default function DashboardHeader() {
 				transition={{ duration: 0.4 }}
 				className="flex-1 max-w-xl relative"
 			>
-				<FaSearch className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
-				<input
-					type="text"
-					placeholder="Search Item, Collection and Account..."
-					className="w-full pl-10 pr-4 py-3 bg-surface-strong text-sm border border-border-subtle rounded-full shadow-sm focus:outline-none focus:ring-2 focus:ring-stellar-blue/20 transition-all text-foreground placeholder:text-muted-foreground"
-				/>
+				<SearchBox placeholder="Search Item, Collection and Account..." />
 			</motion.div>
 
 			{/* Right Section */}

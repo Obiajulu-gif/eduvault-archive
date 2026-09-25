@@ -1,33 +1,41 @@
-import { useEffect, useRef, useState } from 'react';
-import Script from 'next/script';
-import useEarningsData from '../hooks/useEarningsData';
-import './EarningsAnalytics.css';
+import { useState } from "react";
+import {
+  LineChart,
+  Line,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  Legend,
+  ResponsiveContainer,
+} from "recharts";
+import useEarningsData from "../hooks/useEarningsData";
+import "./EarningsAnalytics.css";
 
 /**
  * EarningsAnalytics – component that renders interval selectors and an earnings chart.
- * It uses Chart.js loaded from a CDN (no npm install required).
+ * Uses recharts (npm dependency) instead of CDN-loaded Chart.js.
  */
 export default function EarningsAnalytics() {
   const intervals = [
-    { label: '7 Days', value: '7d' },
-    { label: '30 Days', value: '30d' },
-    { label: 'Year‑to‑Date', value: 'ytd' },
+    { label: "7 Days", value: "7d" },
+    { label: "30 Days", value: "30d" },
+    { label: "Year‑to‑Date", value: "ytd" },
   ];
-  const [selected, setSelected] = useState('7d');
+  const [selected, setSelected] = useState("7d");
   const data = useEarningsData(selected);
 
   return (
     <section className="earnings-analytics">
-      {/* Load Chart.js from CDN */}
-      <Script
-        src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"
-        strategy="lazyOnload"
-      />
-      <div className="interval-selector" role="radiogroup" aria-label="Time interval">
-        {intervals.map(i => (
+      <div
+        className="interval-selector"
+        role="radiogroup"
+        aria-label="Time interval"
+      >
+        {intervals.map((i) => (
           <button
             key={i.value}
-            className={`interval-btn ${selected === i.value ? 'active' : ''}`}
+            className={`interval-btn ${selected === i.value ? "active" : ""}`}
             onClick={() => setSelected(i.value)}
             aria-pressed={selected === i.value}
           >
@@ -41,92 +49,61 @@ export default function EarningsAnalytics() {
 }
 
 /**
- * Chart – renders a line chart using Chart.js.
- * It waits for the Chart.js script to be available on the window object.
+ * Chart – renders a line chart using recharts.
+ * Re-renders naturally with React when data changes (no manual destroy/recreate needed).
  */
 function Chart({ data }) {
-  const canvasRef = useRef(null);
-  const chartRef = useRef(null);
-
-  useEffect(() => {
-    if (!window.Chart) return; // script not loaded yet
-    const ctx = canvasRef.current.getContext('2d');
-
-    // Destroy previous chart instance if exists
-    if (chartRef.current) {
-      chartRef.current.destroy();
-    }
-
-    const labels = data.map(d => d.date);
-    const earnings = data.map(d => d.earnings);
-    const gas = data.map(d => d.gas);
-    const royalties = data.map(d => d.royalties);
-    const net = data.map(d => d.net);
-
-    chartRef.current = new window.Chart(ctx, {
-      type: 'line',
-      data: {
-        labels,
-        datasets: [
-          {
-            label: 'Earnings',
-            data: earnings,
-            borderColor: '#4caf50',
-            backgroundColor: 'rgba(76, 175, 80, 0.2)',
-            tension: 0.3,
-          },
-          {
-            label: 'Gas Costs',
-            data: gas,
-            borderColor: '#ff9800',
-            backgroundColor: 'rgba(255, 152, 0, 0.2)',
-            tension: 0.3,
-          },
-          {
-            label: 'Royalties',
-            data: royalties,
-            borderColor: '#2196f3',
-            backgroundColor: 'rgba(33, 150, 243, 0.2)',
-            tension: 0.3,
-          },
-          {
-            label: 'Net',
-            data: net,
-            borderColor: '#9c27b0',
-            backgroundColor: 'rgba(156, 39, 176, 0.2)',
-            tension: 0.3,
-          },
-        ],
-      },
-      options: {
-        responsive: true,
-        plugins: {
-          tooltip: {
-            mode: 'index',
-            intersect: false,
-          },
-          legend: {
-            position: 'top',
-          },
-        },
-        interaction: {
-          mode: 'nearest',
-          axis: 'x',
-          intersect: false,
-        },
-        scales: {
-          x: {
-            display: true,
-            title: { display: true, text: 'Date' },
-          },
-          y: {
-            display: true,
-            title: { display: true, text: 'Amount (USD)' },
-          },
-        },
-      },
-    });
-  }, [data]);
-
-  return <canvas ref={canvasRef} className="earnings-canvas" />;
+  return (
+    <ResponsiveContainer
+      width="100%"
+      height={400}
+      className="earnings-chart-container"
+    >
+      <LineChart data={data} margin={{ top: 5, right: 30, left: 0, bottom: 5 }}>
+        <CartesianGrid strokeDasharray="3 3" />
+        <XAxis dataKey="date" />
+        <YAxis
+          label={{ value: "Amount (USD)", angle: -90, position: "insideLeft" }}
+        />
+        <Tooltip />
+        <Legend />
+        <Line
+          type="monotone"
+          dataKey="earnings"
+          name="Earnings"
+          stroke="#4caf50"
+          strokeWidth={2}
+          dot={false}
+          isAnimationActive={false}
+        />
+        <Line
+          type="monotone"
+          dataKey="gas"
+          name="Gas Costs"
+          stroke="#ff9800"
+          strokeWidth={2}
+          dot={false}
+          isAnimationActive={false}
+        />
+        <Line
+          type="monotone"
+          dataKey="royalties"
+          name="Royalties"
+          stroke="#2196f3"
+          strokeWidth={2}
+          dot={false}
+          isAnimationActive={false}
+        />
+        <Line
+          type="monotone"
+          dataKey="net"
+          name="Net"
+          stroke="#9c27b0"
+          strokeWidth={2}
+          dot={false}
+          isAnimationActive={false}
+        />
+      </LineChart>
+    </ResponsiveContainer>
+  );
 }

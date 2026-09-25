@@ -130,7 +130,7 @@ export default function CheckoutReceiptModal({
           />
 
           <motion.div
-            className="fixed inset-0 z-[90] flex items-center justify-center overflow-y-auto p-4 sm:p-6"
+            className="fixed inset-0 z-[90] flex items-end justify-center overflow-y-auto p-0 sm:items-center sm:p-6"
             initial={{ opacity: 0, y: 24, scale: 0.97 }}
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: 24, scale: 0.97 }}
@@ -139,7 +139,7 @@ export default function CheckoutReceiptModal({
             aria-modal="true"
             aria-labelledby="checkout-receipt-title"
           >
-            <div className="relative w-full max-w-2xl overflow-hidden rounded-[2rem] border border-white/70 bg-white shadow-2xl shadow-slate-950/20">
+            <div className="relative max-h-[92vh] w-full max-w-2xl overflow-y-auto rounded-t-[2rem] border border-white/70 bg-white shadow-2xl shadow-slate-950/20 sm:rounded-[2rem]">
               <div className={`absolute inset-x-0 top-0 h-40 bg-gradient-to-br ${classes.ring}`} />
               <div className="absolute -right-16 -top-20 h-48 w-48 rounded-full bg-white/40 blur-3xl" />
               <div className="absolute -left-20 top-16 h-56 w-56 rounded-full bg-blue-100/40 blur-3xl" />

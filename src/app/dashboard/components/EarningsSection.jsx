@@ -20,11 +20,11 @@ export default function EarningsSection() {
 					{stats.map((item, index) => (
 						<div
 							key={index}
-							className="bg-white border border-gray-100 rounded-xl p-5 shadow-sm hover:shadow-md transition-shadow"
+							className="bg-white dark:bg-gray-900 border border-gray-100 dark:border-gray-800 rounded-xl p-5 shadow-sm hover:shadow-md transition-shadow"
 						>
 							<div className="flex justify-between items-center mb-3">
-								<h3 className="text-sm font-medium text-gray-500">{item.label}</h3>
-								<div className={`p-1.5 rounded-full ${item.change.startsWith("+") ? 'bg-green-50' : 'bg-red-50'}`}>
+								<h3 className="text-sm font-medium text-gray-500 dark:text-gray-400">{item.label}</h3>
+								<div className={`p-1.5 rounded-full ${item.change.startsWith("+") ? 'bg-green-50 dark:bg-green-950/40' : 'bg-red-50 dark:bg-red-950/40'}`}>
 									{item.change.startsWith("+") ? (
 										<FaArrowUp className={`w-3 h-3 ${item.change.startsWith("+") ? 'text-green-600' : 'text-red-600'}`} />
 									) : (
@@ -32,7 +32,7 @@ export default function EarningsSection() {
 									)}
 								</div>
 							</div>
-							<div className="text-2xl font-bold mb-1">{item.value}</div>
+							<div className="text-2xl font-bold mb-1 text-gray-900 dark:text-gray-100">{item.value}</div>
 							<p className={`text-xs font-medium ${item.change.startsWith("+") ? 'text-green-600' : 'text-red-600'}`}>{item.change} from last month</p>
 						</div>
 					))}

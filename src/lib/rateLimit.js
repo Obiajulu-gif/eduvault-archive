@@ -48,3 +48,4 @@ export function slidingWindowRateLimit(key, { limit = 60, windowMs = 60_000, now
 export function resetSlidingWindows() {
   windows.clear();
 }
+// Issue 423: Rate limiting applied to API routes

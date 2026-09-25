@@ -32,20 +32,22 @@ function saveToStorage(notifications) {
   }
 }
 
+function getInitialNotifications() {
+  const stored = loadFromStorage();
+  if (stored && Array.isArray(stored) && stored.length > 0) {
+    return stored;
+  }
+  const initial = [WELCOME];
+  saveToStorage(initial);
+  return initial;
+}
+
 export function useNotifications() {
-  const [notifications, setNotifications] = useState([]);
+  const [notifications, setNotifications] = useState(getInitialNotifications);
   const isInitialized = useRef(false);
 
-  // Handle Initial Load safely on Mount
+  // Mark as initialized after mount so the sync effect skips the initial render
   useEffect(() => {
-    const stored = loadFromStorage();
-    if (stored && Array.isArray(stored) && stored.length > 0) {
-      setNotifications(stored);
-    } else {
-      const initial = [WELCOME];
-      setNotifications(initial);
-      saveToStorage(initial);
-    }
     isInitialized.current = true;
   }, []);
 

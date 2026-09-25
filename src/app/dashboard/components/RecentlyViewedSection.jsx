@@ -12,20 +12,20 @@ export default function RecentlyViewedSection() {
   }
 
   return (
-    <div className="p-6 bg-white border border-gray-100 rounded-xl shadow-sm">
+    <div className="p-6 bg-white dark:bg-gray-900 border border-gray-100 dark:border-gray-800 rounded-xl shadow-sm">
       <div className="flex items-center gap-2 mb-4">
         <FaHistory className="text-indigo-500" />
-        <h3 className="font-bold text-gray-900">Recently Viewed</h3>
+        <h3 className="font-bold text-gray-900 dark:text-gray-100">Recently Viewed</h3>
       </div>
 
       {isLoading ? (
         <div className="space-y-3">
           {[1, 2, 3].map((i) => (
             <div key={i} className="flex gap-3 items-start animate-pulse">
-              <div className="w-12 h-14 bg-gray-100 rounded-md" />
+              <div className="w-12 h-14 bg-gray-100 dark:bg-gray-800 rounded-md" />
               <div className="flex-1 space-y-1 py-1">
-                <div className="h-3 bg-gray-100 rounded w-3/4" />
-                <div className="h-2 bg-gray-100 rounded w-1/3" />
+                <div className="h-3 bg-gray-100 dark:bg-gray-800 rounded w-3/4" />
+                <div className="h-2 bg-gray-100 dark:bg-gray-800 rounded w-1/3" />
               </div>
             </div>
           ))}
@@ -38,7 +38,7 @@ export default function RecentlyViewedSection() {
               <Link
                 key={materialId}
                 href={`/marketplace/${materialId}`}
-                className="flex gap-3 items-start group hover:bg-gray-50 p-2 -mx-2 rounded-lg transition-colors block"
+                className="flex gap-3 items-start group hover:bg-gray-50 dark:hover:bg-gray-800 p-2 -mx-2 rounded-lg transition-colors block"
               >
                 <div className="w-12 h-14 bg-gradient-to-br from-indigo-100 to-blue-50 rounded-md flex items-center justify-center border border-indigo-100/50 flex-shrink-0 overflow-hidden relative">
                   {material.coverImageUrl || material.thumbnailUrl || material.image ? (
@@ -53,14 +53,14 @@ export default function RecentlyViewedSection() {
                   )}
                 </div>
                 <div className="flex-1 min-w-0 py-1">
-                  <h4 className="font-semibold text-sm text-gray-900 truncate group-hover:text-indigo-600 transition-colors">
+                  <h4 className="font-semibold text-sm text-gray-900 dark:text-gray-100 truncate group-hover:text-indigo-600 transition-colors">
                     {material.title}
                   </h4>
                   <div className="flex items-center justify-between text-xs mt-1">
-                    <span className="text-gray-500 truncate max-w-[60%]">
+                    <span className="text-gray-500 dark:text-gray-400 truncate max-w-[60%]">
                       {material.subject || "Material"}
                     </span>
-                    <span className="font-bold text-green-600 bg-green-50 px-1.5 py-0.5 rounded-full text-[10px]">
+                    <span className="font-bold text-green-600 dark:text-green-400 bg-green-50 dark:bg-green-950/40 px-1.5 py-0.5 rounded-full text-[10px]">
                       {material.price} XLM
                     </span>
                   </div>

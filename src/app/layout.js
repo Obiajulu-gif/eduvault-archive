@@ -1,4 +1,5 @@
 import { Geist, Geist_Mono } from "next/font/google";
+import { headers } from "next/headers";
 import "./globals.css";
 import Web3Provider from "@/providers/Web3Provider";
 import { ToastProvider } from "@/providers/ToastProvider";
@@ -6,6 +7,8 @@ import { CartProvider } from "@/providers/CartProvider";
 import { ComparisonProvider } from "@/providers/ComparisonProvider";
 import CartDrawer from "@/components/CartDrawer";
 import ComparisonMatrix from "@/components/ComparisonMatrix";
+import SupportWidget from "@/components/SupportWidget";
+import SessionWarning from "@/components/SessionWarning";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -43,13 +46,20 @@ const themeInitScript = `
 })();
 `;
 
-export default function RootLayout({ children }) {
+export default async function RootLayout({ children }) {
+  // The nonce is set by middleware.js per request (issue #649) and threaded
+  // through via the x-nonce request header — applying it here is what lets
+  // this one inline script satisfy the nonce-based script-src CSP without
+  // needing 'unsafe-inline'.
+  const headerList = await headers();
+  const nonce = headerList.get("x-nonce");
+
   return (
     <html lang="en" suppressHydrationWarning>
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased bg-background text-foreground`}
       >
-        <script dangerouslySetInnerHTML={{ __html: themeInitScript }} />
+        <script nonce={nonce} dangerouslySetInnerHTML={{ __html: themeInitScript }} />
         <Web3Provider>
           <ToastProvider>
             <CartProvider>
@@ -57,6 +67,8 @@ export default function RootLayout({ children }) {
                 {children}
                 <CartDrawer />
                 <ComparisonMatrix />
+                <SupportWidget />
+                <SessionWarning />
               </ComparisonProvider>
             </CartProvider>
           </ToastProvider>

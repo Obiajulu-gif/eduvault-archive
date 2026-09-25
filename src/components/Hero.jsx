@@ -16,7 +16,7 @@ export default function Hero() {
   };
 
   return (
-    <section className="relative min-h-[90vh] flex flex-col items-center justify-center pt-32 pb-20 px-6 overflow-hidden bg-white">
+    <section className="relative min-h-[90vh] flex flex-col items-center justify-center pt-32 pb-20 px-6 overflow-hidden bg-white dark:bg-gray-950">
       {/* 🔹 Background Elements */}
       <div className="absolute top-0 left-1/2 -translate-x-1/2 w-full h-full max-w-7xl opacity-[0.03] pointer-events-none">
         <div className="absolute inset-0 bg-[radial-gradient(circle_at_50%_0%,#3E7BFF,transparent_70%)]" />
@@ -46,7 +46,7 @@ export default function Hero() {
 
           <motion.h1
             variants={fadeUp}
-            className="text-5xl md:text-7xl font-bold text-stellar-dark leading-[1.1] mb-6"
+            className="text-5xl md:text-7xl font-bold text-stellar-dark dark:text-white leading-[1.1] mb-6"
           >
             The Global <br />
             <span className="text-stellar-blue">Knowledge</span> <br />
@@ -70,7 +70,7 @@ export default function Hero() {
             </Link>
             <Link
               href="/dashboard"
-              className="bg-white border-2 border-gray-100 hover:border-stellar-blue/30 text-stellar-dark font-bold px-8 py-4 rounded-2xl transition-all duration-300"
+              className="bg-white dark:bg-gray-800 border-2 border-gray-100 dark:border-gray-700 hover:border-stellar-blue/30 text-stellar-dark dark:text-white font-bold px-8 py-4 rounded-2xl transition-all duration-300"
             >
               Start Publishing
             </Link>
@@ -78,17 +78,17 @@ export default function Hero() {
 
           <motion.div 
             variants={fadeUp}
-            className="mt-12 pt-8 border-t border-gray-100 w-full flex items-center gap-6"
+            className="mt-12 pt-8 border-t border-gray-100 dark:border-gray-800 w-full flex items-center gap-6"
           >
             <div className="flex -space-x-3">
               {[1, 2, 3, 4].map((i) => (
-                <div key={i} className="w-10 h-10 rounded-full border-2 border-white bg-gray-100 overflow-hidden">
+                <div key={i} className="w-10 h-10 rounded-full border-2 border-white dark:border-gray-800 bg-gray-100 dark:bg-gray-800 overflow-hidden">
                   <Image src={`/images/stellar.png`} alt="User" width={40} height={40} className="grayscale opacity-50" />
                 </div>
               ))}
             </div>
             <div className="text-sm">
-              <span className="block font-bold text-stellar-dark">2,500+ Students</span>
+              <span className="block font-bold text-stellar-dark dark:text-white">2,500+ Students</span>
               <span className="text-edu-muted">already earning on Stellar</span>
             </div>
           </motion.div>

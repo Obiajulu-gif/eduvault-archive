@@ -4,6 +4,13 @@ This document defines the canonical backend shapes for EduVault contributors. Mo
 
 The canonical Soroban storage boundary, normalized event names, and entitlement query rules are defined in [`docs/soroban-contract-architecture.md`](soroban-contract-architecture.md).
 
+The **stable error-code taxonomy** for all failure paths (purchase, refund,
+entitlement, download, storage, indexer, webhook, auth, contract, and input
+validation) is defined in [`docs/API_REFERENCE.md`](API_REFERENCE.md).
+Clients and frontends must use these codes rather than parsing prose error
+messages. Webhook signature verification and retry semantics are described
+in [`docs/webhook-signatures.md`](webhook-signatures.md).
+
 ## Collections
 
 ### `users`
@@ -25,6 +32,9 @@ Optional fields:
 - `payoutWalletAddressLower`: normalized lookup key for the payout wallet.
 - `preferredPayoutCurrency`: preferred display currency for earnings and settlement metadata.
 - `payoutNotes`: optional creator notes for finance and operations.
+- `webhookSigningSecret`: current HMAC secret for outbound creator webhooks.
+- `webhookSigningSecretPrevious`: previous secret retained during rotation (#669).
+- `webhookSigningSecretRotatedAt`: timestamp when the current secret replaced the previous one.
 
 Indexes:
 
@@ -220,6 +230,29 @@ Response:
 
 - `{ items, page, pageSize, total, totalPages }`.
 
+### `GET /api/creator/payouts`
+
+Aggregates and reports the authenticated creator's earnings from sales, distinct
+from `GET /api/creator/analytics` which covers broader dashboard metrics.
+
+Request:
+
+- `from`, `to`: optional ISO date strings bounding the reporting window (default:
+  trailing 30 days). Rejected with `400` when unparsable, when `from` is after
+  `to`, or when the range exceeds 366 days.
+
+Response:
+
+- `creatorAddress`, `dateRange: { from, to }`.
+- `earnings`: `grossRevenue`, `salesCount` (all-time, completed purchases only),
+  `windowRevenue`, `windowSalesCount` (within `dateRange`), `pendingRevenue`,
+  `pendingCount`, `refundedAmount`, `refundedCount`.
+- `payouts`: `totalPaidOut`, `totalPending`, `lastPayoutAt` derived from the
+  `payouts` collection.
+- `outstandingBalance`: `max(grossRevenue - totalPaidOut, 0)`.
+- `byMaterial`: per-material `{ materialId, title, salesCount, grossRevenue }`,
+  sorted by revenue descending.
+
 ## Schema Change Rules
 
 - Add fields as optional first, then backfill, then make route-level validation stricter.
@@ -233,3 +266,60 @@ Response:
 - Apply rate limits to public and sensitive route families.
 - Emit structured audit logs for validation failures, rate-limit blocks, upload failures, auth failures, purchase sync, and indexer anomalies.
 - Add focused tests for validation, rate limiting, and indexer idempotency when changing backend behavior.
+
+## Stable Error Codes
+
+All API routes must return errors in the following envelope rather than
+returning prose strings that clients parse:
+
+```json
+{
+  "error": {
+    "code": "EVT_PURCHASE_007",
+    "message": "Human-readable description (informational only).",
+    "retryable": true,
+    "supportAction": "refresh_quote"
+  }
+}
+```
+
+The complete taxonomy of stable codes is in
+[`docs/API_REFERENCE.md`](API_REFERENCE.md). The quick-reference mapping
+below summarises the namespace-to-subsystem relationship:
+
+| Namespace prefix    | Subsystem                         |
+| ------------------- | --------------------------------- |
+| `EVT_PURCHASE_`     | Purchase flow                     |
+| `EVT_ENTITLEMENT_`  | Entitlement / access-check        |
+| `EVT_DOWNLOAD_`     | Download capability tokens        |
+| `EVT_REFUND_`       | Refund flow                       |
+| `EVT_STORAGE_`      | IPFS / Pinata storage             |
+| `EVT_INDEXER_`      | Stellar event indexer             |
+| `EVT_WEBHOOK_`      | Outbound creator webhooks         |
+| `EVT_AUTH_`         | Authentication / authorisation    |
+| `EVT_CONTRACT_PM_`  | PurchaseManager on-chain errors   |
+| `EVT_CONTRACT_REG_` | MaterialRegistry on-chain errors  |
+| `EVT_INPUT_`        | Request validation / input errors |
+
+### Implementation rules
+
+- Every `catch` block in an API route handler must map the caught error to a
+  code before returning. A fallback mapping (e.g. `EVT_INPUT_001` for
+  validation, `EVT_PURCHASE_012` for registry call failures) is acceptable
+  when a precise mapping is not yet available, but must be tracked as a
+  follow-up task.
+- Contract `contracterror` discriminants must be mapped to
+  `EVT_CONTRACT_PM_*` or `EVT_CONTRACT_REG_*` codes by the API layer before
+  the response leaves the server. Raw numeric discriminants must never
+  appear in client-facing responses.
+- The `retryable` flag drives frontend retry logic. Only set `true` for
+  transient failures where the same request has a reasonable chance of
+  succeeding after a delay.
+- `supportAction` values are defined in
+  [`docs/API_REFERENCE.md#support-actions`](API_REFERENCE.md#support-actions).
+
+### Tests
+
+Add a focused test for each new error mapping when adding or changing a route.
+See `src/lib/__tests__/` for existing test patterns. Tests must assert the
+stable `code` field value, not the `message` string.

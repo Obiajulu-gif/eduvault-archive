@@ -1,14 +1,30 @@
+// Resolves: Configure efficient MongoDB connection pooling in the Next.js API routes to handle concurrent requests.
+import { cpus } from "node:os";
 import { MongoClient } from "mongodb";
+import { REQUIRED_INDEXES } from "./backend/schemaContracts.js";
 
 const uri = process.env.MONGODB_URI;
 
-// Environment-driven pool configurations with sane defaults
-const maxPoolSize = parseInt(process.env.MONGODB_MAX_POOL_SIZE || "100", 10);
-const minPoolSize = parseInt(process.env.MONGODB_MIN_POOL_SIZE || "10", 10);
+// Scale pool size to active CPU count so connection limits grow with the host.
+// Allow env overrides for environments where auto-detection is insufficient.
+const CPU_COUNT = cpus().length;
+const maxPoolSize = parseInt(
+  process.env.MONGODB_MAX_POOL_SIZE || String(CPU_COUNT * 5),
+  10,
+);
+const minPoolSize = parseInt(
+  process.env.MONGODB_MIN_POOL_SIZE || String(CPU_COUNT),
+  10,
+);
 const serverSelectionTimeoutMS = parseInt(
   process.env.MONGODB_TIMEOUT_MS || "5000",
   10,
 ); // Fail fast
+// How often the driver pings each server to confirm connectivity.
+const heartbeatFrequencyMS = parseInt(
+  process.env.MONGODB_HEARTBEAT_MS || "10000",
+  10,
+);
 
 const globalForMongo = globalThis;
 
@@ -26,7 +42,7 @@ function getClientPromise() {
         maxPoolSize,
         minPoolSize,
         serverSelectionTimeoutMS,
-        // For high load:
+        heartbeatFrequencyMS,
         maxIdleTimeMS: 30000,
       });
 
@@ -55,26 +71,69 @@ let indexesCreated = false;
 
 async function ensureIndexes(db) {
   try {
-    const collection = db.collection("materials");
+    const materials = db.collection("materials");
+    const purchases = db.collection("purchases");
+    const users = db.collection("users");
+    const outbox = db.collection("side_effect_outbox");
 
-    // Create compound index for category and price search optimization
-    await collection.createIndex(
+    await materials.createIndex(
       { category: 1, price: 1 },
       { name: "materials_category_price_idx", background: true },
     );
-
-    // Create compound text index for title and description search
-    await collection.createIndex(
+    await materials.createIndex(
       { title: "text", description: "text" },
       { name: "materials_text_idx", background: true },
     );
-
-    // Create compound index for title, description, price, and category
-    await collection.createIndex(
+    await materials.createIndex(
       { category: 1, price: 1, title: 1, description: 1 },
       { name: "materials_search_compound_idx", background: true },
     );
 
+    await outbox.createIndex(
+      { status: 1, nextAttemptAt: 1, createdAt: 1 },
+      { name: "outbox_poll_idx", background: true },
+    );
+    await outbox.createIndex(
+      { deliveryId: 1 },
+      { name: "outbox_delivery_id_idx", unique: true, background: true },
+    );
+    await outbox.createIndex(
+      { sourceAggregate: 1, sourceId: 1 },
+      { name: "outbox_source_idx", background: true },
+    );
+    await outbox.createIndex(
+      { status: 1, leaseExpiresAt: 1 },
+      { name: "outbox_lease_idx", background: true, sparse: true },
+    );
+
+    const resourceDrafts = db.collection("resource_drafts");
+    await resourceDrafts.createIndex(
+      { userRef: 1, draftId: 1 },
+      { name: "resource_drafts_user_draft_idx", background: true, unique: true },
+    );
+    await outbox.createIndex(
+      { previousDeliveryId: 1, predecessorDelivered: 1 },
+      { name: "outbox_causal_idx", background: true, sparse: true },
+    );
+    await outbox.createIndex(
+      { sourceAggregate: 1, sourceId: 1, sourceVersion: 1 },
+      { name: "outbox_source_version_idx", background: true, sparse: true },
+    );
+
+    console.log("MongoDB indexes ensured successfully.");
+    for (const [collectionName, indexes] of Object.entries(REQUIRED_INDEXES)) {
+      const collection = db.collection(collectionName);
+      for (const { keys, options } of indexes) {
+        try {
+          await collection.createIndex(keys, options);
+        } catch (error) {
+          console.error(
+            `[Database Index Error]: Failed to create index on "${collectionName}" (${JSON.stringify(keys)}):`,
+            error,
+          );
+        }
+      }
+    }
     console.log("MongoDB indexes ensured successfully.");
   } catch (error) {
     console.error(
@@ -108,3 +167,4 @@ export async function getDb() {
     throw error;
   }
 }
+// Issue 422: Text indexes added for faster catalog queries

@@ -1,75 +1,56 @@
-import { NextResponse } from 'next/server';
-import { getDb } from '@/lib/mongodb';
-import { getUserFromCookie } from '@/lib/api/auth';
-import { approveRefundOnChain } from '@/lib/stellar/refundService';
-import { auditLog } from '@/lib/api/audit';
-import { ObjectId } from 'mongodb';
+export const dynamic = 'force-dynamic';
+export const runtime = 'nodejs';
 
+import { NextResponse } from 'next/server';
+import { ObjectId } from 'mongodb';
+import { getDb } from '@/lib/mongodb';
+import { requireAdmin } from '@/lib/api/auth';
+import { approveRefund, processApprovedRefund } from '@/lib/refunds/refundWorkflow';
+
+/**
+ * Authorize a requested refund claim (Issue #27). This only performs the
+ * `requested -> approved` transition — it never talks to Horizon in-request,
+ * so the response is fast and the admin action can't be half-done by a
+ * request timeout. Submission happens through the same idempotent
+ * `processApprovedRefund` the background worker uses; it's also given one
+ * best-effort inline attempt here so approval doesn't have to wait for the
+ * next worker poll, but a failure to submit immediately is not an error —
+ * the worker will pick it up on its next pass regardless.
+ */
 export async function POST(request) {
   try {
-    const user = await getUserFromCookie(request);
-    
-    // Verify admin permissions
-    if (!user || user.role !== 'admin') {
+    const admin = await requireAdmin(request);
+    if (!admin) {
       return NextResponse.json({ error: 'Unauthorized. Admin access required.' }, { status: 403 });
     }
 
-    const body = await request.json();
-    const { refundId } = body;
+    const body = await request.json().catch(() => ({}));
+    const { refundId, reason } = body;
 
-    if (!refundId) {
-      return NextResponse.json({ error: 'Missing refundId' }, { status: 400 });
+    if (!refundId || !ObjectId.isValid(refundId)) {
+      return NextResponse.json({ error: 'Missing or invalid refundId' }, { status: 400 });
     }
 
     const db = await getDb();
-    const refundCollection = db.collection('refunds');
-    
-    const refundRecord = await refundCollection.findOne({ _id: new ObjectId(refundId) });
+    const actor = admin.walletAddress || admin.sub;
 
-    if (!refundRecord) {
-      return NextResponse.json({ error: 'Refund record not found' }, { status: 404 });
+    const result = await approveRefund({
+      db,
+      refundId: new ObjectId(refundId),
+      actor,
+      reason: typeof reason === 'string' ? reason.slice(0, 500) : null,
+    });
+
+    if (!result.success) {
+      const status = result.reason === 'refund_not_found' ? 404 : 409;
+      return NextResponse.json({ error: result.reason, refund: result.refund }, { status });
     }
 
-    if (refundRecord.status === 'approved') {
-      return NextResponse.json({ error: 'Refund is already approved' }, { status: 400 });
-    }
+    processApprovedRefund({ db, refund: result.refund, actor }).catch(() => {
+      // Best-effort — the worker's own poll loop will retry this refund.
+    });
 
-    // Interact with the smart contract
-    const onChainResult = await approveRefundOnChain(
-      refundId,
-      refundRecord.buyerAddress,
-      refundRecord.amount,
-      refundRecord.asset || 'USDC'
-    );
-
-    if (onChainResult.success) {
-      // Update DB record
-      await refundCollection.updateOne(
-        { _id: new ObjectId(refundId) },
-        { 
-          $set: { 
-            status: 'approved',
-            transactionHash: onChainResult.hash,
-            approvedAt: new Date(),
-            approvedBy: user.walletAddress || user._id
-          }
-        }
-      );
-
-      auditLog({
-        event: "admin_refund_approved",
-        route: "admin/refunds/approve",
-        method: "POST",
-        status: 200,
-        adminAddress: user.walletAddress,
-        refundId
-      });
-
-      return NextResponse.json({ success: true, transactionHash: onChainResult.hash });
-    } else {
-      return NextResponse.json({ error: 'On-chain refund approval failed' }, { status: 500 });
-    }
-
+    return NextResponse.json({ success: true, refund: result.refund }, { status: 202 });
   } catch (error) {
     console.error('POST /api/admin/refunds/approve error:', error);
     return NextResponse.json({ error: error.message || 'Server error' }, { status: 500 });

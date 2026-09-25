@@ -1,0 +1,61 @@
+name: Soroban Contract Tests
+
+on:
+  pull_request:
+    paths:
+      - "soroban/**"
+      - ".github/workflows/soroban-contract-tests.yml"
+  push:
+    branches:
+      - main
+      - develop
+    paths:
+      - "soroban/**"
+      - ".github/workflows/soroban-contract-tests.yml"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: Soroban Contract Validation
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32v1-none
+          components: rustfmt,clippy
+
+      - name: Cache Cargo dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: soroban -> soroban/target
+
+      - name: Check formatting
+        working-directory: soroban
+        run: cargo fmt --all -- --check
+
+      - name: Run Clippy lints
+        working-directory: soroban
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Build contracts
+        working-directory: soroban
+        run: cargo build --workspace --release
+
+      - name: Run tests
+        working-directory: soroban
+        run: cargo test --workspace --all-targets
+
+      - name: Verify WASM compilation
+        working-directory: soroban
+        run: cargo build --target wasm32v1-none --release

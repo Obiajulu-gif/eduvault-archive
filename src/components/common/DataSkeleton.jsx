@@ -1,12 +1,12 @@
 import React from 'react';
 
 export function SkeletonBase({ className = '' }) {
-  return <div className={`animate-pulse bg-gray-200 rounded ${className}`} />;
+  return <div className={`animate-pulse bg-gray-200 dark:bg-gray-700 rounded ${className}`} />;
 }
 
 export function MaterialCardSkeleton() {
   return (
-    <div className="bg-white border border-gray-200 rounded-2xl overflow-hidden shadow-sm p-4">
+    <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-2xl overflow-hidden shadow-sm p-4">
       <SkeletonBase className="w-full h-44 mb-4" />
       <SkeletonBase className="w-3/4 h-4 mb-2" />
       <SkeletonBase className="w-1/2 h-3 mb-4" />
@@ -32,7 +32,7 @@ export function ActivityItemSkeleton() {
 
 export function StatCardSkeleton() {
   return (
-    <div className="bg-white border border-gray-100 rounded-xl p-5 shadow-sm">
+    <div className="bg-white dark:bg-gray-900 border border-gray-100 dark:border-gray-800 rounded-xl p-5 shadow-sm">
       <div className="flex justify-between items-center mb-3">
         <SkeletonBase className="w-20 h-3" />
         <SkeletonBase className="w-6 h-6 rounded-full" />

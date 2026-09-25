@@ -26,7 +26,7 @@ export default function TopSharedMaterials() {
   };
 
   return (
-    <section className="relative py-24 px-6 md:px-16 overflow-hidden bg-white">
+    <section className="relative py-24 px-6 md:px-16 overflow-hidden bg-white dark:bg-gray-950">
       <motion.div
         initial="hidden"
         whileInView="show"
@@ -35,7 +35,7 @@ export default function TopSharedMaterials() {
         className="relative flex flex-col md:flex-row md:items-end justify-between mb-16 z-10"
       >
         <div className="max-w-2xl">
-          <h2 className="text-4xl md:text-5xl font-bold text-stellar-dark mb-4">
+          <h2 className="text-4xl md:text-5xl font-bold text-stellar-dark dark:text-white mb-4">
             Top Shared Materials
           </h2>
           <p className="text-edu-muted text-lg">
@@ -59,7 +59,7 @@ export default function TopSharedMaterials() {
           variants={fadeUp}
           className="lg:col-span-5 relative group"
         >
-          <div className="relative h-[450px] rounded-[2.5rem] overflow-hidden shadow-2xl border border-gray-100 transition-all duration-500 group-hover:shadow-stellar-blue/10">
+          <div className="relative h-[450px] rounded-[2.5rem] overflow-hidden shadow-2xl border border-gray-100 dark:border-gray-800 transition-all duration-500 group-hover:shadow-stellar-blue/10">
             <Image
               src="/images/Generated Image November 07, 2025 - 7_02AM.png"
               alt="ECN 101 Preview"
@@ -85,7 +85,7 @@ export default function TopSharedMaterials() {
                   </div>
                   <span className="text-xl font-bold">0.25 XLM</span>
                 </div>
-                <button className="bg-white text-stellar-dark font-bold px-6 py-3 rounded-xl hover:bg-gray-100 transition-all shadow-lg">
+                <button className="bg-white dark:bg-gray-800 text-stellar-dark dark:text-white font-bold px-6 py-3 rounded-xl hover:bg-gray-100 dark:hover:bg-gray-700 transition-all shadow-lg">
                   Access Now
                 </button>
               </div>
@@ -105,14 +105,14 @@ export default function TopSharedMaterials() {
             <motion.div
               key={i}
               whileHover={{ x: 8 }}
-              className="flex items-center justify-between bg-white border border-gray-100 rounded-[1.5rem] p-5 shadow-sm transition-all duration-300 hover:border-stellar-blue/20"
+              className="flex items-center justify-between bg-white dark:bg-gray-900 border border-gray-100 dark:border-gray-800 rounded-[1.5rem] p-5 shadow-sm transition-all duration-300 hover:border-stellar-blue/20"
             >
               <div className="flex items-center gap-4">
                 <div className="w-16 h-16 bg-edu-light rounded-2xl flex items-center justify-center text-2xl shadow-inner">
                   📚
                 </div>
                 <div>
-                  <h3 className="text-sm font-bold text-stellar-dark truncate max-w-[150px]">
+                  <h3 className="text-sm font-bold text-stellar-dark dark:text-white truncate max-w-[150px]">
                     {material.title}
                   </h3>
                   <p className="text-xs text-edu-muted mb-2">{material.author}</p>
@@ -122,7 +122,7 @@ export default function TopSharedMaterials() {
                   </div>
                 </div>
               </div>
-              <button className="w-10 h-10 rounded-full border border-gray-100 flex items-center justify-center text-stellar-blue hover:bg-stellar-blue hover:text-white transition-all">
+              <button className="w-10 h-10 rounded-full border border-gray-100 dark:border-gray-700 flex items-center justify-center text-stellar-blue hover:bg-stellar-blue hover:text-white transition-all">
                 <FaArrowRight size={12} />
               </button>
             </motion.div>
@@ -142,7 +142,7 @@ export default function TopSharedMaterials() {
               <FaCrown />
             </div>
             <div>
-              <h3 className="font-bold text-stellar-dark">Top Earners</h3>
+              <h3 className="font-bold text-stellar-dark dark:text-white">Top Earners</h3>
               <p className="text-[10px] uppercase tracking-widest text-edu-muted font-bold">This Week</p>
             </div>
           </div>
@@ -151,12 +151,12 @@ export default function TopSharedMaterials() {
             {topAuthors.map((author) => (
               <div
                 key={author.rank}
-                className="flex justify-between items-center bg-white rounded-2xl p-4 shadow-sm border border-gray-50/50"
+                className="flex justify-between items-center bg-white dark:bg-gray-800 rounded-2xl p-4 shadow-sm border border-gray-50/50 dark:border-gray-700"
               >
                 <div className="flex items-center gap-3">
                   <span className="text-xs font-bold text-edu-muted w-4">{author.rank}</span>
                   <div>
-                    <h4 className="text-xs font-bold text-stellar-dark">{author.name}</h4>
+                    <h4 className="text-xs font-bold text-stellar-dark dark:text-white">{author.name}</h4>
                     <p className="text-[10px] text-stellar-blue font-bold">{author.earnings}</p>
                   </div>
                 </div>

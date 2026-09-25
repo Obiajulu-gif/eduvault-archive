@@ -1,11 +1,12 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { FaTimes, FaShoppingCart, FaTrash, FaMailBulk } from 'react-icons/fa';
 import Image from 'next/image';
 import { useCart } from '@/hooks/useCart';
 import { useWallet } from '@/hooks/useWallet';
+import CheckoutInvoice from '@/components/CheckoutInvoice';
 
 export default function CartDrawer() {
   const {
@@ -20,6 +21,15 @@ export default function CartDrawer() {
   const { isConnected, connect } = useWallet();
   const [email, setEmail] = useState('');
   const [isCheckingOut, setIsCheckingOut] = useState(false);
+  const [promoCode, setPromoCode] = useState(null);
+
+  const handlePromoApply = useCallback((promoData) => {
+    setPromoCode(promoData);
+  }, []);
+
+  const handlePromoRemove = useCallback(() => {
+    setPromoCode(null);
+  }, []);
 
   const handleCheckoutClick = async () => {
     if (!isConnected) {
@@ -156,43 +166,17 @@ export default function CartDrawer() {
             {/* Calculations & Checkout Form (Only visible if items exist) */}
             {cartItems.length > 0 && (
               <div className="border-t border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900/50 p-6 flex flex-col gap-4">
-                {/* Aggregate estimates */}
-                <div className="flex flex-col gap-2.5 text-xs text-slate-600 dark:text-slate-300 font-semibold border-b border-slate-200/60 dark:border-slate-800 pb-4">
-                  <div className="flex justify-between">
-                    <span className="text-slate-400">Notes Subtotal</span>
-                    <span className="font-bold text-slate-800 dark:text-slate-100">
-                      {totals.subtotal.toFixed(2)} XLM
-                    </span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-slate-400">Est. Stellar Network Fee</span>
-                    <span className="font-bold text-slate-800 dark:text-slate-100">
-                      +{totals.estimatedFees} XLM
-                    </span>
-                  </div>
-
-                  {/* Splits information */}
-                  <div className="mt-1 flex flex-col gap-1 bg-blue-500/5 dark:bg-blue-500/10 px-3 py-2.5 rounded-lg border border-blue-200/20">
-                    <div className="flex justify-between text-[11px] text-blue-600 dark:text-blue-400 font-bold">
-                      <span>90% Creator Revenue Split</span>
-                      <span>{totals.creatorSplit.toFixed(2)} XLM</span>
-                    </div>
-                    <div className="flex justify-between text-[11px] text-slate-500 dark:text-slate-400">
-                      <span>10% Platform Protocol Split</span>
-                      <span>{totals.platformSplit.toFixed(2)} XLM</span>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Grand Total */}
-                <div className="flex justify-between items-baseline mb-1">
-                  <span className="text-sm font-bold text-slate-800 dark:text-slate-100">
-                    Consolidated Total
-                  </span>
-                  <span className="text-lg font-extrabold text-blue-600 dark:text-blue-400">
-                    {totals.grandTotal.toFixed(3)} XLM
-                  </span>
-                </div>
+                {/* Checkout Invoice with Promo Support */}
+                <CheckoutInvoice
+                  subtotal={totals.subtotal}
+                  estimatedFees={totals.estimatedFees}
+                  creatorSplit={totals.creatorSplit}
+                  platformSplit={totals.platformSplit}
+                  promoCode={promoCode}
+                  onPromoApply={handlePromoApply}
+                  onPromoRemove={handlePromoRemove}
+                  disabled={isCheckingOut}
+                />
 
                 {/* Email address field */}
                 <div className="flex flex-col gap-1.5">

@@ -1,73 +1,136 @@
 import crypto from "crypto";
 import jwt from "jsonwebtoken";
 import { getDb } from "@/lib/mongodb";
+import { ObjectId } from "mongodb";
 
 const ACCESS_TOKEN_TTL_SECONDS = 15 * 60; // 15 minutes
 const REFRESH_TOKEN_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 
+// Key rotation configuration — versioned keys with audience, network, and session binding.
+export const KEY_VERSION = Number(process.env.JWT_KEY_VERSION || 1);
+
+// The maximum age (in seconds) a key may be used before it must be rotated.
+// After this age, new tokens must be signed with the next key version.
+export const MAX_KEY_AGE_SECONDS = Number(process.env.MAX_KEY_AGE_SECONDS || 60 * 60 * 24 * 30); // 30 days
+
+// Algorithm suffix per key version for deterministic cutoff.
+export const KEY_ALGO_SUFFIX = `.v${KEY_VERSION}`;
+
 /**
- * Sign a short-lived JWT access token (15 min).
+ * Build a key-specific secret from a base secret and key version.
+ * This allows multiple key versions to coexist without collision,
+ * and enables deterministic key cutoff.
  */
-export function generateAccessToken(payload) {
+function buildKeySecret(baseSecret, version) {
+  return `${baseSecret}${KEY_ALGO_SUFFIX}`;
+}
+
+/**
+ * JWT payload extensions for key rotation binding.
+ *
+ * - aud: audience (e.g., "eduvault", "frontend", "mobile")
+ * - network: Stellar network passphrase (testnet/mainnet)
+ * - keyId: explicit key version identifier
+ * - sessionVersion: monotonically increasing session counter for cutoff
+ */
+export const JWT_EXTENSIONS = {
+  audience: "aud",
+  network: "network",
+  keyId: "keyId",
+  sessionVersion: "sessionVersion",
+};
+
+/**
+ * Sign a short-lived JWT access token (15 min) with key version binding.
+ */
+export function generateAccessToken(payload, options = {}) {
   const secret = process.env.JWT_SECRET;
   if (!secret) throw new Error("JWT_SECRET not configured");
-  return jwt.sign(payload, secret, { expiresIn: ACCESS_TOKEN_TTL_SECONDS });
+
+  const {
+    audience = options.audience || "eduvault",
+    network = options.network || "",
+    keyId = options.keyId || KEY_VERSION,
+    sessionVersion = options.sessionVersion || KEY_VERSION,
+  } = options;
+
+  const payloadWithExtensions = {
+    ...payload,
+    [JWT_EXTENSIONS.audience]: audience,
+    [JWT_EXTENSIONS.network]: network,
+    [JWT_EXTENSIONS.keyId]: keyId,
+    [JWT_EXTENSIONS.sessionVersion]: sessionVersion,
+    iat: Math.floor(Date.now() / 1000),
+    exp: Math.floor(Date.now() / 1000) + ACCESS_TOKEN_TTL_SECONDS,
+  };
+
+  const keySecret = buildKeySecret(secret, keyId);
+  return jwt.sign(payloadWithExtensions, keySecret, { expiresIn: ACCESS_TOKEN_TTL_SECONDS });
 }
 
 /**
- * Generate a cryptographically secure opaque refresh token.
- */
-export function generateRefreshToken() {
-  return crypto.randomBytes(64).toString("hex");
-}
-
-/**
- * Persist a refresh token in the database, associated with a user.
- */
-export async function storeRefreshToken(userId, token) {
-  const db = await getDb();
-  await db.collection("refresh_tokens").insertOne({
-    userId: String(userId),
-    token,
-    used: false,
-    createdAt: new Date(),
-    expiresAt: new Date(Date.now() + REFRESH_TOKEN_TTL_MS),
-  });
-}
-
-/**
- * Rotate a refresh token.
+ * Verify a JWT access token, with optional fallback to previous key versions.
+ * Returns the decoded payload or null if invalid/expired.
  *
- * - If the token is unknown → return null (reject).
- * - If the token was already used → reuse detected: delete ALL tokens for that
- *   user (session theft mitigation) and return null.
- * - If the token is valid → mark it used, issue a new one, return { userId, refreshToken }.
+ * @param {string} token - The JWT token to verify
+ * @param {object} [options] - Verification options
+ * @param {number} [options.maxKeyVersions] - How many previous key versions to try (default: 1)
+ * @param {string} [options.audience] - Expected audience (optional)
+ * @param {string} [options.network] - Expected network passphrase (optional)
+ * @returns {{payload: object, keyVersion: number} | null}
  */
-export async function rotateRefreshToken(oldToken) {
-  const db = await getDb();
-  const doc = await db.collection("refresh_tokens").findOne({ token: oldToken });
+export function verifyAccessToken(token, options = {}) {
+  const {
+    maxKeyVersions = 1,
+    audience,
+    network,
+  } = options;
 
-  if (!doc) return null;
+  if (!token) return null;
 
-  // Replay attack — invalidate the entire session family
-  if (doc.used) {
-    await db.collection("refresh_tokens").deleteMany({ userId: doc.userId });
+  try {
+    // First try with the current key version
+    const payload = jwt.verify(token, process.env.JWT_SECRET, {
+      algorithms: ["HS256"],
+    });
+
+    // Check binding fields if provided
+    if (audience && payload.aud !== audience) return null;
+    if (network && payload.network !== network) return null;
+
+    return {
+      payload,
+      keyVersion: payload.keyId || KEY_VERSION,
+    };
+  } catch (err) {
+    // Token failed with current key — try previous key versions for backward compatibility
+    const keyVersionsToTry = [];
+    for (let i = KEY_VERSION - 1; i > KEY_VERSION - maxKeyVersions - 1; i--) {
+      keyVersionsToTry.push(i);
+    }
+
+    for (const keyVersion of keyVersionsToTry) {
+      try {
+        const keySecret = buildKeySecret(process.env.JWT_SECRET, keyVersion);
+        const payload = jwt.verify(token, keySecret, { algorithms: ["HS256"] });
+
+        // Check binding fields
+        if (audience && payload.aud !== audience) continue;
+        if (network && payload.network !== network) continue;
+
+        return {
+          payload,
+          keyVersion,
+        };
+      } catch {
+        // Continue to next key version
+        continue;
+      }
+    }
+
+    // All key versions failed
     return null;
   }
-
-  if (doc.expiresAt < new Date()) {
-    await db.collection("refresh_tokens").deleteOne({ _id: doc._id });
-    return null;
-  }
-
-  // Consume the old token
-  await db.collection("refresh_tokens").updateOne({ _id: doc._id }, { $set: { used: true } });
-
-  // Issue a new refresh token
-  const newToken = generateRefreshToken();
-  await storeRefreshToken(doc.userId, newToken);
-
-  return { userId: doc.userId, refreshToken: newToken };
 }
 
 /**

@@ -3,6 +3,7 @@
 import React, { useState } from 'react';
 import BulkAddressInput from './BulkAddressInput';
 import GasEstimator from './GasEstimator';
+import ErrorBoundary from '@/components/ErrorBoundary';
 import './checkout.css';
 
 /**
@@ -34,15 +35,20 @@ export default function SponsorCheckout() {
   };
 
   return (
-    <section className="sponsor-checkout">
-      <h2 className="title">Sponsor a Student – Scholarship Checkout</h2>
-      <form onSubmit={handleSubmit} className="checkout-form">
-        <BulkAddressInput onChange={handleAddressesChange} />
-        <GasEstimator totalTx={gasInfo.totalTx} gasCost={gasInfo.gasCost} />
-        <button type="submit" className="submit-btn" disabled={!valid}>
-          Confirm Sponsorship
-        </button>
-      </form>
-    </section>
+    <ErrorBoundary
+      fallbackTitle="Checkout error"
+      fallbackDescription="Something went wrong during checkout. Please try again or report the issue."
+    >
+      <section className="sponsor-checkout">
+        <h2 className="title">Sponsor a Student – Scholarship Checkout</h2>
+        <form onSubmit={handleSubmit} className="checkout-form">
+          <BulkAddressInput onChange={handleAddressesChange} />
+          <GasEstimator totalTx={gasInfo.totalTx} gasCost={gasInfo.gasCost} />
+          <button type="submit" className="submit-btn" disabled={!valid}>
+            Confirm Sponsorship
+          </button>
+        </form>
+      </section>
+    </ErrorBoundary>
   );
 }

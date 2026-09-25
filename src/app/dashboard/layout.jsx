@@ -2,6 +2,7 @@
 
 import Sidebar from "./components/Sidebar";
 import DashboardHeader from "./components/DashboardHeader";
+import ErrorBoundary from "@/components/ErrorBoundary";
 
 export default function DashboardLayout({ children }) {
 	return (
@@ -16,7 +17,14 @@ export default function DashboardLayout({ children }) {
 
 				{/* Scrollable main content */}
 				<main className="flex-1 overflow-y-auto p-8 bg-background">
-					<div className="max-w-7xl mx-auto">{children}</div>
+					<div className="max-w-7xl mx-auto">
+						<ErrorBoundary
+							fallbackTitle="Dashboard error"
+							fallbackDescription="Something went wrong while loading your dashboard. Try again or report the issue."
+						>
+							{children}
+						</ErrorBoundary>
+					</div>
 				</main>
 			</div>
 		</div>

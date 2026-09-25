@@ -50,7 +50,7 @@ export default function LearnerDashboardPage() {
 
   const quickActions = [
     { label: "Browse Marketplace", href: "/marketplace", icon: <FaShoppingBag className="w-5 h-5" />, color: "blue" },
-    { label: "My Purchases", href: "/dashboard/purchases", icon: <FaBook className="w-5 h-5" />, color: "emerald" },
+    { label: "My Library", href: "/dashboard/library", icon: <FaBook className="w-5 h-5" />, color: "emerald" },
     { label: "Saved Materials", href: "/dashboard/favourites", icon: <FaHeart className="w-5 h-5" />, color: "rose" },
     { label: "Learning Progress", href: "/dashboard/analytics", icon: <FaChartLine className="w-5 h-5" />, color: "amber" },
   ];
@@ -176,7 +176,7 @@ export default function LearnerDashboardPage() {
                 <h2 className="text-base font-bold text-gray-900">My Purchases</h2>
               </div>
               <Link
-                href="/dashboard/purchases"
+                href="/dashboard/library"
                 className="text-xs font-semibold text-blue-600 hover:underline flex items-center gap-1"
               >
                 View All <FaArrowRight className="w-3 h-3" />

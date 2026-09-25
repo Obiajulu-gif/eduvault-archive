@@ -232,6 +232,27 @@ Auth expectations:
 ```text
 purchase(material_id, asset, expected_amount) -> purchase_id
 
+purchase_bulk_licenses(
+  purchaser,
+  material_id, 
+  asset,
+  expected_unit_price,
+  transaction_id,
+  recipients
+) -> BulkLicensePurchaseResult
+
+refund_bulk_purchase(
+  caller,
+  purchaser,
+  material_id,
+  limit
+) -> BulkRefundResult
+
+get_bulk_purchase(
+  purchaser,
+  material_id
+) -> Option<BulkPurchaseRecord>
+
 has_entitlement(material_id, buyer) -> bool
 
 get_entitlement(material_id, buyer) -> Option<EntitlementRecord>
@@ -248,7 +269,38 @@ set_platform_config(treasury, platform_fee_bps, paused)
 Auth expectations:
 
 - `purchase` requires buyer auth and must verify `expected_amount` against the current quote to prevent stale-UI purchases
+- `purchase_bulk_licenses` requires purchaser auth and creates individual entitlements for each recipient
+- `refund_bulk_purchase` requires admin auth or original purchaser auth; provides bounded batch refund capabilities
+- `get_bulk_purchase` is read-only and returns bulk purchase metadata for correlation
 - `set_asset_allowed` and `set_platform_config` require platform admin auth
+
+## Bulk Purchase Operations
+
+EduVault supports bulk license purchases for institutional buyers who need to acquire multiple licenses for different recipients (e.g., a school buying licenses for all students in a class).
+
+### Bulk Purchase Model
+
+When `purchase_bulk_licenses` is called:
+1. A single payment is collected from the purchaser for all licenses
+2. Individual `EntitlementRecord`, `EscrowRecord`, and `SettlementRecord` entries are created for each recipient
+3. Each recipient gets their own sequential `purchase_id` starting from `first_purchase_id`
+4. A `BulkPurchaseRecord` is stored to correlate individual purchases back to the original bulk operation
+
+### Batch Refund Operations
+
+The `refund_bulk_purchase` function addresses the limitation where individual recipients would need to initiate separate refund requests. Instead:
+
+- Original purchaser or admin can refund multiple purchase IDs from a bulk purchase in one transaction
+- Operation is bounded by `MAX_MAINTENANCE_BATCH` (25) to prevent resource exhaustion
+- Gracefully skips already-refunded or disputed purchases rather than failing the entire batch
+- Emits individual `PurchaseRefundedEvent` events to maintain indexer compatibility
+- Returns summary statistics including refunded count, skipped count, and total refund amount
+
+### Resource Limits
+
+- Maximum recipients per bulk purchase: `MAX_BULK_LICENSE_RECIPIENTS` (50)
+- Maximum purchases processed per batch refund: `MAX_MAINTENANCE_BATCH` (25)
+- These limits align with existing Soroban resource constraints
 
 ## Entitlement Query Model
 
@@ -388,6 +440,41 @@ Notes:
 - the normalized event names above are the backend contract. Raw Soroban topics can vary, but the indexer must map them into these stable shapes
 - `purchase.completed` and `payout.distributed` must be idempotent under repeated indexing
 - backend code should continue using stable event ids derived from ledger, tx hash, topic, and index
+
+### Event schema snapshots and compatibility policy (#673)
+
+The raw `#[contractevent]` **topic symbols and payload fields** are the ABI
+indexers and entitlement logic actually decode. They are snapshotted and
+machine-checked in `soroban/contracts/shared-interface/src/lib.rs`
+(the `events` module) with golden fixtures in
+`soroban/contracts/shared-interface/src/test.rs`. That crate is the shared
+cross-contract ABI layer, so a change to any snapshotted event fails CI
+there *before* it can desync an indexer.
+
+The snapshots cover the events this architecture documents plus the ones
+that carry entitlement state:
+
+| snapshot                       | contract           | topics (leading + `#[topic]`)                                | entitlement column |
+|--------------------------------|--------------------|----------------------------------------------------------------|--------------------|
+| `material.registered`          | `MaterialRegistry` | `material, registered, material_id, creator`                 | —                  |
+| `material.sale_terms_updated`  | `MaterialRegistry` | `material, sale_terms_updated, material_id, creator`         | —                  |
+| `purchase.completed`           | `PurchaseManager`  | `purchase, completed, purchase_id, material_id, buyer`       | `entitlement_active` |
+| `purchase.bulk_completed`      | `PurchaseManager`  | `purchase, bulk_completed, purchaser, material_id`           | —                  |
+| `purchase.refunded`            | `PurchaseManager`  | `purchase, refunded, purchase_id, material_id, buyer`        | `entitlement_revoked` |
+
+Policy:
+
+- **Additive** changes (appending a new trailing payload column or a new
+  event) are non-breaking: consumers ignore unknown trailing columns.
+- **Breaking** changes (renaming, reordering, or removing a topic symbol or a
+  payload field; changing a field's encoded type) require updating the
+  `events` module **and** its snapshot tests in the same PR, and following the
+  deployment order in `shared-interface/lib.rs` (deploy `material-registry`
+  first, `purchase-manager` second).
+- The entitlement contract is `entitlement_active` on `purchase.completed`
+  and `entitlement_revoked` on `purchase.refunded`; these columns must never
+  be dropped or renamed, or the indexer's `entitlement_cache` upsert becomes
+  meaningless.
 
 ## Admin Assumptions
 

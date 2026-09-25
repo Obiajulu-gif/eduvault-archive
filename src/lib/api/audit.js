@@ -9,6 +9,21 @@ const SAFE_FIELDS = new Set([
   "materialId",
   "cursor",
   "eventId",
+  "caseId",
+  "proposerId",
+  "approverId",
+  "sanction",
+  "creatorId",
+  "decision",
+  "reviewerId",
+  "refundId",
+  "purchaseId",
+  "correlationId",
+  "policyVersion",
+  "role",
+  "material",
+  "version",
+  "purchase"
 ]);
 
 export function auditLog(fields) {
@@ -16,7 +31,11 @@ export function auditLog(fields) {
 
   for (const [key, value] of Object.entries(fields || {})) {
     if (SAFE_FIELDS.has(key) && value !== undefined && value !== null) {
-      entry[key] = String(value).slice(0, 300);
+      let stringValue = String(value);
+      stringValue = stringValue.replace(/(bearer\s+)[^\s]+/ig, '$1***');
+      stringValue = stringValue.replace(/(token=)[^\s&]+/ig, '$1***');
+      stringValue = stringValue.replace(/https?:\/\/[^\s]+/ig, '***');
+      entry[key] = stringValue.slice(0, 300);
     }
   }
 

@@ -861,6 +861,7 @@ dependencies = [
 name = "material-registry"
 version = "0.1.0"
 dependencies = [
+ "shared-interface",
  "soroban-sdk",
 ]
 
@@ -996,6 +997,7 @@ dependencies = [
 name = "purchase-manager"
 version = "0.1.0"
 dependencies = [
+ "shared-interface",
  "soroban-sdk",
 ]
 
@@ -1231,6 +1233,13 @@ checksum = "77fd7028345d415a4034cf8777cd4f8ab1851274233b45f84e3d955502d93874"
 dependencies = [
  "digest",
  "keccak",
+]
+
+[[package]]
+name = "shared-interface"
+version = "0.1.0"
+dependencies = [
+ "soroban-sdk",
 ]
 
 [[package]]

@@ -1,0 +1,19 @@
+# EduVault MongoDB Backup Cron Schedule
+#
+# Run daily at 2:00 AM UTC. Logs to /var/log/eduvault-backup.log.
+# Ensure the following env vars are set in the shell environment or sourced
+# from a .env file before execution:
+#
+#   MONGODB_URI             — MongoDB connection string
+#   BACKUP_S3_BUCKET        — S3 / R2 bucket name
+#   BACKUP_S3_REGION        — AWS region (default: us-east-1)
+#   AWS_ACCESS_KEY_ID       — AWS access key
+#   AWS_SECRET_ACCESS_KEY   — AWS secret key
+#   BACKUP_S3_ENDPOINT      — (optional) custom S3 endpoint for R2/MinIO
+#   DISCORD_BACKUP_WEBHOOK_URL — (optional) Discord webhook for failure alerts
+#
+# Install:
+#   crontab -e
+#   # Paste the line below (adjust path to your project root)
+#
+0 2 * * * cd /path/to/eduvault-archive && /usr/bin/node scripts/backup-mongodb.mjs >> /var/log/eduvault-backup.log 2>&1

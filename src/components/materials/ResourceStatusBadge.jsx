@@ -10,19 +10,57 @@
  *   Draft       — visibility is "private"
  *   Unlisted    — visibility is "unlisted"
  *   Published   — visibility is "public"
+ *   Unavailable — the indexer marked this material orphaned by a chain
+ *                 reorg (material.syncStatus === "orphaned"), or the
+ *                 creator was suspended (material.creatorSuspended)
+ *   Restricted  — moderation removed/suspended/rejected this material
+ *                 (material.moderationStatus)
+ *   Stale       — material.updatedAt is older than STALE_AFTER_MS; the
+ *                 badges above may not reflect the live record
+ *
+ * The three live-state badges (Unavailable/Restricted/Stale) are derived
+ * from fields the indexer/moderation pipeline already write onto the
+ * material document (lib/indexer/forkDetection.js, materialSearchProjection.js)
+ * rather than a new per-badge network call — see #676. They're a no-op
+ * (badge simply doesn't appear) when a caller's query doesn't project
+ * those fields, so this is purely additive for callers that do.
  *
  * See docs/resource-status-badges.md for full reference.
  */
 
+// A material whose document hasn't been touched in longer than this is
+// flagged Stale — the other badges (rating, availability, moderation) were
+// computed from a record this old and may no longer reflect reality.
+const STALE_AFTER_MS = 24 * 60 * 60 * 1000; // 24 hours
+
+const RESTRICTED_MODERATION_STATUSES = new Set(["suspended", "removed", "rejected"]);
+
 const BADGE_STYLES = {
-  Free: "bg-emerald-50 text-emerald-700 border border-emerald-200",
-  New: "bg-blue-50 text-blue-700 border border-blue-200",
-  Verified: "bg-indigo-50 text-indigo-700 border border-indigo-200",
-  "Top Rated": "bg-amber-50 text-amber-700 border border-amber-200",
-  Popular: "bg-purple-50 text-purple-700 border border-purple-200",
-  Draft: "bg-gray-100 text-gray-600 border border-gray-200",
-  Unlisted: "bg-orange-50 text-orange-700 border border-orange-200",
-  Published: "bg-green-50 text-green-700 border border-green-200",
+  Free: "bg-emerald-50 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800",
+  New: "bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-800",
+  Verified: "bg-indigo-50 dark:bg-indigo-900/30 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800",
+  "Top Rated": "bg-amber-50 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-800",
+  Popular: "bg-purple-50 dark:bg-purple-900/30 text-purple-700 dark:text-purple-300 border border-purple-200 dark:border-purple-800",
+  Draft: "bg-gray-100 dark:bg-surface-muted text-gray-600 dark:text-muted-foreground border border-gray-200 dark:border-border-strong",
+  Unlisted: "bg-orange-50 dark:bg-orange-900/30 text-orange-700 dark:text-orange-300 border border-orange-200 dark:border-orange-800",
+  Published: "bg-green-50 dark:bg-green-900/30 text-green-700 dark:text-green-300 border border-green-200 dark:border-green-800",
+  Unavailable: "bg-red-50 dark:bg-red-900/30 text-red-700 dark:text-red-300 border border-red-200 dark:border-red-800",
+  Restricted: "bg-red-50 dark:bg-red-900/30 text-red-700 dark:text-red-300 border border-red-200 dark:border-red-800",
+  Stale: "bg-yellow-50 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-300 border border-yellow-200 dark:border-yellow-800",
+};
+
+const BADGE_TOOLTIPS = {
+  Free: "No cost — freely available to all learners",
+  New: "Recently listed with no ratings yet",
+  Verified: "Creator is actively verified with valid credential",
+  "Top Rated": "Average score of 4.5 or higher",
+  Popular: "Over 1,000 learner likes",
+  Draft: "Private draft — not publicly listed",
+  Unlisted: "Accessible by link only",
+  Published: "Publicly listed in the marketplace",
+  Unavailable: "Temporarily unavailable — verifying on-chain state after a network event",
+  Restricted: "Access restricted pending moderation review",
+  Stale: "This information may be out of date",
 };
 
 export function deriveBadges(material) {
@@ -45,7 +83,9 @@ export function deriveBadges(material) {
     badges.push("Top Rated");
   }
 
-  if (material.verified) {
+  const credential = material?.author?.credential || material?.creator?.credential;
+  const isVerified = credential?.status === "active" && (!credential?.expiresAt || new Date(credential.expiresAt) > new Date());
+  if (isVerified) {
     badges.push("Verified");
   }
 
@@ -61,18 +101,35 @@ export function deriveBadges(material) {
     badges.push("Published");
   }
 
+  // Live-ish signals already projected onto the material document by the
+  // indexer (forkDetection.js) and moderation pipeline — no new network
+  // call needed here, only present when the caller's query included them (#676).
+  if (material.syncStatus === "orphaned" || material.creatorSuspended === true) {
+    badges.push("Unavailable");
+  }
+  if (RESTRICTED_MODERATION_STATUSES.has(material.moderationStatus)) {
+    badges.push("Restricted");
+  }
+
+  const updatedAtMs = material.updatedAt ? new Date(material.updatedAt).getTime() : NaN;
+  if (Number.isFinite(updatedAtMs) && Date.now() - updatedAtMs > STALE_AFTER_MS) {
+    badges.push("Stale");
+  }
+
   return badges;
 }
 
 /**
- * Renders a single badge pill.
+ * Renders a single badge pill with an optional tooltip.
  */
 export function StatusBadge({ label, className = "" }) {
-  const base = BADGE_STYLES[label] ?? "bg-gray-100 text-gray-600 border border-gray-200";
+  const base = BADGE_STYLES[label] ?? "bg-gray-100 dark:bg-surface-muted text-gray-600 dark:text-muted-foreground border border-gray-200 dark:border-border-strong";
+  const tooltip = BADGE_TOOLTIPS[label];
   return (
     <span
-      className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold leading-tight ${base} ${className}`}
+      className={`relative inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold leading-tight cursor-default ${base} ${className}`}
       aria-label={`Status: ${label}`}
+      title={tooltip}
     >
       {label}
     </span>
@@ -80,25 +137,88 @@ export function StatusBadge({ label, className = "" }) {
 }
 
 /**
- * Renders a row of status badges derived from a material object.
- *
- * @param {object} material - material data object
- * @param {number} [max]    - max badges to show (default: all)
- * @param {string} [className]
+ * Creator info badge — shows the creator label with a tooltip.
  */
-export default function ResourceStatusBadge({ material, max, className = "" }) {
+export function CreatorBadge({ creator, className = "" }) {
+  if (!creator) return null;
+  return (
+    <span
+      className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold leading-tight bg-slate-50 dark:bg-slate-800/50 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700 cursor-default ${className}`}
+      title={`Created by ${creator}`}
+      aria-label={`Creator: ${creator}`}
+    >
+      by {creator}
+    </span>
+  );
+}
+
+/**
+ * Update date badge — shows when the resource was last updated.
+ */
+export function UpdatedAtBadge({ date, className = "" }) {
+  if (!date) return null;
+  const formatted = new Date(date).toLocaleDateString(undefined, {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+  });
+  return (
+    <span
+      className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold leading-tight bg-gray-50 dark:bg-surface-muted text-gray-500 dark:text-muted-foreground border border-gray-200 dark:border-border-strong cursor-default ${className}`}
+      title={`Last updated: ${formatted}`}
+      aria-label={`Last updated: ${formatted}`}
+    >
+      Updated {formatted}
+    </span>
+  );
+}
+
+/**
+ * Renders a row of status badges derived from a material object.
+ * Also shows creator label and last-updated date when present.
+ *
+ * @param {object}  material  - material data object
+ * @param {number}  [max]     - max status badges to show (default: all)
+ * @param {boolean} [showCreator]   - show creator badge (default: false)
+ * @param {boolean} [showUpdatedAt] - show updated date badge (default: false)
+ * @param {string}  [className]
+ */
+export default function ResourceStatusBadge({
+  material,
+  max,
+  showCreator = false,
+  showUpdatedAt = false,
+  className = "",
+}) {
   const badges = deriveBadges(material);
   const visible = max ? badges.slice(0, max) : badges;
+  const creator = material?.author || material?.creatorName || null;
+  const updatedAt = material?.updatedAt || material?.createdAt || null;
 
-  if (visible.length === 0) return null;
+  const hasContent = visible.length > 0 || (showCreator && creator) || (showUpdatedAt && updatedAt);
+  if (!hasContent) return null;
 
   return (
-    <div className={`flex flex-wrap gap-1 ${className}`} role="list" aria-label="Resource status badges">
+    <div
+      className={`flex flex-wrap gap-1 ${className}`}
+      role="list"
+      aria-label="Resource info badges"
+    >
       {visible.map((label) => (
         <span key={label} role="listitem">
           <StatusBadge label={label} />
         </span>
       ))}
+      {showCreator && creator && (
+        <span role="listitem">
+          <CreatorBadge creator={creator} />
+        </span>
+      )}
+      {showUpdatedAt && updatedAt && (
+        <span role="listitem">
+          <UpdatedAtBadge date={updatedAt} />
+        </span>
+      )}
     </div>
   );
 }

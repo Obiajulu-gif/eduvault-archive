@@ -46,7 +46,7 @@ export default function MarketPage() {
           Legacy marketplace preview
         </h1>
         <p className="text-sm text-gray-600 max-w-2xl">
-          This screen is a catalog preview while the Soroban purchase and entitlement flow is being built. No Celo contract calls are made here.
+          This screen is a catalog preview while the Soroban purchase and entitlement flow is being built. No Stellar contract calls are made here.
         </p>
 
         <div className="flex flex-wrap items-center gap-3 mb-6 mt-4">

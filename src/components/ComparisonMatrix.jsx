@@ -5,6 +5,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { FaTimes, FaExchangeAlt, FaTrash, FaStar, FaFilePdf, FaFileWord, FaFilePowerpoint } from 'react-icons/fa';
 import Image from 'next/image';
 import { useComparison } from '@/hooks/useComparison';
+import useFocusTrap from '@/hooks/useFocusTrap';
 
 export default function ComparisonMatrix() {
   const {
@@ -17,6 +18,7 @@ export default function ComparisonMatrix() {
   } = useComparison();
 
   const [isDrawerCollapsed, setIsDrawerCollapsed] = useState(false);
+  const modalRef = useFocusTrap(isModalOpen, closeComparisonModal);
 
   if (comparedItems.length === 0) return null;
 
@@ -24,15 +26,15 @@ export default function ComparisonMatrix() {
     const ext = fileName.split('.').pop().toLowerCase();
     switch (ext) {
       case 'pdf':
-        return <FaFilePdf className="text-red-500 w-4 h-4" />;
+        return <FaFilePdf className="text-red-500 w-4 h-4" aria-hidden="true" />;
       case 'doc':
       case 'docx':
-        return <FaFileWord className="text-blue-500 w-4 h-4" />;
+        return <FaFileWord className="text-blue-500 w-4 h-4" aria-hidden="true" />;
       case 'ppt':
       case 'pptx':
-        return <FaFilePowerpoint className="text-amber-500 w-4 h-4" />;
+        return <FaFilePowerpoint className="text-amber-500 w-4 h-4" aria-hidden="true" />;
       default:
-        return <FaFilePdf className="text-indigo-500 w-4 h-4" />;
+        return <FaFilePdf className="text-indigo-500 w-4 h-4" aria-hidden="true" />;
     }
   };
 
@@ -46,7 +48,8 @@ export default function ComparisonMatrix() {
       {/* ────────────────── BOTTOM COMPARISON DRAWER ────────────────── */}
       <AnimatePresence>
         {!isModalOpen && (
-          <motion.div
+          <motion.aside
+            aria-label="Educational materials comparison drawer"
             initial={{ y: 150, opacity: 0 }}
             animate={{ y: 0, opacity: 1 }}
             exit={{ y: 150, opacity: 0 }}
@@ -56,7 +59,7 @@ export default function ComparisonMatrix() {
             <div className="max-w-6xl mx-auto flex flex-col md:flex-row md:items-center justify-between gap-4">
               <div className="flex items-center justify-between md:justify-start gap-4">
                 <div className="flex items-center gap-2">
-                  <div className="p-2 bg-blue-500/10 rounded-lg text-blue-600 dark:text-blue-400">
+                  <div className="p-2 bg-blue-500/10 rounded-lg text-blue-600 dark:text-blue-400" aria-hidden="true">
                     <FaExchangeAlt />
                   </div>
                   <div>
@@ -69,8 +72,11 @@ export default function ComparisonMatrix() {
                   </div>
                 </div>
                 <button
+                  type="button"
                   onClick={() => setIsDrawerCollapsed(!isDrawerCollapsed)}
-                  className="md:hidden text-xs text-blue-500 font-semibold hover:underline"
+                  aria-expanded={!isDrawerCollapsed}
+                  aria-label={isDrawerCollapsed ? 'Show comparison items' : 'Hide comparison items'}
+                  className="md:hidden text-xs text-blue-500 font-semibold hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 rounded"
                 >
                   {isDrawerCollapsed ? 'Show Items' : 'Hide Items'}
                 </button>
@@ -95,11 +101,12 @@ export default function ComparisonMatrix() {
                         </div>
                         <span className="truncate flex-1 pr-4">{item.title}</span>
                         <button
+                          type="button"
                           onClick={() => removeFromComparison(itemId)}
-                          className="text-slate-400 hover:text-rose-500 p-0.5"
-                          aria-label="Remove item"
+                          className="text-slate-400 hover:text-rose-500 focus:text-rose-500 p-0.5 rounded focus:outline-none focus-visible:ring-2 focus-visible:ring-rose-500"
+                          aria-label={`Remove ${item.title} from comparison`}
                         >
-                          <FaTimes className="w-3 h-3" />
+                          <FaTimes className="w-3 h-3" aria-hidden="true" />
                         </button>
                       </div>
                     );
@@ -109,22 +116,26 @@ export default function ComparisonMatrix() {
 
               <div className="flex items-center justify-end gap-3 shrink-0">
                 <button
+                  type="button"
                   onClick={clearComparison}
-                  className="flex items-center gap-2 px-3 py-2 text-xs font-semibold text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition-colors"
+                  aria-label="Clear all compared items"
+                  className="flex items-center gap-2 px-3 py-2 text-xs font-semibold text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
                 >
-                  <FaTrash className="w-3 h-3" />
+                  <FaTrash className="w-3 h-3" aria-hidden="true" />
                   Clear
                 </button>
                 <button
+                  type="button"
                   onClick={openComparisonModal}
-                  className="bg-blue-600 hover:bg-blue-700 active:scale-95 text-white font-bold text-xs px-5 py-2.5 rounded-xl shadow-md shadow-blue-500/20 transition-all flex items-center gap-2"
+                  aria-label={`Compare ${comparedItems.length} selected materials side by side`}
+                  className="bg-blue-600 hover:bg-blue-700 active:scale-95 text-white font-bold text-xs px-5 py-2.5 rounded-xl shadow-md shadow-blue-500/20 transition-all flex items-center gap-2 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2"
                 >
-                  <FaExchangeAlt />
+                  <FaExchangeAlt aria-hidden="true" />
                   Compare Now
                 </button>
               </div>
             </div>
-          </motion.div>
+          </motion.aside>
         )}
       </AnimatePresence>
 
@@ -139,10 +150,16 @@ export default function ComparisonMatrix() {
               exit={{ opacity: 0 }}
               className="absolute inset-0 bg-slate-950 backdrop-blur-sm"
               onClick={closeComparisonModal}
+              aria-hidden="true"
             />
 
             {/* Modal Box */}
             <motion.div
+              ref={modalRef}
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="comparison-modal-title"
+              aria-describedby="comparison-modal-desc"
               initial={{ opacity: 0, scale: 0.95, y: 30 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.95, y: 30 }}
@@ -152,42 +169,43 @@ export default function ComparisonMatrix() {
               {/* Modal Header */}
               <div className="px-6 py-5 border-b border-slate-200 dark:border-slate-800 flex justify-between items-center bg-slate-50 dark:bg-slate-900/50">
                 <div className="flex items-center gap-3">
-                  <div className="p-2 bg-blue-500 text-white rounded-lg shadow-sm">
+                  <div className="p-2 bg-blue-500 text-white rounded-lg shadow-sm" aria-hidden="true">
                     <FaExchangeAlt />
                   </div>
                   <div>
-                    <h3 className="text-base md:text-lg font-bold text-slate-800 dark:text-slate-100">
+                    <h3 id="comparison-modal-title" className="text-base md:text-lg font-bold text-slate-800 dark:text-slate-100">
                       Educational Resource Comparison Matrix
                     </h3>
-                    <p className="text-xs text-slate-500 dark:text-slate-400">
+                    <p id="comparison-modal-desc" className="text-xs text-slate-500 dark:text-slate-400">
                       Contrast notes, details, format, and costs side-by-side to make the best learning choice.
                     </p>
                   </div>
                 </div>
                 <button
+                  type="button"
                   onClick={closeComparisonModal}
-                  className="p-2 text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
-                  aria-label="Close Comparison"
+                  className="p-2 text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+                  aria-label="Close comparison modal"
                 >
-                  <FaTimes className="w-5 h-5" />
+                  <FaTimes className="w-5 h-5" aria-hidden="true" />
                 </button>
               </div>
 
               {/* Modal Body / Table Scroll Container */}
               <div className="flex-1 overflow-x-auto overflow-y-auto p-6 scrollbar-thin scrollbar-thumb-slate-300 dark:scrollbar-thumb-slate-700">
                 {/* Responsive Grid with Mobile Horizontal Scroll support */}
-                <table className="w-full border-collapse text-left min-w-[640px]">
+                <table className="w-full border-collapse text-left min-w-[640px]" aria-label="Material comparison attributes">
                   <thead>
                     <tr className="border-b border-slate-200 dark:border-slate-800">
                       {/* Metric name column */}
-                      <th className="py-4 pr-4 font-bold text-sm text-slate-400 uppercase tracking-wider w-[180px]">
+                      <th scope="col" className="py-4 pr-4 font-bold text-sm text-slate-400 uppercase tracking-wider w-[180px]">
                         Details
                       </th>
                       {/* Item columns */}
                       {comparedItems.map((item) => {
                         const itemId = item._id || item.id;
                         return (
-                          <th key={itemId} className="py-4 px-4 font-semibold text-sm w-[260px]">
+                          <th scope="col" key={itemId} className="py-4 px-4 font-semibold text-sm w-[260px]">
                             <div className="flex flex-col gap-3 relative group">
                               <div className="relative w-full h-32 rounded-xl overflow-hidden bg-slate-100 border border-slate-200 dark:border-slate-800 shadow-sm">
                                 <Image
@@ -197,11 +215,13 @@ export default function ComparisonMatrix() {
                                   className="object-cover"
                                 />
                                 <button
+                                  type="button"
                                   onClick={() => removeFromComparison(itemId)}
-                                  className="absolute top-2 right-2 bg-slate-900/80 hover:bg-rose-600 text-white rounded-full p-1.5 transition-all opacity-0 group-hover:opacity-100 shadow"
-                                  title="Remove item"
+                                  className="absolute top-2 right-2 bg-slate-900/80 hover:bg-rose-600 focus:bg-rose-600 text-white rounded-full p-1.5 transition-all opacity-0 group-hover:opacity-100 focus:opacity-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-rose-400 shadow"
+                                  aria-label={`Remove ${item.title} from comparison`}
+                                  title={`Remove ${item.title}`}
                                 >
-                                  <FaTimes className="w-3 h-3" />
+                                  <FaTimes className="w-3 h-3" aria-hidden="true" />
                                 </button>
                               </div>
                               <div className="h-12 overflow-hidden flex flex-col justify-start">
@@ -219,7 +239,7 @@ export default function ComparisonMatrix() {
                       {/* Fill space if less than 3 */}
                       {comparedItems.length < 3 &&
                         Array.from({ length: 3 - comparedItems.length }).map((_, i) => (
-                          <th key={i} className="py-4 px-4 w-[260px]">
+                          <th scope="col" key={i} className="py-4 px-4 w-[260px]">
                             <div className="h-44 border border-dashed border-slate-200 dark:border-slate-800 rounded-xl flex items-center justify-center text-xs text-slate-400 font-medium">
                               Select a material to add
                             </div>
@@ -230,9 +250,9 @@ export default function ComparisonMatrix() {
                   <tbody className="divide-y divide-slate-150 dark:divide-slate-800/80">
                     {/* ROW: PRICE */}
                     <tr className="hover:bg-slate-50/50 dark:hover:bg-slate-800/20 transition-colors">
-                      <td className="py-4 pr-4 text-xs font-bold text-slate-500 uppercase">
+                      <th scope="row" className="py-4 pr-4 text-xs font-bold text-slate-500 uppercase">
                         Price
-                      </td>
+                      </th>
                       {comparedItems.map((item) => {
                         const itemId = item._id || item.id;
                         return (
@@ -251,9 +271,9 @@ export default function ComparisonMatrix() {
 
                     {/* ROW: RATING */}
                     <tr className="hover:bg-slate-50/50 dark:hover:bg-slate-800/20 transition-colors">
-                      <td className="py-4 pr-4 text-xs font-bold text-slate-500 uppercase">
+                      <th scope="row" className="py-4 pr-4 text-xs font-bold text-slate-500 uppercase">
                         Rating
-                      </td>
+                      </th>
                       {comparedItems.map((item) => {
                         const itemId = item._id || item.id;
                         const rating = item.rating || 4.8;
@@ -262,7 +282,7 @@ export default function ComparisonMatrix() {
                           <td key={itemId} className="py-4 px-4">
                             <div className="flex flex-col gap-1">
                               <div className="flex items-center gap-1">
-                                <FaStar className="text-amber-400 w-4 h-4" />
+                                <FaStar className="text-amber-400 w-4 h-4" aria-hidden="true" />
                                 <span className="font-extrabold text-sm text-slate-800 dark:text-slate-100">
                                   {rating.toFixed(1)}
                                 </span>
@@ -283,9 +303,9 @@ export default function ComparisonMatrix() {
 
                     {/* ROW: SUBJECT */}
                     <tr className="hover:bg-slate-50/50 dark:hover:bg-slate-800/20 transition-colors">
-                      <td className="py-4 pr-4 text-xs font-bold text-slate-500 uppercase">
+                      <th scope="row" className="py-4 pr-4 text-xs font-bold text-slate-500 uppercase">
                         Subject
-                      </td>
+                      </th>
                       {comparedItems.map((item) => {
                         const itemId = item._id || item.id;
                         return (
@@ -304,9 +324,9 @@ export default function ComparisonMatrix() {
 
                     {/* ROW: FILE FORMAT */}
                     <tr className="hover:bg-slate-50/50 dark:hover:bg-slate-800/20 transition-colors">
-                      <td className="py-4 pr-4 text-xs font-bold text-slate-500 uppercase">
+                      <th scope="row" className="py-4 pr-4 text-xs font-bold text-slate-500 uppercase">
                         File Format
-                      </td>
+                      </th>
                       {comparedItems.map((item) => {
                         const itemId = item._id || item.id;
                         return (
@@ -328,9 +348,9 @@ export default function ComparisonMatrix() {
 
                     {/* ROW: LICENSING TERMS */}
                     <tr className="hover:bg-slate-50/50 dark:hover:bg-slate-800/20 transition-colors">
-                      <td className="py-4 pr-4 text-xs font-bold text-slate-500 uppercase">
+                      <th scope="row" className="py-4 pr-4 text-xs font-bold text-slate-500 uppercase">
                         Licensing Terms
-                      </td>
+                      </th>
                       {comparedItems.map((item) => {
                         const itemId = item._id || item.id;
                         return (
@@ -353,8 +373,10 @@ export default function ComparisonMatrix() {
               {/* Modal Footer */}
               <div className="px-6 py-4 border-t border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900/30 flex justify-end gap-3">
                 <button
+                  type="button"
                   onClick={closeComparisonModal}
-                  className="px-5 py-2.5 bg-slate-200 dark:bg-slate-800 hover:bg-slate-300 dark:hover:bg-slate-700 font-bold text-xs text-slate-700 dark:text-slate-200 rounded-xl transition-all"
+                  aria-label="Close comparison modal"
+                  className="px-5 py-2.5 bg-slate-200 dark:bg-slate-800 hover:bg-slate-300 dark:hover:bg-slate-700 font-bold text-xs text-slate-700 dark:text-slate-200 rounded-xl transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
                 >
                   Close Contrast
                 </button>

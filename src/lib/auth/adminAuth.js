@@ -1,26 +1,33 @@
 // src/lib/auth/adminAuth.js
+import React from 'react';
+
 /**
- * Placeholder admin authentication utility.
- * In a real application this would verify the user's session/token
- * and ensure they have the required admin role/permissions.
+ * Admin authorization utility.
+ * Single source of truth for checking admin role on user objects.
  */
 export function isAdmin(user) {
-  // TODO: replace with real role check – returning true for demo purposes.
-  return user && user.role === 'admin';
+  return Boolean(user && user.role === 'admin');
 }
 
 /**
- * Higher‑order component (HOC) to protect admin pages.
- * Wraps a page component and redirects non‑admin users.
+ * Higher-order component (HOC) to protect admin pages.
+ * Fails closed: missing user data or non-admin roles are denied access.
  */
 export function withAdminGuard(PageComponent) {
   return function AdminGuarded(props) {
-    // In a real app, you would pull the user from context or session.
-    const user = props.user || { role: 'admin' }; // mock
+    const user = props.user || null;
     if (!isAdmin(user)) {
-      // For simplicity we just render a message.
-      return <p>Access denied – administrators only.</p>;
+      return React.createElement(
+        'div',
+        { className: 'admin-access-denied p-8 text-center', role: 'alert' },
+        React.createElement('h2', { className: 'text-xl font-bold text-red-600 mb-2' }, 'Access Denied'),
+        React.createElement(
+          'p',
+          { className: 'text-gray-700 dark:text-gray-300' },
+          'Administrators only. You do not have permission to view this page.'
+        )
+      );
     }
-    return <PageComponent {...props} />;
+    return React.createElement(PageComponent, props);
   };
 }

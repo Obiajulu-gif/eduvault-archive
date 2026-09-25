@@ -9,6 +9,7 @@ import {
   TransactionStatus,
   TransactionTone,
 } from "@/lib/transactions/transaction";
+import TransactionModal from "@/components/TransactionModal";
 
 const TransactionContext = createContext(null);
 
@@ -282,6 +283,7 @@ export function TransactionProvider({ children }) {
     <TransactionContext.Provider value={value}>
       {children}
       <ToastViewport toasts={toasts} dismissToast={dismissToast} />
+      <TransactionModal />
     </TransactionContext.Provider>
   );
 }

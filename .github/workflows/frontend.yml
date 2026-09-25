@@ -55,16 +55,16 @@ jobs:
           cache-dependency-path: package-lock.json
 
       - name: Install dependencies
-        run: npm install
+        run: npm ci
 
       - name: Lint frontend
-        run: npm run lint --if-present -- --ignore-pattern "src/app/api/**" src/app src/components src/hooks src/providers src/utils
+        run: npm run lint -- --ignore-pattern "src/app/api/**" src/app src/components src/hooks src/providers src/utils
 
       - name: Type check
-        run: npm run typecheck --if-present
+        run: npm run typecheck
 
       - name: Run tests
-        run: npm test --if-present
+        run: npm run test:frontend
 
       - name: Build frontend
-        run: npm run build --if-present
+        run: npm run build

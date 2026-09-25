@@ -41,7 +41,7 @@ export default function DiscoverMaterials() {
 	};
 
 	return (
-		<section className="relative overflow-hidden bg-white px-6 py-24 md:px-16">
+		<section className="relative overflow-hidden bg-white dark:bg-gray-950 px-6 py-24 md:px-16">
 			<div className="absolute top-0 right-0 w-[500px] h-[500px] bg-stellar-blue/5 rounded-full blur-[120px] pointer-events-none" />
 
 			<motion.div
@@ -52,7 +52,7 @@ export default function DiscoverMaterials() {
 				className="relative z-10 mb-12 flex flex-col md:flex-row md:items-center justify-between gap-6"
 			>
 				<div>
-					<h2 className="text-4xl font-bold text-stellar-dark mb-4">
+					<h2 className="text-4xl font-bold text-stellar-dark dark:text-white mb-4">
 						Discover the Commons
 					</h2>
 					<p className="text-edu-muted">Explore thousands of certified academic assets.</p>
@@ -63,10 +63,10 @@ export default function DiscoverMaterials() {
 						<input 
 							type="text" 
 							placeholder="Search materials..." 
-							className="bg-edu-light border border-gray-100 rounded-2xl py-3 pl-12 pr-6 text-sm focus:outline-none focus:ring-2 focus:ring-stellar-blue/20 focus:border-stellar-blue transition-all w-full md:w-[300px]"
+							className="bg-edu-light dark:bg-gray-800 border border-gray-100 dark:border-gray-700 rounded-2xl py-3 pl-12 pr-6 text-sm text-stellar-dark dark:text-white focus:outline-none focus:ring-2 focus:ring-stellar-blue/20 focus:border-stellar-blue transition-all w-full md:w-[300px]"
 						/>
 					</div>
-					<button className="flex items-center gap-2 rounded-2xl border border-gray-100 bg-white px-5 py-3 text-sm font-bold text-stellar-dark transition-all hover:bg-gray-50 shadow-sm">
+					<button className="flex items-center gap-2 rounded-2xl border border-gray-100 dark:border-gray-700 bg-white dark:bg-gray-800 px-5 py-3 text-sm font-bold text-stellar-dark dark:text-white transition-all hover:bg-gray-50 dark:hover:bg-gray-700 shadow-sm">
 						<FiFilter /> Filter
 					</button>
 				</div>
@@ -86,7 +86,7 @@ export default function DiscoverMaterials() {
 						className={`rounded-xl px-6 py-2.5 text-xs font-bold transition-all duration-300 ${
 							activeCategory === cat
 								? "bg-stellar-dark text-white shadow-lg"
-								: "bg-edu-light text-edu-muted hover:bg-gray-200"
+								: "bg-edu-light dark:bg-gray-800 text-edu-muted dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-700"
 						}`}
 					>
 						{cat}
@@ -101,7 +101,7 @@ export default function DiscoverMaterials() {
 							.map((_, i) => (
 								<div
 									key={i}
-									className="h-[400px] animate-pulse rounded-[2.5rem] bg-edu-light"
+									className="h-[400px] animate-pulse rounded-[2.5rem] bg-edu-light dark:bg-gray-800"
 								/>
 							))
 					: materials.map((item, i) => (
@@ -109,18 +109,18 @@ export default function DiscoverMaterials() {
 								key={i}
 								whileHover={{ y: -10 }}
 								variants={fadeUp}
-								className="group rounded-[2.5rem] border border-gray-100 bg-white p-5 shadow-sm transition-all duration-300 hover:shadow-2xl hover:shadow-stellar-blue/5"
+								className="group rounded-[2.5rem] border border-gray-100 dark:border-gray-800 bg-white dark:bg-gray-900 p-5 shadow-sm transition-all duration-300 hover:shadow-2xl hover:shadow-stellar-blue/5"
 							>
-								<div className="mb-6 h-56 overflow-hidden rounded-[2rem] relative bg-edu-light">
+								<div className="mb-6 h-56 overflow-hidden rounded-[2rem] relative bg-edu-light dark:bg-gray-800">
 									<Image
 										src={item.image}
 										alt={item.title}
 										fill
 										className="object-cover transition-transform duration-500 group-hover:scale-110"
 									/>
-									<div className="absolute top-4 right-4 bg-white/90 backdrop-blur-md px-3 py-1.5 rounded-full flex items-center gap-1.5 shadow-sm">
+									<div className="absolute top-4 right-4 bg-white/90 dark:bg-gray-900/90 backdrop-blur-md px-3 py-1.5 rounded-full flex items-center gap-1.5 shadow-sm">
 										<FaHeart className="text-pink-500 text-[10px]" />
-										<span className="text-[10px] font-bold text-stellar-dark">{item.likes}</span>
+										<span className="text-[10px] font-bold text-stellar-dark dark:text-white">{item.likes}</span>
 									</div>
 								</div>
 
@@ -128,15 +128,15 @@ export default function DiscoverMaterials() {
 									<div className="flex items-center gap-2 mb-3">
 										<span className="text-[10px] font-bold text-stellar-blue uppercase tracking-widest">{item.category}</span>
 									</div>
-									<h3 className="mb-2 text-lg font-bold text-stellar-dark line-clamp-1">
+									<h3 className="mb-2 text-lg font-bold text-stellar-dark dark:text-white line-clamp-1">
 										{item.title}
 									</h3>
 									<p className="mb-6 text-sm text-edu-muted">By {item.author}</p>
 
-									<div className="mt-auto pt-6 border-t border-gray-50 flex items-center justify-between">
+									<div className="mt-auto pt-6 border-t border-gray-50 dark:border-gray-800 flex items-center justify-between">
 										<div className="flex flex-col">
 											<span className="text-[10px] uppercase tracking-wider text-edu-muted font-bold">Price</span>
-											<span className="text-lg font-black text-stellar-dark">
+											<span className="text-lg font-black text-stellar-dark dark:text-white">
 												{item.price}
 											</span>
 										</div>

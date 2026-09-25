@@ -5,6 +5,8 @@ import { getDb } from "@/lib/mongodb";
 import { pinata } from "@/lib/pinata";
 import { verifyEmailConnection } from "@/lib/email";
 import { withApiHardening } from "@/lib/api/hardening";
+import { Server, rpc } from "@stellar/stellar-sdk";
+import { HORIZON_URL, STELLAR_RPC_URL } from "@/lib/config/chain";
 
 export async function GET(request) {
   return withApiHardening(
@@ -15,6 +17,7 @@ export async function GET(request) {
         database: "offline",
         pinata: "offline",
         email: "offline",
+        stellar: "offline",
       };
       
       let isHealthy = true;
@@ -49,6 +52,25 @@ export async function GET(request) {
         status.email = "online";
       } catch (err) {
         status.email = `offline: ${err.message}`;
+        isHealthy = false;
+      }
+
+      // 4. Check Stellar Horizon & RPC Connection
+      try {
+        const horizonServer = new Server(HORIZON_URL);
+        await horizonServer.root();
+
+        const rpcServer = new rpc.Server(STELLAR_RPC_URL);
+        const health = await rpcServer.getHealth();
+
+        if (health && health.status === "healthy") {
+          status.stellar = "online";
+        } else {
+          status.stellar = `offline: RPC status is ${health?.status || "unknown"}`;
+          isHealthy = false;
+        }
+      } catch (err) {
+        status.stellar = `offline: ${err.message}`;
         isHealthy = false;
       }
 

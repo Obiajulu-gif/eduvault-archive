@@ -112,6 +112,21 @@ soroban contract inspect \
   --network testnet
 ```
 
+### Step 4: Post-Deploy Smoke Test
+
+After deploying Soroban contracts, run the complete post-deployment purchase lifecycle smoke test to ensure everything works end-to-end on the target network.
+
+```bash
+# Export the Contract IDs
+export NEXT_PUBLIC_MATERIAL_REGISTRY_CONTRACT_ID="CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB5C"
+export NEXT_PUBLIC_PURCHASE_MANAGER_CONTRACT_ID="..." 
+export NEXT_PUBLIC_APP_URL="https://eduvault.vercel.app"
+
+# Execute smoke tests
+bash ../scripts/smoke-test.sh
+```
+This verifies material publish, quote, purchase, entitlement, download, and refund-readiness. **Fail release** and roll back if critical smoke tests fail. The output metadata must be saved.
+
 ## Contract Functions Reference
 
 ### 1. Register Material

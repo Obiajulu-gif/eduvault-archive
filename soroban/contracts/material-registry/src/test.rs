@@ -3,13 +3,24 @@
 extern crate std;
 
 use super::*;
-use soroban_sdk::testutils::{Address as _, Events as _};
+use soroban_sdk::testutils::storage::{Instance as _, Persistent as _};
+use soroban_sdk::testutils::{Address as _, Events as _, Ledger as _};
 use soroban_sdk::{vec, Event};
 
-fn install_contract(env: &Env) -> (Address, MaterialRegistryClient<'_>) {
+/// Registers and initializes a fresh registry contract (#462 — no material
+/// can be registered before `initialize` is called), returning the contract
+/// id, a client, and the admin address `initialize` was called with.
+///
+/// Calls `env.mock_all_auths()` up front (idempotent — harmless if a test
+/// also calls it again afterwards) since `initialize` itself requires the
+/// admin's auth.
+fn install_contract(env: &Env) -> (Address, MaterialRegistryClient<'_>, Address) {
+    env.mock_all_auths();
     let contract_id = env.register(MaterialRegistry, ());
     let client = MaterialRegistryClient::new(env, &contract_id);
-    (contract_id, client)
+    let admin = Address::generate(env);
+    client.initialize(&admin, &Vec::new(env));
+    (contract_id, client, admin)
 }
 
 fn bytes32(env: &Env, value: u8) -> BytesN<32> {
@@ -20,9 +31,14 @@ fn metadata_uri(env: &Env) -> String {
     String::from_str(env, "ipfs://eduvault/material/intro-to-soroban")
 }
 
-fn default_quotes(env: &Env) -> Vec<AssetQuote> {
+/// Generates a fresh XLM + USDC quote pair and approves both assets on the
+/// allowlist (#462 removed the pre-initialization allowlist bypass, so every
+/// quote asset used in a test now needs an explicit approval).
+fn default_quotes(env: &Env, client: &MaterialRegistryClient, admin: &Address) -> Vec<AssetQuote> {
     let xlm = Address::generate(env);
     let usdc = Address::generate(env);
+    client.set_asset_allowed(admin, &xlm, &AssetKind::Native, &true);
+    client.set_asset_allowed(admin, &usdc, &AssetKind::Token, &true);
     vec![
         env,
         AssetQuote {
@@ -36,8 +52,13 @@ fn default_quotes(env: &Env) -> Vec<AssetQuote> {
     ]
 }
 
-fn replacement_quotes(env: &Env) -> Vec<AssetQuote> {
+fn replacement_quotes(
+    env: &Env,
+    client: &MaterialRegistryClient,
+    admin: &Address,
+) -> Vec<AssetQuote> {
     let usdc = Address::generate(env);
+    client.set_asset_allowed(admin, &usdc, &AssetKind::Token, &true);
     vec![
         env,
         AssetQuote {
@@ -88,26 +109,45 @@ fn seed_material(
         rights_hash: bytes32(env, 2),
         paused: false,
         status: MaterialStatus::Active,
-        quotes: default_quotes(env),
+        quotes: vec![
+            env,
+            AssetQuote {
+                asset: Address::generate(env),
+                amount: 2_000_000,
+            },
+        ],
         payout_shares: default_payout_shares(env),
         created_ledger: env.ledger().sequence(),
         updated_ledger: env.ledger().sequence(),
     };
-    env.as_contract(contract_id, || put_material(env, &record));
+    env.as_contract(contract_id, || {
+        put_material_core(
+            env,
+            material_id,
+            &MaterialCore {
+                creator: record.creator.clone(),
+                metadata_uri: record.metadata_uri.clone(),
+                metadata_hash: record.metadata_hash.clone(),
+                rights_hash: record.rights_hash.clone(),
+                created_ledger: record.created_ledger,
+            },
+        );
+        put_material_sale(env, material_id, &sale_state_from_record(&record));
+    });
     record
 }
 
 #[test]
 fn registers_material_and_emits_registered_event() {
     let env = Env::default();
-    let (contract_id, client) = install_contract(&env);
+    let (contract_id, client, admin) = install_contract(&env);
     env.mock_all_auths();
 
     let creator = Address::generate(&env);
     let metadata_uri = metadata_uri(&env);
     let metadata_hash = bytes32(&env, 11);
     let rights_hash = bytes32(&env, 22);
-    let quotes = default_quotes(&env);
+    let quotes = default_quotes(&env, &client, &admin);
     let payout_shares = default_payout_shares(&env);
 
     let material_id = client.register_material(
@@ -142,7 +182,7 @@ fn registers_material_and_emits_registered_event() {
 #[test]
 fn rejects_duplicate_quote_assets() {
     let env = Env::default();
-    let (_contract_id, client) = install_contract(&env);
+    let (_contract_id, client, _admin) = install_contract(&env);
     env.mock_all_auths();
 
     let creator = Address::generate(&env);
@@ -171,7 +211,7 @@ fn rejects_duplicate_quote_assets() {
 #[test]
 fn rejects_empty_payout_shares() {
     let env = Env::default();
-    let (_contract_id, client) = install_contract(&env);
+    let (_contract_id, client, admin) = install_contract(&env);
     env.mock_all_auths();
 
     let creator = Address::generate(&env);
@@ -181,7 +221,7 @@ fn rejects_empty_payout_shares() {
         &metadata_uri(&env),
         &bytes32(&env, 1),
         &bytes32(&env, 2),
-        &default_quotes(&env),
+        &default_quotes(&env, &client, &admin),
         &empty_payouts,
     );
 
@@ -191,7 +231,7 @@ fn rejects_empty_payout_shares() {
 #[test]
 fn rejects_too_many_payout_shares() {
     let env = Env::default();
-    let (_contract_id, client) = install_contract(&env);
+    let (_contract_id, client, admin) = install_contract(&env);
     env.mock_all_auths();
 
     let creator = Address::generate(&env);
@@ -227,7 +267,7 @@ fn rejects_too_many_payout_shares() {
         &metadata_uri(&env),
         &bytes32(&env, 1),
         &bytes32(&env, 2),
-        &default_quotes(&env),
+        &default_quotes(&env, &client, &admin),
         &invalid_payouts,
     );
 
@@ -237,7 +277,7 @@ fn rejects_too_many_payout_shares() {
 #[test]
 fn rejects_duplicate_payout_recipient() {
     let env = Env::default();
-    let (_contract_id, client) = install_contract(&env);
+    let (_contract_id, client, admin) = install_contract(&env);
     env.mock_all_auths();
 
     let creator = Address::generate(&env);
@@ -258,7 +298,7 @@ fn rejects_duplicate_payout_recipient() {
         &metadata_uri(&env),
         &bytes32(&env, 1),
         &bytes32(&env, 2),
-        &default_quotes(&env),
+        &default_quotes(&env, &client, &admin),
         &invalid_payouts,
     );
 
@@ -268,7 +308,7 @@ fn rejects_duplicate_payout_recipient() {
 #[test]
 fn rejects_zero_payout_share() {
     let env = Env::default();
-    let (_contract_id, client) = install_contract(&env);
+    let (_contract_id, client, admin) = install_contract(&env);
     env.mock_all_auths();
 
     let creator = Address::generate(&env);
@@ -288,7 +328,7 @@ fn rejects_zero_payout_share() {
         &metadata_uri(&env),
         &bytes32(&env, 1),
         &bytes32(&env, 2),
-        &default_quotes(&env),
+        &default_quotes(&env, &client, &admin),
         &invalid_payouts,
     );
 
@@ -298,7 +338,7 @@ fn rejects_zero_payout_share() {
 #[test]
 fn rejects_payout_share_over_basis_points_without_overflow() {
     let env = Env::default();
-    let (_contract_id, client) = install_contract(&env);
+    let (_contract_id, client, admin) = install_contract(&env);
     env.mock_all_auths();
 
     let creator = Address::generate(&env);
@@ -318,7 +358,7 @@ fn rejects_payout_share_over_basis_points_without_overflow() {
         &metadata_uri(&env),
         &bytes32(&env, 1),
         &bytes32(&env, 2),
-        &default_quotes(&env),
+        &default_quotes(&env, &client, &admin),
         &invalid_payouts,
     );
 
@@ -328,7 +368,7 @@ fn rejects_payout_share_over_basis_points_without_overflow() {
 #[test]
 fn rejects_payout_share_sum_below_basis_points() {
     let env = Env::default();
-    let (_contract_id, client) = install_contract(&env);
+    let (_contract_id, client, admin) = install_contract(&env);
     env.mock_all_auths();
 
     let creator = Address::generate(&env);
@@ -348,7 +388,7 @@ fn rejects_payout_share_sum_below_basis_points() {
         &metadata_uri(&env),
         &bytes32(&env, 1),
         &bytes32(&env, 2),
-        &default_quotes(&env),
+        &default_quotes(&env, &client, &admin),
         &invalid_payouts,
     );
 
@@ -358,7 +398,7 @@ fn rejects_payout_share_sum_below_basis_points() {
 #[test]
 fn rejects_payout_share_sum_above_basis_points() {
     let env = Env::default();
-    let (_contract_id, client) = install_contract(&env);
+    let (_contract_id, client, admin) = install_contract(&env);
     env.mock_all_auths();
 
     let creator = Address::generate(&env);
@@ -378,7 +418,7 @@ fn rejects_payout_share_sum_above_basis_points() {
         &metadata_uri(&env),
         &bytes32(&env, 1),
         &bytes32(&env, 2),
-        &default_quotes(&env),
+        &default_quotes(&env, &client, &admin),
         &invalid_payouts,
     );
 
@@ -388,7 +428,7 @@ fn rejects_payout_share_sum_above_basis_points() {
 #[test]
 fn rejects_duplicate_material_id_collisions() {
     let env = Env::default();
-    let (contract_id, client) = install_contract(&env);
+    let (contract_id, client, admin) = install_contract(&env);
     env.mock_all_auths();
 
     let creator = Address::generate(&env);
@@ -400,7 +440,7 @@ fn rejects_duplicate_material_id_collisions() {
         &metadata_uri(&env),
         &bytes32(&env, 7),
         &bytes32(&env, 8),
-        &default_quotes(&env),
+        &default_quotes(&env, &client, &admin),
         &default_payout_shares(&env),
     );
 
@@ -410,17 +450,32 @@ fn rejects_duplicate_material_id_collisions() {
 #[test]
 fn requires_creator_auth_for_updates() {
     let env = Env::default();
-    let (contract_id, client) = install_contract(&env);
+    let contract_id = env.register(MaterialRegistry, ());
+    let client = MaterialRegistryClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    client.mock_all_auths().initialize(&admin, &Vec::new(&env));
 
     let creator = Address::generate(&env);
     let material_id = bytes32(&env, 99);
     seed_material(&env, &contract_id, &creator, &material_id);
 
-    let result = client.try_update_sale_terms(
-        &material_id,
-        &replacement_quotes(&env),
-        &replacement_payout_shares(&env),
-    );
+    // Approve a valid replacement quote without enabling blanket auth for the
+    // update invocation below. This ensures the call reaches require_auth()
+    // and fails specifically because creator authorization is absent.
+    let replacement_asset = Address::generate(&env);
+    client
+        .mock_all_auths()
+        .set_asset_allowed(&admin, &replacement_asset, &AssetKind::Token, &true);
+    let quotes = vec![
+        &env,
+        AssetQuote {
+            asset: replacement_asset,
+            amount: 7_500_000,
+        },
+    ];
+
+    let result =
+        client.try_update_sale_terms(&material_id, &quotes, &replacement_payout_shares(&env));
 
     assert!(result.is_err());
 }
@@ -428,7 +483,7 @@ fn requires_creator_auth_for_updates() {
 #[test]
 fn updates_sale_terms_and_status_and_supports_quote_lookup() {
     let env = Env::default();
-    let (contract_id, client) = install_contract(&env);
+    let (contract_id, client, admin) = install_contract(&env);
     env.mock_all_auths();
 
     let creator = Address::generate(&env);
@@ -437,17 +492,15 @@ fn updates_sale_terms_and_status_and_supports_quote_lookup() {
         &metadata_uri(&env),
         &bytes32(&env, 4),
         &bytes32(&env, 5),
-        &default_quotes(&env),
+        &default_quotes(&env, &client, &admin),
         &default_payout_shares(&env),
     );
 
-    let next_quotes = replacement_quotes(&env);
+    let next_quotes = replacement_quotes(&env, &client, &admin);
     let tracked_asset = next_quotes.get_unchecked(0).asset.clone();
     let next_payout_shares = replacement_payout_shares(&env);
 
-    // Approve the replacement asset before updating sale terms.
-    // The upgrade-admin is the first creator; auth is mocked for the whole test.
-    client.set_asset_allowed(&creator, &tracked_asset, &AssetKind::Token, &true);
+    // `replacement_quotes` already approved `tracked_asset` on the allowlist.
 
     client.update_sale_terms(&material_id, &next_quotes, &next_payout_shares);
     let sale_terms_events = env.events().all();
@@ -490,30 +543,132 @@ fn updates_sale_terms_and_status_and_supports_quote_lookup() {
 }
 
 #[test]
-fn bootstraps_and_transfers_upgrade_admin() {
+fn initialize_sets_admin_and_rejects_double_initialization() {
     let env = Env::default();
-    let (_contract_id, client) = install_contract(&env);
+    env.mock_all_auths();
+    let (_contract_id, client, admin) = install_contract(&env);
+
+    assert_eq!(client.get_upgrade_admin(), Some(admin.clone()));
+
+    let result = client.try_initialize(&Address::generate(&env), &Vec::new(&env));
+    assert_eq!(result, Err(Ok(RegistryError::AlreadyInitialized)));
+}
+
+#[test]
+fn register_material_requires_initialization() {
+    let env = Env::default();
     env.mock_all_auths();
 
+    let contract_id = env.register(MaterialRegistry, ());
+    let client = MaterialRegistryClient::new(&env, &contract_id);
     let creator = Address::generate(&env);
-    let material_id = client.register_material(
+
+    let result = client.try_register_material(
         &creator,
         &metadata_uri(&env),
-        &bytes32(&env, 33),
-        &bytes32(&env, 44),
-        &default_quotes(&env),
+        &bytes32(&env, 1),
+        &bytes32(&env, 2),
+        &vec![&env],
         &default_payout_shares(&env),
     );
-    let _ = client.get_material(&material_id);
+    assert_eq!(result, Err(Ok(RegistryError::NotInitialized)));
+}
 
-    assert_eq!(client.get_upgrade_admin(), Some(creator.clone()));
+#[test]
+fn admin_transfer_requires_delay_before_acceptance_and_revokes_old_admin() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_contract_id, client, admin) = install_contract(&env);
 
     let next_admin = Address::generate(&env);
-    client.set_upgrade_admin(&creator, &next_admin);
-    assert_eq!(client.get_upgrade_admin(), Some(next_admin.clone()));
 
-    let denied = client.try_set_upgrade_admin(&creator, &Address::generate(&env));
+    // A delay below the shared minimum floor is rejected.
+    let too_short = client.try_initiate_admin_transfer(&admin, &next_admin, &60);
+    assert_eq!(too_short, Err(Ok(RegistryError::InvalidTransferDelay)));
+
+    client.initiate_admin_transfer(
+        &admin,
+        &next_admin,
+        &shared_interface::MIN_ADMIN_TRANSFER_DELAY_SECS,
+    );
+    assert_eq!(
+        client.get_pending_admin_transfer(),
+        Some(PendingAdminTransfer {
+            candidate: next_admin.clone(),
+            initiated_at: env.ledger().timestamp(),
+            accept_after: env.ledger().timestamp()
+                + shared_interface::MIN_ADMIN_TRANSFER_DELAY_SECS,
+        })
+    );
+
+    // Accepting before the delay elapses is rejected.
+    let too_early = client.try_accept_admin_transfer(&next_admin);
+    assert_eq!(too_early, Err(Ok(RegistryError::TransferDelayNotElapsed)));
+
+    // Old admin is still fully authoritative during the pending window.
+    assert_eq!(client.get_upgrade_admin(), Some(admin.clone()));
+
+    env.ledger()
+        .set_timestamp(env.ledger().timestamp() + shared_interface::MIN_ADMIN_TRANSFER_DELAY_SECS);
+    client.accept_admin_transfer(&next_admin);
+
+    assert_eq!(client.get_upgrade_admin(), Some(next_admin.clone()));
+    assert_eq!(client.get_pending_admin_transfer(), None);
+
+    // The old admin no longer has any authority (single-admin model — the
+    // slot was overwritten, so this is an implicit revocation).
+    let denied = client.try_initiate_admin_transfer(
+        &admin,
+        &Address::generate(&env),
+        &shared_interface::MIN_ADMIN_TRANSFER_DELAY_SECS,
+    );
     assert_eq!(denied, Err(Ok(RegistryError::NotAuthorized)));
+}
+
+#[test]
+fn admin_transfer_can_be_cancelled_before_acceptance() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_contract_id, client, admin) = install_contract(&env);
+
+    let next_admin = Address::generate(&env);
+    client.initiate_admin_transfer(
+        &admin,
+        &next_admin,
+        &shared_interface::MIN_ADMIN_TRANSFER_DELAY_SECS,
+    );
+    assert!(client.get_pending_admin_transfer().is_some());
+
+    client.cancel_admin_transfer(&admin);
+    assert_eq!(client.get_pending_admin_transfer(), None);
+
+    env.ledger()
+        .set_timestamp(env.ledger().timestamp() + shared_interface::MIN_ADMIN_TRANSFER_DELAY_SECS);
+    let result = client.try_accept_admin_transfer(&next_admin);
+    assert_eq!(result, Err(Ok(RegistryError::NoPendingAdminTransfer)));
+
+    // Admin authority never moved.
+    assert_eq!(client.get_upgrade_admin(), Some(admin));
+}
+
+#[test]
+fn only_nominated_candidate_can_accept_admin_transfer() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_contract_id, client, admin) = install_contract(&env);
+
+    let candidate = Address::generate(&env);
+    let impostor = Address::generate(&env);
+    client.initiate_admin_transfer(
+        &admin,
+        &candidate,
+        &shared_interface::MIN_ADMIN_TRANSFER_DELAY_SECS,
+    );
+
+    env.ledger()
+        .set_timestamp(env.ledger().timestamp() + shared_interface::MIN_ADMIN_TRANSFER_DELAY_SECS);
+    let result = client.try_accept_admin_transfer(&impostor);
+    assert_eq!(result, Err(Ok(RegistryError::NotAuthorized)));
 }
 
 // ============== Asset Allowlist Tests ==============
@@ -521,26 +676,25 @@ fn bootstraps_and_transfers_upgrade_admin() {
 #[test]
 fn set_asset_allowed_stores_info_and_emits_event() {
     let env = Env::default();
-    let (contract_id, client) = install_contract(&env);
+    let (contract_id, client, admin) = install_contract(&env);
     env.mock_all_auths();
 
     let creator = Address::generate(&env);
     let xlm = Address::generate(&env);
 
-    // Bootstrap: first registration sets upgrade-admin = creator
     client.register_material(
         &creator,
         &metadata_uri(&env),
         &bytes32(&env, 1),
         &bytes32(&env, 2),
-        &default_quotes(&env),
+        &default_quotes(&env, &client, &admin),
         &default_payout_shares(&env),
     );
 
     assert!(!client.is_asset_allowed(&xlm));
     assert!(client.get_asset_info(&xlm).is_none());
 
-    client.set_asset_allowed(&creator, &xlm, &AssetKind::Native, &true);
+    client.set_asset_allowed(&admin, &xlm, &AssetKind::Native, &true);
     let asset_policy_events = env.events().all();
 
     assert!(client.is_asset_allowed(&xlm));
@@ -565,25 +719,24 @@ fn set_asset_allowed_stores_info_and_emits_event() {
 #[test]
 fn disabling_asset_blocks_quote_registration() {
     let env = Env::default();
-    let (_contract_id, client) = install_contract(&env);
+    let (_contract_id, client, admin) = install_contract(&env);
     env.mock_all_auths();
 
     let creator = Address::generate(&env);
     let usdc = Address::generate(&env);
 
-    // First registration; no admin yet so validation is skipped.
     client.register_material(
         &creator,
         &metadata_uri(&env),
         &bytes32(&env, 1),
         &bytes32(&env, 2),
-        &default_quotes(&env),
+        &default_quotes(&env, &client, &admin),
         &default_payout_shares(&env),
     );
 
     // Allow USDC, then immediately disable it.
-    client.set_asset_allowed(&creator, &usdc, &AssetKind::Token, &true);
-    client.set_asset_allowed(&creator, &usdc, &AssetKind::Token, &false);
+    client.set_asset_allowed(&admin, &usdc, &AssetKind::Token, &true);
+    client.set_asset_allowed(&admin, &usdc, &AssetKind::Token, &false);
 
     // Attempting to register a second material quoting the disabled asset must fail.
     let bad_quotes = vec![
@@ -607,18 +760,17 @@ fn disabling_asset_blocks_quote_registration() {
 #[test]
 fn update_sale_terms_rejects_unapproved_asset() {
     let env = Env::default();
-    let (_contract_id, client) = install_contract(&env);
+    let (_contract_id, client, admin) = install_contract(&env);
     env.mock_all_auths();
 
     let creator = Address::generate(&env);
 
-    // First registration; no admin yet so validation skipped.
     let material_id = client.register_material(
         &creator,
         &metadata_uri(&env),
         &bytes32(&env, 1),
         &bytes32(&env, 2),
-        &default_quotes(&env),
+        &default_quotes(&env, &client, &admin),
         &default_payout_shares(&env),
     );
 
@@ -640,20 +792,19 @@ fn update_sale_terms_rejects_unapproved_asset() {
 #[test]
 fn non_admin_cannot_set_asset_allowed() {
     let env = Env::default();
-    let (_contract_id, client) = install_contract(&env);
+    let (_contract_id, client, admin) = install_contract(&env);
     env.mock_all_auths();
 
     let creator = Address::generate(&env);
     let intruder = Address::generate(&env);
     let asset = Address::generate(&env);
 
-    // Bootstrap admin.
     client.register_material(
         &creator,
         &metadata_uri(&env),
         &bytes32(&env, 1),
         &bytes32(&env, 2),
-        &default_quotes(&env),
+        &default_quotes(&env, &client, &admin),
         &default_payout_shares(&env),
     );
 
@@ -662,23 +813,1009 @@ fn non_admin_cannot_set_asset_allowed() {
 }
 
 #[test]
-fn first_registration_skips_asset_validation() {
-    // Before any material has been registered the upgrade-admin key does not
-    // exist, so asset allowlist validation must be bypassed entirely.
+fn first_registration_still_enforces_asset_allowlist() {
+    // (#462) The registry used to skip allowlist validation for whichever
+    // material was registered first, since the upgrade-admin key didn't
+    // exist yet at that point. Now that `initialize` establishes the admin
+    // before any material can be registered, there is no more
+    // before-the-first-registration state to bypass — even the very first
+    // registration must use pre-approved assets.
     let env = Env::default();
-    let (_contract_id, client) = install_contract(&env);
+    let (_contract_id, client, _admin) = install_contract(&env);
     env.mock_all_auths();
 
     let creator = Address::generate(&env);
-    // Use completely random, never-approved addresses for the quotes.
+    let never_approved = Address::generate(&env);
+    let quotes = vec![
+        &env,
+        AssetQuote {
+            asset: never_approved,
+            amount: 1_000_000,
+        },
+    ];
+
     let result = client.try_register_material(
         &creator,
         &metadata_uri(&env),
         &bytes32(&env, 1),
         &bytes32(&env, 2),
-        &default_quotes(&env),
+        &quotes,
         &default_payout_shares(&env),
     );
-    // Should succeed even though no assets are pre-approved.
+    assert_eq!(result, Err(Ok(RegistryError::UnapprovedAsset)));
+}
+
+#[test]
+fn initialize_can_pre_approve_assets_atomically() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(MaterialRegistry, ());
+    let client = MaterialRegistryClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let xlm = Address::generate(&env);
+
+    client.initialize(
+        &admin,
+        &vec![
+            &env,
+            InitialAssetPolicy {
+                asset: xlm.clone(),
+                kind: AssetKind::Native,
+                enabled: true,
+            },
+        ],
+    );
+
+    assert!(client.is_asset_allowed(&xlm));
+
+    let creator = Address::generate(&env);
+    let quotes = vec![
+        &env,
+        AssetQuote {
+            asset: xlm,
+            amount: 1_000_000,
+        },
+    ];
+    let result = client.try_register_material(
+        &creator,
+        &metadata_uri(&env),
+        &bytes32(&env, 1),
+        &bytes32(&env, 2),
+        &quotes,
+        &default_payout_shares(&env),
+    );
     assert!(result.is_ok());
+}
+
+// ============== Storage cost comparison (#255) ==============
+//
+// Sale-term/status updates are the most frequent write path in the registry
+// (price changes, pausing, archiving), far outnumbering initial
+// registrations over a material's lifetime. Prior to the MaterialCore /
+// MaterialSaleState split, every one of those updates rewrote the *entire*
+// record — creator, metadata_uri (up to 256 bytes), both 32-byte hashes, and
+// created_ledger — none of which ever change after registration. This test
+// measures the write cost of that legacy single-entry shape against the new
+// split layout's update path, using the SDK's invocation cost metering.
+
+/// Mirrors the pre-#255 combined storage entry: every field the registry
+/// used to rewrite on every single call, including the redundant
+/// `material_id` (already implied by the storage key).
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct LegacyMaterialRecord {
+    material_id: BytesN<32>,
+    creator: Address,
+    metadata_uri: String,
+    metadata_hash: BytesN<32>,
+    rights_hash: BytesN<32>,
+    paused: bool,
+    status: MaterialStatus,
+    quotes: Vec<AssetQuote>,
+    payout_shares: Vec<PayoutShare>,
+    created_ledger: u32,
+    updated_ledger: u32,
+}
+
+#[contracttype]
+#[derive(Clone)]
+enum LegacyDataKey {
+    Material(BytesN<32>),
+}
+
+#[test]
+fn sale_term_update_write_cost_drops_at_least_20_percent_vs_legacy_layout() {
+    let env = Env::default();
+    let (contract_id, client, admin) = install_contract(&env);
+    env.mock_all_auths();
+
+    let creator = Address::generate(&env);
+    let material_id = client.register_material(
+        &creator,
+        &metadata_uri(&env),
+        &bytes32(&env, 1),
+        &bytes32(&env, 2),
+        &default_quotes(&env, &client, &admin),
+        &default_payout_shares(&env),
+    );
+
+    let next_quotes = replacement_quotes(&env, &client, &admin);
+    let _tracked_asset = next_quotes.get_unchecked(0).asset.clone();
+    let next_payout_shares = replacement_payout_shares(&env);
+    // `replacement_quotes` already approved `tracked_asset` on the allowlist.
+
+    // Baseline: cost of rewriting the legacy single-entry record shape, as
+    // the pre-#255 `update_sale_terms` implementation used to do on every
+    // sale-term update.
+    let legacy_record = LegacyMaterialRecord {
+        material_id: material_id.clone(),
+        creator: creator.clone(),
+        metadata_uri: metadata_uri(&env),
+        metadata_hash: bytes32(&env, 1),
+        rights_hash: bytes32(&env, 2),
+        paused: false,
+        status: MaterialStatus::Active,
+        quotes: next_quotes.clone(),
+        payout_shares: next_payout_shares.clone(),
+        created_ledger: env.ledger().sequence(),
+        updated_ledger: env.ledger().sequence(),
+    };
+    env.as_contract(&contract_id, || {
+        env.storage().persistent().set(
+            &LegacyDataKey::Material(material_id.clone()),
+            &legacy_record,
+        );
+    });
+    let legacy_write_bytes = env.cost_estimate().resources().write_bytes;
+
+    // New: cost of the actual `update_sale_terms` call, which now only
+    // rewrites the MaterialSale entry.
+    client.update_sale_terms(&material_id, &next_quotes, &next_payout_shares);
+    let split_write_bytes = env.cost_estimate().resources().write_bytes;
+
+    std::println!(
+        "material-registry storage comparison — legacy single-entry write: {} bytes; \
+         split MaterialSale-only write: {} bytes ({:.1}% reduction)",
+        legacy_write_bytes,
+        split_write_bytes,
+        100.0 * (1.0 - (split_write_bytes as f64 / legacy_write_bytes as f64))
+    );
+
+    assert!(
+        (split_write_bytes as f64) <= (legacy_write_bytes as f64) * 0.8,
+        "expected at least a 20% reduction in write bytes: legacy={} split={}",
+        legacy_write_bytes,
+        split_write_bytes,
+    );
+}
+
+// ============== TTL Renewal Tests (#464) ==============
+
+/// Small, deterministic TTL window for these tests: large enough to clear
+/// the network's minimum persistent-entry TTL, small enough that advancing
+/// a few thousand ledgers is enough to cross the renewal threshold.
+fn set_short_ttl_window(env: &Env) {
+    env.ledger().with_mut(|li| {
+        li.min_persistent_entry_ttl = 100;
+        li.max_entry_ttl = 20_000;
+    });
+}
+
+/// The test host advances the ledger sequence by a small amount between
+/// separate top-level invocations, so a TTL measured a call or two after a
+/// renewal can read a few ledgers below the exact `extend_to` value. Allow
+/// a small tolerance rather than asserting an exact figure.
+fn assert_ttl_renewed_to_max(ttl: u32) {
+    assert!(
+        (19_990..=20_000).contains(&ttl),
+        "expected TTL near the 20_000 max, got {ttl}"
+    );
+}
+
+#[test]
+fn upgrade_admin_ttl_renews_on_every_touch_and_never_lapses() {
+    let env = Env::default();
+    set_short_ttl_window(&env);
+    let (contract_id, client, admin) = install_contract(&env);
+    env.mock_all_auths();
+
+    let creator = Address::generate(&env);
+    client.register_material(
+        &creator,
+        &metadata_uri(&env),
+        &bytes32(&env, 1),
+        &bytes32(&env, 2),
+        &default_quotes(&env, &client, &admin),
+        &default_payout_shares(&env),
+    );
+
+    let initial_ttl = env.as_contract(&contract_id, || env.storage().instance().get_ttl());
+    assert_ttl_renewed_to_max(initial_ttl);
+
+    // Advance well past the renewal threshold (half of max) without any
+    // call touching admin state.
+    env.ledger().with_mut(|li| li.sequence_number += 12_000);
+
+    // Any admin-touching call — here, a plain read — renews the instance
+    // TTL straight back to the max, demonstrating admin state cannot expire
+    // silently as long as the contract is used at all.
+    assert_eq!(client.get_upgrade_admin(), Some(admin));
+
+    let renewed_ttl = env.as_contract(&contract_id, || env.storage().instance().get_ttl());
+    assert_ttl_renewed_to_max(renewed_ttl);
+}
+
+#[test]
+fn material_ttl_renews_on_read_after_partial_lapse() {
+    let env = Env::default();
+    let (contract_id, client, admin) = install_contract(&env);
+    env.mock_all_auths();
+    set_short_ttl_window(&env);
+
+    let creator = Address::generate(&env);
+    let material_id = client.register_material(
+        &creator,
+        &metadata_uri(&env),
+        &bytes32(&env, 1),
+        &bytes32(&env, 2),
+        &default_quotes(&env, &client, &admin),
+        &default_payout_shares(&env),
+    );
+
+    let core_key = DataKey::MaterialCore(material_id.clone());
+    let sale_key = DataKey::MaterialSale(material_id.clone());
+
+    let initial_ttl = env.as_contract(&contract_id, || {
+        env.storage().persistent().get_ttl(&core_key)
+    });
+    assert_ttl_renewed_to_max(initial_ttl);
+
+    // Advance past the renewal threshold without reading the material.
+    env.ledger().with_mut(|li| li.sequence_number += 12_000);
+    let lapsed_ttl = env.as_contract(&contract_id, || {
+        env.storage().persistent().get_ttl(&core_key)
+    });
+    assert!(
+        (7_990..=8_000).contains(&lapsed_ttl),
+        "expected TTL to have decayed to ~8_000, got {lapsed_ttl}"
+    );
+
+    // A plain read — the same lookup a buyer's purchase attempt performs —
+    // renews both halves of the record back to the max, with no special
+    // maintenance call required.
+    let record = client.get_material(&material_id);
+    assert_eq!(record.material_id, material_id);
+
+    let renewed_core_ttl = env.as_contract(&contract_id, || {
+        env.storage().persistent().get_ttl(&core_key)
+    });
+    let renewed_sale_ttl = env.as_contract(&contract_id, || {
+        env.storage().persistent().get_ttl(&sale_key)
+    });
+    assert_ttl_renewed_to_max(renewed_core_ttl);
+    assert_ttl_renewed_to_max(renewed_sale_ttl);
+}
+
+#[test]
+fn allowed_asset_ttl_renews_on_write() {
+    let env = Env::default();
+    let (contract_id, client, admin) = install_contract(&env);
+    env.mock_all_auths();
+    set_short_ttl_window(&env);
+
+    let creator = Address::generate(&env);
+    client.register_material(
+        &creator,
+        &metadata_uri(&env),
+        &bytes32(&env, 1),
+        &bytes32(&env, 2),
+        &default_quotes(&env, &client, &admin),
+        &default_payout_shares(&env),
+    );
+
+    let asset = Address::generate(&env);
+    client.set_asset_allowed(&admin, &asset, &AssetKind::Token, &true);
+
+    let asset_key = DataKey::AllowedAsset(asset.clone());
+    let initial_ttl = env.as_contract(&contract_id, || {
+        env.storage().persistent().get_ttl(&asset_key)
+    });
+    assert_ttl_renewed_to_max(initial_ttl);
+
+    env.ledger().with_mut(|li| li.sequence_number += 12_000);
+
+    // Re-approving the same asset is a write, and renews its TTL.
+    client.set_asset_allowed(&admin, &asset, &AssetKind::Token, &true);
+    let renewed_ttl = env.as_contract(&contract_id, || {
+        env.storage().persistent().get_ttl(&asset_key)
+    });
+    assert_ttl_renewed_to_max(renewed_ttl);
+}
+
+#[test]
+fn extend_materials_ttl_is_cursor_based_and_bounded() {
+    let env = Env::default();
+    let (contract_id, client, admin) = install_contract(&env);
+    env.mock_all_auths();
+    set_short_ttl_window(&env);
+
+    // `quotes` and `payout_shares` are captured once and reused for every
+    // registration below — `default_quotes` already approves both assets it
+    // generates (via the admin returned by `install_contract`), so every
+    // registration in the loop below is covered by that single approval.
+    let bootstrap_creator = Address::generate(&env);
+    let quotes = default_quotes(&env, &client, &admin);
+    let payout_shares = default_payout_shares(&env);
+    client.register_material(
+        &bootstrap_creator,
+        &metadata_uri(&env),
+        &bytes32(&env, 1),
+        &bytes32(&env, 2),
+        &quotes,
+        &payout_shares,
+    );
+
+    // Register enough materials to exceed MAX_MAINTENANCE_BATCH (25) in a
+    // single sweep, proving the batch is bounded regardless of the caller's
+    // requested `limit`.
+    for i in 0..29u8 {
+        let creator = Address::generate(&env);
+        client.register_material(
+            &creator,
+            &metadata_uri(&env),
+            &bytes32(&env, 10u8.wrapping_add(i)),
+            &bytes32(&env, 200u8.wrapping_add(i)),
+            &quotes,
+            &payout_shares,
+        );
+    }
+    // 30 materials total (1 bootstrap + 29), 5 more than MAX_MAINTENANCE_BATCH.
+
+    env.ledger().with_mut(|li| li.sequence_number += 12_000);
+
+    // A caller-requested limit far above MAX_MAINTENANCE_BATCH is clamped —
+    // this single call, inside the test harness's default mainnet resource
+    // enforcement, proves the sweep cannot exceed transaction resource
+    // limits regardless of what's requested.
+    let next_cursor = client.extend_materials_ttl(&0, &10_000);
+    assert_eq!(
+        next_cursor, 25,
+        "batch should be clamped to MAX_MAINTENANCE_BATCH"
+    );
+
+    // Resuming from the returned cursor covers the remainder.
+    let final_cursor = client.extend_materials_ttl(&next_cursor, &10_000);
+    assert_eq!(final_cursor, 30);
+
+    // Every material's TTL was renewed by the two sweep calls, including
+    // ones registered long before the ledger advance.
+    let bootstrap_material_id = env.as_contract(&contract_id, || {
+        env.storage()
+            .persistent()
+            .get::<_, BytesN<32>>(&DataKey::MaterialIndex(0))
+            .unwrap()
+    });
+    let core_key = DataKey::MaterialCore(bootstrap_material_id);
+    let renewed_ttl = env.as_contract(&contract_id, || {
+        env.storage().persistent().get_ttl(&core_key)
+    });
+    assert_ttl_renewed_to_max(renewed_ttl);
+}
+
+#[test]
+fn extend_asset_policy_ttl_is_cursor_based() {
+    let env = Env::default();
+    let (contract_id, client, admin) = install_contract(&env);
+    env.mock_all_auths();
+    set_short_ttl_window(&env);
+
+    let creator = Address::generate(&env);
+    client.register_material(
+        &creator,
+        &metadata_uri(&env),
+        &bytes32(&env, 1),
+        &bytes32(&env, 2),
+        &default_quotes(&env, &client, &admin),
+        &default_payout_shares(&env),
+    );
+
+    let asset_a = Address::generate(&env);
+    let asset_b = Address::generate(&env);
+    let cursor = env.as_contract(&contract_id, || {
+        env.storage()
+            .instance()
+            .get::<_, u64>(&DataKey::AllowedAssetCount)
+            .unwrap_or(0)
+    });
+    client.set_asset_allowed(&admin, &asset_a, &AssetKind::Token, &true);
+    client.set_asset_allowed(&admin, &asset_b, &AssetKind::Token, &true);
+
+    env.ledger().with_mut(|li| li.sequence_number += 12_000);
+
+    let next_cursor = client.extend_asset_policy_ttl(&cursor, &1);
+    assert_eq!(next_cursor, cursor + 1);
+    let final_cursor = client.extend_asset_policy_ttl(&next_cursor, &1);
+    assert_eq!(final_cursor, cursor + 2);
+
+    let asset_a_key = DataKey::AllowedAsset(asset_a);
+    let renewed_ttl = env.as_contract(&contract_id, || {
+        env.storage().persistent().get_ttl(&asset_a_key)
+    });
+    assert_ttl_renewed_to_max(renewed_ttl);
+}
+
+// ============== Pause / Active / Deactivate lifecycle (Issue #411) ==============
+
+#[test]
+fn pause_active_and_toggle_helpers_track_material_status() {
+    let env = Env::default();
+    let (_contract_id, client, admin) = install_contract(&env);
+
+    let creator = Address::generate(&env);
+    let material_id = client.register_material(
+        &creator,
+        &metadata_uri(&env),
+        &bytes32(&env, 4),
+        &bytes32(&env, 5),
+        &default_quotes(&env, &client, &admin),
+        &default_payout_shares(&env),
+    );
+
+    // Freshly registered material is active and unpaused.
+    assert!(!client.is_material_paused(&material_id));
+
+    // Pause via the boolean helper.
+    client.set_material_paused(&creator, &material_id, &true);
+    assert!(client.is_material_paused(&material_id));
+    assert_eq!(
+        client.get_material(&material_id).status,
+        MaterialStatus::Paused
+    );
+
+    // Reactivate via set_material_active.
+    client.set_material_active(&creator, &material_id, &true);
+    assert!(!client.is_material_paused(&material_id));
+    assert_eq!(
+        client.get_material(&material_id).status,
+        MaterialStatus::Active
+    );
+
+    // Toggle flips the current pause state.
+    client.toggle_material_paused(&creator, &material_id);
+    assert!(client.is_material_paused(&material_id));
+    client.toggle_material_paused(&creator, &material_id);
+    assert!(!client.is_material_paused(&material_id));
+}
+
+#[test]
+fn deactivating_material_archives_then_restores_status() {
+    let env = Env::default();
+    let (_contract_id, client, admin) = install_contract(&env);
+
+    let creator = Address::generate(&env);
+    let material_id = client.register_material(
+        &creator,
+        &metadata_uri(&env),
+        &bytes32(&env, 4),
+        &bytes32(&env, 5),
+        &default_quotes(&env, &client, &admin),
+        &default_payout_shares(&env),
+    );
+
+    // Deactivating archives the material.
+    client.set_material_deactivated(&creator, &material_id, &true);
+    assert_eq!(
+        client.get_material(&material_id).status,
+        MaterialStatus::Archived
+    );
+
+    // Reactivating an unpaused material returns it to Active.
+    client.set_material_deactivated(&creator, &material_id, &false);
+    assert_eq!(
+        client.get_material(&material_id).status,
+        MaterialStatus::Active
+    );
+}
+
+#[test]
+fn get_material_and_get_quote_reject_unknown_material() {
+    let env = Env::default();
+    let (_contract_id, client, _admin) = install_contract(&env);
+
+    let unknown_id = bytes32(&env, 200);
+    let asset = Address::generate(&env);
+
+    assert_eq!(
+        client.try_get_material(&unknown_id),
+        Err(Ok(RegistryError::MaterialNotFound))
+    );
+    assert_eq!(
+        client.try_get_quote(&unknown_id, &asset),
+        Err(Ok(RegistryError::MaterialNotFound))
+    );
+}
+
+#[test]
+fn non_creator_cannot_change_material_status() {
+    let env = Env::default();
+    let (_contract_id, client, admin) = install_contract(&env);
+
+    let creator = Address::generate(&env);
+    let material_id = client.register_material(
+        &creator,
+        &metadata_uri(&env),
+        &bytes32(&env, 4),
+        &bytes32(&env, 5),
+        &default_quotes(&env, &client, &admin),
+        &default_payout_shares(&env),
+    );
+
+    // A stranger who is neither the creator nor the upgrade-admin is rejected,
+    // and the material's status is left untouched.
+    let stranger = Address::generate(&env);
+    let result = client.try_set_material_status(&stranger, &material_id, &MaterialStatus::Paused);
+    assert_eq!(result, Err(Ok(RegistryError::NotAuthorized)));
+    assert_eq!(
+        client.get_material(&material_id).status,
+        MaterialStatus::Active
+    );
+}
+
+// ============== Upgrade Compatibility Tests (#677) ==============
+//
+// docs/soroban-upgrade-pattern.md claims three tests already cover the
+// upgrade() function (upgrade_rejected_for_non_admin,
+// upgrade_requires_admin_auth, state_preserved_after_upgrade) — none of
+// them existed anywhere in this file before this change; upgrade() had zero
+// test coverage beyond one incidental TTL-renewal test that happens to
+// touch UpgradeAdmin storage. upgrade_rejected_for_non_admin and
+// upgrade_requires_admin_auth below give it real coverage, matching the
+// doc's own names and testing exactly what their names say.
+//
+// state_preserved_after_upgrade, as literally named, is NOT included here —
+// deliberately, rather than faked. Making that call for real requires a
+// second, already-compiled Wasm binary: `Deployer::update_current_contract_wasm`
+// requires a hash already uploaded via `Deployer::upload_contract_wasm`,
+// which itself instantiates a real VM from the provided bytes and requires
+// a genuinely valid, linkable Soroban Wasm module (confirmed by reading
+// soroban-env-host's upload_contract_wasm — it does a full parse-and-link
+// pass, not just a hash check). `env.register(MaterialRegistry, ())`
+// (used by every other test in this file) registers the contract natively
+// as a Rust type for speed — no Wasm bytes exist in-process to reuse, and
+// there is no `get_current_contract_wasm` accessor to retrieve one. Hand-
+// assembling a minimal-but-valid Wasm module byte-by-byte to satisfy the
+// parser was considered and rejected: it would be fragile, unverifiable
+// without a wasm toolchain (none is available in this environment — no
+// wat2wasm/wasm-tools), and wouldn't actually test anything about *this*
+// contract's schema compatibility, only that upload_wasm can swallow an
+// arbitrary trivial module.
+//
+// A real state_preserved_after_upgrade test needs: (1) `soroban/build.sh`
+// (or an equivalent step) to run before `cargo test` so a compiled
+// `material_registry.wasm` exists, (2) that artifact's bytes pulled in via
+// `include_bytes!`, uploaded via `upload_contract_wasm`, and passed to
+// `upgrade()`. That's a build-pipeline change (run-tests.sh currently runs
+// bare `cargo test --lib`, no prior wasm build), not something fixable from
+// inside this test file alone — flagged here for whoever owns that script.
+
+#[test]
+fn upgrade_rejected_for_non_admin() {
+    let env = Env::default();
+    let (_contract_id, client, _admin) = install_contract(&env);
+    env.mock_all_auths();
+
+    let stranger = Address::generate(&env);
+    let fake_wasm_hash = bytes32(&env, 77);
+
+    let result = client.try_upgrade(&stranger, &fake_wasm_hash);
+    assert_eq!(result, Err(Ok(RegistryError::NotAuthorized)));
+}
+
+#[test]
+fn upgrade_requires_admin_auth() {
+    let env = Env::default();
+    let contract_id = env.register(MaterialRegistry, ());
+    let client = MaterialRegistryClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    client.mock_all_auths().initialize(&admin, &Vec::new(&env));
+
+    // No mock_all_auths() scoped to this call — the admin's real signature
+    // is never supplied, so this must fail at admin.require_auth() itself,
+    // before require_upgrade_admin's identity check ever runs.
+    let fake_wasm_hash = bytes32(&env, 77);
+    let result = client.try_upgrade(&admin, &fake_wasm_hash);
+    assert!(result.is_err());
+}
+
+// ============================================================
+// Property / Invariant Tests (Issue: fuzz/property test suite)
+// ============================================================
+//
+// These tests verify registry invariants across randomised material
+// registrations, quote configurations, payout-share structures, and status
+// transitions.  "Randomness" is deterministic: a u8 seed drives every
+// parameter so any failure can be reproduced by re-running at the same seed.
+//
+// Invariant catalogue:
+//   R1 – a freshly registered material is always Active and unpaused.
+//   R2 – payout shares always sum to exactly 10_000 bps after registration.
+//   R3 – each registered material receives a unique material_id.
+//   R4 – creator nonce increments monotonically; no two nonces collide for
+//        the same creator in the same contract instance.
+//   R5 – update_sale_terms never changes immutable fields (creator, hashes,
+//        created_ledger).
+//   R6 – toggling pause is an involution: double-toggle returns to the
+//        original state.
+//   R7 – set_material_status to Archived is idempotent (calling it twice
+//        leaves status unchanged and emits no duplicate transition).
+//   R8 – quote lookup returns the registered amount verbatim (no
+//        rounding/mutation).
+//   R9 – asset allowlist: disabling an asset blocks registration regardless
+//        of the material's position in the sequence.
+//  R10 – sale-terms version increments by exactly 1 on each update.
+
+fn sweep(mut f: impl FnMut(u8)) {
+    for seed in 0u8..=255 {
+        f(seed);
+    }
+}
+
+/// Build a payout-share vec that sums to 10_000 bps: one entry with
+/// `share_bps` and a remainder entry.  `share_bps` is clamped to [1, 9_999].
+fn valid_payout_pair(env: &Env, first_bps: u32) -> Vec<PayoutShare> {
+    let first_bps = first_bps.clamp(1, 9_999);
+    vec![
+        env,
+        PayoutShare { recipient: Address::generate(env), share_bps: first_bps },
+        PayoutShare { recipient: Address::generate(env), share_bps: 10_000 - first_bps },
+    ]
+}
+
+// ── R1: freshly registered material is always Active and unpaused ──────────
+#[test]
+fn property_r1_fresh_material_is_active_and_unpaused() {
+    let env = Env::default();
+    let (_, client, admin) = install_contract(&env);
+    env.mock_all_auths();
+
+    sweep(|seed| {
+        let creator = Address::generate(&env);
+        let quotes = default_quotes(&env, &client, &admin);
+        let first_bps: u32 = 1 + (seed as u32 * 39).min(9_998);
+        let payouts = valid_payout_pair(&env, first_bps);
+
+        let material_id = client.register_material(
+            &creator,
+            &metadata_uri(&env),
+            &bytes32(&env, seed),
+            &bytes32(&env, seed.wrapping_add(1)),
+            &quotes,
+            &payouts,
+        );
+
+        let record = client.get_material(&material_id);
+        assert_eq!(
+            record.status, MaterialStatus::Active,
+            "seed={seed}: expected Active, got {:?}", record.status
+        );
+        assert!(
+            !record.paused,
+            "seed={seed}: freshly registered material should not be paused"
+        );
+    });
+}
+
+// ── R2: payout shares sum to exactly 10_000 bps ───────────────────────────
+#[test]
+fn property_r2_payout_shares_sum_to_basis_points() {
+    let env = Env::default();
+    let (_, client, admin) = install_contract(&env);
+    env.mock_all_auths();
+
+    sweep(|seed| {
+        let creator = Address::generate(&env);
+        let quotes = default_quotes(&env, &client, &admin);
+        let first_bps: u32 = 1 + (seed as u32 * 39).min(9_998);
+        let payouts = valid_payout_pair(&env, first_bps);
+
+        let material_id = client.register_material(
+            &creator,
+            &metadata_uri(&env),
+            &bytes32(&env, seed),
+            &bytes32(&env, seed.wrapping_add(128)),
+            &quotes,
+            &payouts,
+        );
+
+        let record = client.get_material(&material_id);
+        let total_bps: u32 = {
+            let mut sum = 0u32;
+            let mut i = 0u32;
+            while i < record.payout_shares.len() {
+                sum += record.payout_shares.get_unchecked(i).share_bps;
+                i += 1;
+            }
+            sum
+        };
+        assert_eq!(
+            total_bps, 10_000,
+            "seed={seed}: payout shares sum to {total_bps}, expected 10_000"
+        );
+    });
+}
+
+// ── R3: each registration produces a distinct material_id ─────────────────
+#[test]
+fn property_r3_material_ids_are_unique_across_creators() {
+    // Register 16 materials across 16 distinct creators and verify all IDs
+    // are pairwise distinct.
+    let env = Env::default();
+    let (_, client, admin) = install_contract(&env);
+    env.mock_all_auths();
+
+    let quotes = default_quotes(&env, &client, &admin);
+    let mut ids = soroban_sdk::Vec::new(&env);
+
+    for seed in 0u8..16 {
+        let creator = Address::generate(&env);
+        let payouts = valid_payout_pair(&env, 5_000);
+        let mid = client.register_material(
+            &creator,
+            &metadata_uri(&env),
+            &bytes32(&env, seed),
+            &bytes32(&env, seed.wrapping_add(64)),
+            &quotes,
+            &payouts,
+        );
+        // Each new id must not already be in the collected list.
+        let mut j = 0u32;
+        while j < ids.len() {
+            assert_ne!(
+                ids.get_unchecked(j), mid,
+                "seed={seed}: duplicate material_id detected at index {j}"
+            );
+            j += 1;
+        }
+        ids.push_back(mid);
+    }
+}
+
+// ── R4: creator nonce increments monotonically ────────────────────────────
+#[test]
+fn property_r4_creator_nonce_increases_per_registration() {
+    let env = Env::default();
+    let (contract_id, client, admin) = install_contract(&env);
+    env.mock_all_auths();
+
+    let creator = Address::generate(&env);
+    let quotes = default_quotes(&env, &client, &admin);
+
+    for seq in 0u8..8 {
+        let nonce_before = get_creator_nonce(&env, &creator);
+        let payouts = valid_payout_pair(&env, 5_000);
+        client.register_material(
+            &creator,
+            &metadata_uri(&env),
+            &bytes32(&env, seq),
+            &bytes32(&env, seq.wrapping_add(32)),
+            &quotes,
+            &payouts,
+        );
+        let nonce_after = env.as_contract(&contract_id, || get_creator_nonce(&env, &creator));
+        assert_eq!(
+            nonce_after,
+            nonce_before + 1,
+            "seq={seq}: nonce did not increment by exactly 1"
+        );
+    }
+}
+
+// ── R5: update_sale_terms preserves immutable fields ─────────────────────
+#[test]
+fn property_r5_update_sale_terms_does_not_change_immutable_fields() {
+    let env = Env::default();
+    let (_, client, admin) = install_contract(&env);
+    env.mock_all_auths();
+
+    sweep(|seed| {
+        let creator = Address::generate(&env);
+        let quotes = default_quotes(&env, &client, &admin);
+        let payouts = valid_payout_pair(&env, 6_000);
+        let orig_hash = bytes32(&env, seed);
+        let orig_rights = bytes32(&env, seed.wrapping_add(77));
+
+        let material_id = client.register_material(
+            &creator,
+            &metadata_uri(&env),
+            &orig_hash,
+            &orig_rights,
+            &quotes,
+            &payouts,
+        );
+
+        let before = client.get_material(&material_id);
+        let new_quotes = replacement_quotes(&env, &client, &admin);
+        let new_payouts = replacement_payout_shares(&env);
+        client.update_sale_terms(&material_id, &new_quotes, &new_payouts);
+        let after = client.get_material(&material_id);
+
+        assert_eq!(after.creator, before.creator, "seed={seed}: creator changed");
+        assert_eq!(after.metadata_hash, before.metadata_hash, "seed={seed}: metadata_hash changed");
+        assert_eq!(after.rights_hash, before.rights_hash, "seed={seed}: rights_hash changed");
+        assert_eq!(after.created_ledger, before.created_ledger, "seed={seed}: created_ledger changed");
+        assert_eq!(after.metadata_uri, before.metadata_uri, "seed={seed}: metadata_uri changed");
+    });
+}
+
+// ── R6: double-toggle returns to original pause state ─────────────────────
+#[test]
+fn property_r6_double_toggle_is_identity() {
+    let env = Env::default();
+    let (_, client, admin) = install_contract(&env);
+    env.mock_all_auths();
+
+    // Register one material and toggle it an even number of times; each pair
+    // of toggles must leave the state unchanged.
+    let creator = Address::generate(&env);
+    let quotes = default_quotes(&env, &client, &admin);
+    let payouts = valid_payout_pair(&env, 7_000);
+    let material_id = client.register_material(
+        &creator,
+        &metadata_uri(&env),
+        &bytes32(&env, 10),
+        &bytes32(&env, 11),
+        &quotes,
+        &payouts,
+    );
+
+    sweep(|seed| {
+        // Even seeds: start from current state, toggle twice.
+        let before = client.is_material_paused(&material_id);
+        if seed % 2 == 0 {
+            client.toggle_material_paused(&creator, &material_id);
+            client.toggle_material_paused(&creator, &material_id);
+            let after = client.is_material_paused(&material_id);
+            assert_eq!(
+                after, before,
+                "seed={seed}: double-toggle changed paused state from {before} to {after}"
+            );
+        }
+    });
+}
+
+// ── R7: archiving is idempotent ───────────────────────────────────────────
+#[test]
+fn property_r7_archiving_is_idempotent() {
+    let env = Env::default();
+    let (_, client, admin) = install_contract(&env);
+    env.mock_all_auths();
+
+    let creator = Address::generate(&env);
+    let quotes = default_quotes(&env, &client, &admin);
+    let payouts = valid_payout_pair(&env, 5_000);
+    let material_id = client.register_material(
+        &creator,
+        &metadata_uri(&env),
+        &bytes32(&env, 20),
+        &bytes32(&env, 21),
+        &quotes,
+        &payouts,
+    );
+
+    // First archive
+    client.set_material_status(&creator, &material_id, &MaterialStatus::Archived);
+    assert_eq!(client.get_material(&material_id).status, MaterialStatus::Archived);
+
+    // Second archive — must succeed without error and status remains Archived.
+    client.set_material_status(&creator, &material_id, &MaterialStatus::Archived);
+    assert_eq!(client.get_material(&material_id).status, MaterialStatus::Archived,
+        "second archive call changed the status");
+}
+
+// ── R8: quote lookup returns registered amount verbatim ───────────────────
+#[test]
+fn property_r8_quote_lookup_returns_exact_registered_amount() {
+    let env = Env::default();
+    let (_, client, admin) = install_contract(&env);
+    env.mock_all_auths();
+
+    sweep(|seed| {
+        let creator = Address::generate(&env);
+        let asset = Address::generate(&env);
+        // Use amount derived from seed to cover a wide value range.
+        let amount: i128 = 1 + seed as i128 * 100_000;
+        client.set_asset_allowed(&admin, &asset, &AssetKind::Token, &true);
+        let quotes = soroban_sdk::vec![&env, AssetQuote { asset: asset.clone(), amount }];
+        let payouts = valid_payout_pair(&env, 5_000);
+
+        let material_id = client.register_material(
+            &creator,
+            &metadata_uri(&env),
+            &bytes32(&env, seed),
+            &bytes32(&env, seed.wrapping_add(3)),
+            &quotes,
+            &payouts,
+        );
+
+        let found = client.get_quote(&material_id, &asset)
+            .expect("quote not found after registration");
+        assert_eq!(
+            found.amount, amount,
+            "seed={seed}: quote amount {amount} was mutated to {}", found.amount
+        );
+    });
+}
+
+// ── R9: disabling an asset blocks registration ────────────────────────────
+#[test]
+fn property_r9_disabled_asset_always_blocks_registration() {
+    let env = Env::default();
+    let (_, client, admin) = install_contract(&env);
+    env.mock_all_auths();
+
+    sweep(|seed| {
+        let creator = Address::generate(&env);
+        let asset = Address::generate(&env);
+        // First enable, then immediately disable.
+        client.set_asset_allowed(&admin, &asset, &AssetKind::Token, &true);
+        client.set_asset_allowed(&admin, &asset, &AssetKind::Token, &false);
+
+        let bad_quotes = soroban_sdk::vec![
+            &env,
+            AssetQuote { asset: asset.clone(), amount: 1 + seed as i128 * 1_000 },
+        ];
+        let payouts = valid_payout_pair(&env, 5_000);
+
+        let result = client.try_register_material(
+            &creator,
+            &metadata_uri(&env),
+            &bytes32(&env, seed),
+            &bytes32(&env, seed.wrapping_add(200)),
+            &bad_quotes,
+            &payouts,
+        );
+        assert_eq!(
+            result,
+            Err(Ok(RegistryError::UnapprovedAsset)),
+            "seed={seed}: expected UnapprovedAsset, got {result:?}"
+        );
+    });
+}
+
+// ── R10: sale-terms version increments by exactly 1 per update ───────────
+#[test]
+fn property_r10_sale_terms_version_increments_by_one() {
+    let env = Env::default();
+    let (_, client, admin) = install_contract(&env);
+    env.mock_all_auths();
+
+    let creator = Address::generate(&env);
+    let quotes = default_quotes(&env, &client, &admin);
+    let payouts = valid_payout_pair(&env, 5_000);
+    let material_id = client.register_material(
+        &creator,
+        &metadata_uri(&env),
+        &bytes32(&env, 50),
+        &bytes32(&env, 51),
+        &quotes,
+        &payouts,
+    );
+
+    let mut expected_version: u32 = 1; // starts at 1 after registration
+    for _ in 0..8u8 {
+        let before = client.get_sale_terms_version(&material_id);
+        assert_eq!(before, expected_version, "version before update mismatch");
+
+        let new_quotes = replacement_quotes(&env, &client, &admin);
+        let new_payouts = replacement_payout_shares(&env);
+        client.update_sale_terms(&material_id, &new_quotes, &new_payouts);
+        expected_version += 1;
+
+        let after = client.get_sale_terms_version(&material_id);
+        assert_eq!(
+            after, expected_version,
+            "version after update should be {expected_version}, got {after}"
+        );
+    }
 }

@@ -34,13 +34,13 @@ export default function StatsCards() {
 			{stats.map((s, i) => (
 				<div
 					key={i}
-					className="p-6 bg-white border border-gray-200 rounded-xl shadow-sm"
+					className="p-6 bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-xl shadow-sm"
 				>
 					<div className="flex justify-between mb-2">
-						<h3 className="text-sm text-gray-500">{s.label}</h3>
+						<h3 className="text-sm text-gray-500 dark:text-gray-400">{s.label}</h3>
 						{s.icon}
 					</div>
-					<div className="text-2xl font-bold mb-1">{s.value}</div>
+					<div className="text-2xl font-bold mb-1 text-gray-900 dark:text-gray-100">{s.value}</div>
 					<div
 						className={`text-sm font-medium ${
 							s.change.startsWith("-") ? "text-red-500" : "text-green-500"
