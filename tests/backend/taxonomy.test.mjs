@@ -26,6 +26,16 @@ describe("normalizeSubject", () => {
     assert.equal(result.label, "Math");
   });
 
+  test("normalizes by ID", () => {
+    const result = normalizeSubject("social-sciences");
+    assert.equal(result.id, "social-sciences");
+    assert.equal(result.label, "Social Sciences");
+
+    const result2 = normalizeSubject("test-prep");
+    assert.equal(result2.id, "test-prep");
+    assert.equal(result2.label, "Test Preparation");
+  });
+
   test("returns null for unknown subject", () => {
     assert.equal(normalizeSubject("astrology"), null);
   });
