@@ -41,6 +41,96 @@ function escapeRegExp(value) {
   return sanitizeString(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+const SEARCH_FIELDS = ["title", "description", "shortSummary", "author", "subject", "category"];
+const SEARCH_STOP_WORDS = new Set(["a", "an", "and", "for", "in", "of", "the", "to"]);
+
+export function tokenizeMarketplaceSearch(value) {
+  return [...new Set(
+    sanitizeString(value, { maxLength: 120 })
+      .toLowerCase()
+      .normalize("NFKD")
+      .replace(/[^a-z0-9]+/g, " ")
+      .split(/\s+/)
+      .filter((token) => token.length > 1 && !SEARCH_STOP_WORDS.has(token)),
+  )];
+}
+
+function fuzzyTokenRegex(token) {
+  const variants = [escapeRegExp(token), ...token.split("").map((_, index) => escapeRegExp(token.slice(0, index) + token.slice(index + 1)))];
+  for (let index = 0; index < token.length; index += 1) {
+    variants.push(`${escapeRegExp(token.slice(0, index))}.${escapeRegExp(token.slice(index + 1))}`);
+  }
+  return new RegExp(variants.join("|"), "i");
+}
+
+export function buildMarketplaceSearchClause(value) {
+  const tokens = tokenizeMarketplaceSearch(value);
+  if (!tokens.length) return null;
+
+  return {
+    $or: SEARCH_FIELDS.map((field) => ({
+      [field]: new RegExp(tokens.map(escapeRegExp).join(".*"), "i"),
+    })),
+    $and: tokens.map((token) => ({
+      $or: SEARCH_FIELDS.map((field) => ({ [field]: fuzzyTokenRegex(token) })),
+    })),
+  };
+}
+
+export function buildMarketplaceFacetPipeline(query) {
+  const facetFields = ["category", "subject", "level", "language", "fileType"];
+  return [
+    { $match: query },
+    {
+      $facet: Object.fromEntries(facetFields.map((field) => [
+        field,
+        [
+          { $match: { [field]: { $nin: [null, ""] } } },
+          { $sortByCount: `$${field}` },
+          { $limit: 50 },
+        ],
+      ])),
+    },
+  ];
+}
+
+function normalized(value, maximum) {
+  const number = Number(value);
+  return Number.isFinite(number) ? Math.max(0, Math.min(number, maximum)) / maximum : 0;
+}
+
+function textRelevance(item, tokens) {
+  if (!tokens.length) return 0;
+  const haystack = SEARCH_FIELDS.map((field) => String(item?.[field] ?? "").toLowerCase()).join(" ");
+  return tokens.reduce((score, token) => score + (haystack.includes(token) ? 1 : 0), 0) / tokens.length;
+}
+
+export function scoreMarketplaceItem(item, search = "", { now = new Date() } = {}) {
+  const tokens = tokenizeMarketplaceSearch(search);
+  const createdAt = item?.createdAt ? new Date(item.createdAt).getTime() : 0;
+  const ageDays = createdAt > 0 ? Math.max(0, (now.getTime() - createdAt) / 86_400_000) : 3650;
+  const recency = Math.exp(-ageDays / 180);
+  const popularity = Math.min(1, Math.log1p(Math.max(0, Number(item?.likes) || 0)) / Math.log1p(1000));
+  const rating = normalized(item?.rating ?? item?.averageScore, 5);
+  const completeness = [item?.title, item?.description, item?.shortSummary, item?.thumbnailUrl]
+    .filter(Boolean).length / 4;
+
+  // Text is dominant; popularity is deliberately capped and freshness keeps
+  // newer quality listings visible instead of creating a permanent popularity loop.
+  return (textRelevance(item, tokens) * 0.55)
+    + (popularity * 0.15)
+    + (recency * 0.15)
+    + (rating * 0.1)
+    + (completeness * 0.05);
+}
+
+export function applyMarketplaceRelevanceRanking(items, search, options = {}) {
+  return items
+    .map((item, index) => ({ item, index, relevanceScore: scoreMarketplaceItem(item, search, options) }))
+    .sort((left, right) => right.relevanceScore - left.relevanceScore || left.index - right.index)
+    .map(({ item, relevanceScore }) => ({ ...item, relevanceScore: Number(relevanceScore.toFixed(6)) }));
+}
+
 function numberParam(value) {
   if (value === undefined || value === null || value === "") return null;
   const parsed = Number(value);
@@ -130,16 +220,8 @@ export function buildMarketplaceDiscoveryQuery(searchParams, { now = new Date() 
 
   const search = sanitizeString(searchParams.get("search"), { maxLength: 120 });
   if (search) {
-    const regex = new RegExp(escapeRegExp(search), "i");
-    andClauses.push({
-      $or: [
-        { title: regex },
-        { description: regex },
-        { shortSummary: regex },
-        { author: regex },
-        { subject: regex },
-      ],
-    });
+    const searchClause = buildMarketplaceSearchClause(search);
+    if (searchClause) andClauses.push(searchClause);
   }
 
   const subject = sanitizeString(searchParams.get("subject"), { maxLength: 80 });
@@ -227,6 +309,8 @@ export function applyOwnershipRanking(items, ownedIds) {
 
 export function buildMarketplaceSort(sortBy) {
   switch (sortBy) {
+    case "relevance":
+      return { createdAt: -1, _id: -1 };
     case "price_asc":
       return { price: 1, createdAt: -1, _id: 1 };
     case "price_desc":

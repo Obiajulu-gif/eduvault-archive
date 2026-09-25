@@ -195,6 +195,10 @@ export const REQUIRED_INDEXES = {
   material_search_documents: [
     { keys: { projectionVersion: 1 } },
     { keys: { category: 1, subject: 1, projectedAt: -1 } },
+    { keys: { visibility: 1, category: 1, price: 1, createdAt: -1 }, options: { name: "material_search_category_price_newest_idx", background: true } },
+    { keys: { visibility: 1, subject: 1, rating: -1, createdAt: -1 }, options: { name: "material_search_subject_rating_newest_idx", background: true } },
+    { keys: { visibility: 1, category: 1, rating: -1, createdAt: -1 }, options: { name: "material_search_category_rating_newest_idx", background: true } },
+    { keys: { visibility: 1, likes: -1, rating: -1, createdAt: -1 }, options: { name: "material_search_popular_idx", background: true } },
     { keys: { title: "text", description: "text", shortSummary: "text" }, options: { name: "material_search_text_idx", background: true } },
   ],
   material_search_tombstones: [

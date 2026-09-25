@@ -13,6 +13,7 @@ import { validateUploadedFile, detectExecutableExtension } from '@/lib/ipfs/uplo
 import { createQuarantineRecord } from '@/lib/publishing/quarantine'
 import { enqueueSideEffect } from '@/lib/backend/outbox'
 import { getDb } from '@/lib/mongodb'
+import { processThumbnail, ThumbnailProcessingError } from '@/lib/upload/processThumbnail'
 
 export const dynamic = 'force-dynamic'
 
@@ -62,7 +63,7 @@ export async function POST(request) {
       try {
         const form = await request.formData()
         const file = form.get('file')
-        const image = form.get('thumbnail')
+        let image = form.get('thumbnail')
 
         // 1️⃣ Validate Required Fields
         if (!file) {
@@ -130,6 +131,18 @@ export async function POST(request) {
               { error: `Unsupported thumbnail type: ${image.type || 'unknown'}. Allowed types are JPG, PNG, and WEBP.` },
               { status: 415 }
             )
+          }
+        }
+
+        // Decode and re-encode thumbnails before quota accounting or pinning.
+        // The stored object is always a bounded WebP with metadata removed.
+        if (image) {
+          try {
+            image = await processThumbnail(image)
+          } catch (processingError) {
+            const status = processingError instanceof ThumbnailProcessingError ? 422 : 500
+            auditLog({ event: 'upload_failed', route: 'upload', method: 'POST', status, reason: `thumbnail_processing_failure: ${processingError.message}` })
+            return NextResponse.json({ error: processingError.message }, { status })
           }
         }
 
