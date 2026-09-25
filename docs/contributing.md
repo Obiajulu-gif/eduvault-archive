@@ -11,6 +11,35 @@ Thank you for improving EduVault. This guide explains how to prepare changes tha
 5. Run the most relevant checks before committing.
 6. Open a pull request with a concise summary, test evidence, and screenshots for visible UI changes.
 
+## Quick Start: One-Command Bootstrap
+
+Contributors can reach a fully working local state in a single command:
+
+```bash
+bash scripts/bootstrap-local.sh
+# or via npm:
+npm run bootstrap:local
+```
+
+This installs dependencies, starts MongoDB, seeds all fixture data, and
+(optionally) builds the Soroban contracts. See
+[environment-setup.md](environment-setup.md) for the full list of what it
+does and how to run individual steps.
+
+To skip the Soroban build (faster iteration for frontend or backend work):
+
+```bash
+npm run bootstrap:local:fast
+```
+
+To reseed fixture data only:
+
+```bash
+npm run seed:local
+```
+
+---
+
 ## Frontend and Backend Setup
 
 For contributors working on the Next.js application, API routes, or UI:
