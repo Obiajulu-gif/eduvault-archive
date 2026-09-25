@@ -30,15 +30,22 @@ soroban/
 
 ## Prerequisites
 
+> **Quickstart:** If you just want a working local environment, run
+> `bash scripts/bootstrap-local.sh` from the repo root. It handles
+> prerequisites, MongoDB, seed data, and the contract build automatically.
+> See [`docs/environment-setup.md`](../docs/environment-setup.md) for details.
+
 Before you can build and test the contract, ensure you have:
 
 1. **Rust 1.70.0 or later**:
+
    ```bash
    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
    rustup update
    ```
 
 2. **WebAssembly target**:
+
    ```bash
    rustup target add wasm32-unknown-unknown
    ```
@@ -79,7 +86,9 @@ See [SOROBAN_DEPLOYMENT.md](../docs/SOROBAN_DEPLOYMENT.md) for comprehensive dep
 ### Core Data Structures
 
 #### MaterialRecord
+
 Represents a registered educational material with:
+
 - `material_id`: Unique identifier (BytesN<32>)
 - `creator`: Creator's Stellar address
 - `metadata_uri`: IPFS URI of the material metadata
@@ -92,40 +101,54 @@ Represents a registered educational material with:
 - `updated_ledger`: Ledger number of last update
 
 #### AssetQuote
+
 Pricing information for a specific asset:
+
 - `asset`: Stellar asset address
 - `amount`: Price in the smallest unit of the asset
 
 #### PayoutShare
+
 Distribution of proceeds to a recipient:
+
 - `recipient`: Stellar address of recipient
 - `share_bps`: Share in basis points (must total 10,000)
 
 ### Contract Functions
 
 #### register_material(creator, metadata_uri, metadata_hash, rights_hash, quotes, payout_shares)
+
 Registers a new educational material.
+
 - **Returns**: Material ID (BytesN<32>)
 - **Requires**: Creator authorization
 - **Emits**: MaterialRegisteredEvent
 
 #### update_sale_terms(material_id, quotes, payout_shares)
+
 Updates pricing and payout information for an existing material.
+
 - **Requires**: Creator authorization
 - **Emits**: MaterialSaleTermsUpdatedEvent
 
 #### set_material_status(material_id, status)
+
 Changes the status of a material.
+
 - **Requires**: Creator authorization
 - **Emits**: MaterialStatusUpdatedEvent
 
 #### get_material(material_id)
+
 Retrieves complete information about a material.
+
 - **Returns**: MaterialRecord
 - **Read-only**: No authorization required
 
 #### get_quote(material_id, asset)
+
 Retrieves the price quote for a specific asset.
+
 - **Returns**: AssetQuote or None
 - **Read-only**: No authorization required
 
@@ -159,31 +182,37 @@ The contract enforces the following validation rules:
 The contract emits three types of events:
 
 ### MaterialRegisteredEvent
+
 Published when a new material is registered.
 
 **Topics**: `["material", "registered", material_id, creator]`
 
 **Data**:
+
 ```rust
 [metadata_uri, metadata_hash, rights_hash, status, quotes, payout_shares]
 ```
 
 ### MaterialSaleTermsUpdatedEvent
+
 Published when sale terms are updated.
 
 **Topics**: `["material", "sale_terms_updated", material_id, creator]`
 
 **Data**:
+
 ```rust
 [status, quotes, payout_shares]
 ```
 
 ### MaterialStatusUpdatedEvent
+
 Published when material status changes.
 
 **Topics**: `["material", "status_updated", material_id, creator]`
 
 **Data**:
+
 ```rust
 [status]
 ```
@@ -192,21 +221,21 @@ Published when material status changes.
 
 The contract defines comprehensive error codes:
 
-| Code | Error | Meaning |
-|------|-------|---------|
-| 1 | EmptyMetadataUri | Metadata URI cannot be empty |
-| 2 | MetadataUriTooLong | Metadata URI exceeds 256 bytes |
-| 3 | EmptyQuotes | At least one quote is required |
-| 4 | TooManyQuotes | More than 4 quotes provided |
-| 5 | DuplicateQuoteAsset | Same asset appears in multiple quotes |
-| 6 | InvalidQuoteAmount | Quote amount must be positive |
-| 7 | EmptyPayoutShares | At least one payout recipient is required |
-| 8 | TooManyPayoutShares | More than 5 payout recipients |
-| 9 | DuplicatePayoutRecipient | Same recipient in multiple shares |
-| 10 | InvalidPayoutShare | Payout share must be positive |
-| 11 | InvalidPayoutShareSum | Payout shares must total 10,000 basis points |
-| 12 | MaterialAlreadyExists | Material ID already registered |
-| 13 | MaterialNotFound | Material ID does not exist |
+| Code | Error                    | Meaning                                      |
+| ---- | ------------------------ | -------------------------------------------- |
+| 1    | EmptyMetadataUri         | Metadata URI cannot be empty                 |
+| 2    | MetadataUriTooLong       | Metadata URI exceeds 256 bytes               |
+| 3    | EmptyQuotes              | At least one quote is required               |
+| 4    | TooManyQuotes            | More than 4 quotes provided                  |
+| 5    | DuplicateQuoteAsset      | Same asset appears in multiple quotes        |
+| 6    | InvalidQuoteAmount       | Quote amount must be positive                |
+| 7    | EmptyPayoutShares        | At least one payout recipient is required    |
+| 8    | TooManyPayoutShares      | More than 5 payout recipients                |
+| 9    | DuplicatePayoutRecipient | Same recipient in multiple shares            |
+| 10   | InvalidPayoutShare       | Payout share must be positive                |
+| 11   | InvalidPayoutShareSum    | Payout shares must total 10,000 basis points |
+| 12   | MaterialAlreadyExists    | Material ID already registered               |
+| 13   | MaterialNotFound         | Material ID does not exist                   |
 
 ## Testing
 
@@ -222,6 +251,7 @@ The contract includes comprehensive unit tests covering:
 - ✓ Quote lookup functionality
 
 Run tests with:
+
 ```bash
 ./run-tests.sh
 ```
@@ -238,7 +268,7 @@ fn my_test() {
     let env = Env::default();
     let (contract_id, client) = install_contract(&env);
     env.mock_all_auths();
-    
+
     // Your test code here
 }
 ```
@@ -300,6 +330,7 @@ soroban contract deploy \
 **Problem**: `error: target 'wasm32-unknown-unknown' not installed`
 
 **Solution**:
+
 ```bash
 rustup target add wasm32-unknown-unknown
 ```
@@ -307,6 +338,7 @@ rustup target add wasm32-unknown-unknown
 **Problem**: `error: linker \`cc\` not found`
 
 **Solution**: Install a C compiler
+
 - Windows: Install Visual Studio Build Tools
 - macOS: `xcode-select --install`
 - Linux: `sudo apt install build-essential`
@@ -316,6 +348,7 @@ rustup target add wasm32-unknown-unknown
 **Problem**: Tests won't run
 
 **Solution**:
+
 ```bash
 cargo test --lib -- --nocapture
 ```
@@ -345,6 +378,7 @@ MIT License - see LICENSE file in the root directory
 ## Support
 
 For issues or questions:
+
 1. Check the troubleshooting section above
 2. Review test examples in `src/test.rs`
 3. Open an issue on GitHub

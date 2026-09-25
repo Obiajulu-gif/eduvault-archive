@@ -4,6 +4,13 @@ This document defines the canonical backend shapes for EduVault contributors. Mo
 
 The canonical Soroban storage boundary, normalized event names, and entitlement query rules are defined in [`docs/soroban-contract-architecture.md`](soroban-contract-architecture.md).
 
+The **stable error-code taxonomy** for all failure paths (purchase, refund,
+entitlement, download, storage, indexer, webhook, auth, contract, and input
+validation) is defined in [`docs/API_REFERENCE.md`](API_REFERENCE.md).
+Clients and frontends must use these codes rather than parsing prose error
+messages. Webhook signature verification and retry semantics are described
+in [`docs/webhook-signatures.md`](webhook-signatures.md).
+
 ## Collections
 
 ### `users`
@@ -259,3 +266,60 @@ Response:
 - Apply rate limits to public and sensitive route families.
 - Emit structured audit logs for validation failures, rate-limit blocks, upload failures, auth failures, purchase sync, and indexer anomalies.
 - Add focused tests for validation, rate limiting, and indexer idempotency when changing backend behavior.
+
+## Stable Error Codes
+
+All API routes must return errors in the following envelope rather than
+returning prose strings that clients parse:
+
+```json
+{
+  "error": {
+    "code": "EVT_PURCHASE_007",
+    "message": "Human-readable description (informational only).",
+    "retryable": true,
+    "supportAction": "refresh_quote"
+  }
+}
+```
+
+The complete taxonomy of stable codes is in
+[`docs/API_REFERENCE.md`](API_REFERENCE.md). The quick-reference mapping
+below summarises the namespace-to-subsystem relationship:
+
+| Namespace prefix    | Subsystem                         |
+| ------------------- | --------------------------------- |
+| `EVT_PURCHASE_`     | Purchase flow                     |
+| `EVT_ENTITLEMENT_`  | Entitlement / access-check        |
+| `EVT_DOWNLOAD_`     | Download capability tokens        |
+| `EVT_REFUND_`       | Refund flow                       |
+| `EVT_STORAGE_`      | IPFS / Pinata storage             |
+| `EVT_INDEXER_`      | Stellar event indexer             |
+| `EVT_WEBHOOK_`      | Outbound creator webhooks         |
+| `EVT_AUTH_`         | Authentication / authorisation    |
+| `EVT_CONTRACT_PM_`  | PurchaseManager on-chain errors   |
+| `EVT_CONTRACT_REG_` | MaterialRegistry on-chain errors  |
+| `EVT_INPUT_`        | Request validation / input errors |
+
+### Implementation rules
+
+- Every `catch` block in an API route handler must map the caught error to a
+  code before returning. A fallback mapping (e.g. `EVT_INPUT_001` for
+  validation, `EVT_PURCHASE_012` for registry call failures) is acceptable
+  when a precise mapping is not yet available, but must be tracked as a
+  follow-up task.
+- Contract `contracterror` discriminants must be mapped to
+  `EVT_CONTRACT_PM_*` or `EVT_CONTRACT_REG_*` codes by the API layer before
+  the response leaves the server. Raw numeric discriminants must never
+  appear in client-facing responses.
+- The `retryable` flag drives frontend retry logic. Only set `true` for
+  transient failures where the same request has a reasonable chance of
+  succeeding after a delay.
+- `supportAction` values are defined in
+  [`docs/API_REFERENCE.md#support-actions`](API_REFERENCE.md#support-actions).
+
+### Tests
+
+Add a focused test for each new error mapping when adding or changing a route.
+See `src/lib/__tests__/` for existing test patterns. Tests must assert the
+stable `code` field value, not the `message` string.
