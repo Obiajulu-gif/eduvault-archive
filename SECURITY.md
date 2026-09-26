@@ -51,6 +51,16 @@ EduVault enforces strict isolation and access policies during content takedowns:
 - **Buyer Safety vs. Access Retention:** Severe malware/security violations result in instant entitlement revocation and automated escrow refund. Copyright and creator deprecation preserve historical buyer snapshot access while disputes are resolved.
 - **Private Evidence Retention:** Cryptographic hashes, IPFS storage CIDs, and violation records are preserved in private immutable audit storage for legal and compliance verification without public exposure. See [`docs/content-takedown-and-evidence-retention.md`](docs/content-takedown-and-evidence-retention.md) for the full operational policy.
 
+## Untrusted Content & External URLs (#792)
+Every place user- or creator-supplied content reaches a page is either escaped, sanitized or rejected:
+- **Plain text** (titles, summaries, notification text) is rendered as JSX text, and React escapes it. Never pass user content to `dangerouslySetInnerHTML`.
+- **Rich text / HTML** (`description` on upload and import) goes through `sanitizeRichText` in `src/lib/api/contentSanitizer.js`. It keeps a short allowlist of inline tags, removes scripts, event handlers, `style`, SVG/MathML and forms, and adds `rel="noopener noreferrer nofollow"` to links.
+- **Stored URLs** (profile social/avatar links, material cover/thumbnail URLs, import rows) are checked at write time with `validateOptionalUrl` / `isSafeUrl` (`src/lib/api/safeUrl.js`). Only `http`, `https`, `mailto` and relative paths are accepted. The URL is parsed with the WHATWG `URL` parser, so tricks like `java\tscript:`, a leading space, or a `\\host` protocol-relative URL are resolved the same way a browser would and then rejected.
+- **Outbound links** are rendered with `safeExternalLinkProps(url)`. It returns `null` for anything that isn't absolute `http(s)`, and otherwise sets `target="_blank"` and `rel="noopener noreferrer nofollow"`. `SocialLinks` also shows the destination hostname in the link title, so a link can't hide where it goes.
+- **Notification deep links** must be internal paths (`/...`); `notify()` refuses absolute or protocol-relative links.
+
+When you add a new surface that renders user content, reuse these helpers rather than writing a new check. Test cases live in `src/lib/api/contentSanitizer.test.js`.
+
 ## Disclosure Policy
 We commit to acknowledging all reports within 48 hours and will work to resolve valid issues as quickly as possible.
 

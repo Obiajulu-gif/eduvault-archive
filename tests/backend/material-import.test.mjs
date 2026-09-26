@@ -6,6 +6,8 @@ import {
   validateImportRow,
   validateImportSchema,
   ImportValidationError,
+  planImport,
+  publicPlanRows,
 } from "../../src/lib/backend/materialImport.js";
 
 describe("validateImportSchema", () => {
@@ -214,5 +216,81 @@ describe("validateImportPayload", () => {
     assert.equal(result.dryRun, true);
     assert.equal(result.valid, 1);
     assert.equal(result.validRecords.length, 1);
+  });
+});
+
+describe("validateImportRow untrusted fields (#792)", () => {
+  test("rejects javascript: and obfuscated scheme URLs", () => {
+    for (const url of ["javascript:alert(1)", "java\tscript:alert(1)", " javascript:alert(1)", "//evil.example/x.png"]) {
+      const result = validateImportRow({ title: "T", storageKey: "ipfs://a", coverImageUrl: url }, 0);
+      assert.equal(result.valid, false, url);
+      assert.equal(result.errors[0].field, "coverImageUrl");
+    }
+  });
+
+  test("strips script from description", () => {
+    const result = validateImportRow({ title: "T", storageKey: "ipfs://a", description: "<p>ok</p><script>alert(1)</script>" }, 0);
+    assert.equal(result.valid, true);
+    assert.equal(result.data.description, "<p>ok</p>");
+  });
+});
+
+describe("planImport (#791)", () => {
+  const plan = (records, existing) => planImport(validateImportPayload({ records }), existing);
+
+  test("classifies create, update, skip, and error with counts", () => {
+    const existing = [
+      { _id: "m1", ...validateImportRow({ externalId: "ext-1", title: "One", storageKey: "ipfs://one" }, 0).data },
+      { _id: "m2", ...validateImportRow({ externalId: "ext-2", title: "Two", storageKey: "ipfs://two", price: 5 }, 1).data },
+    ];
+    const result = plan([
+      { externalId: "ext-1", title: "One", storageKey: "ipfs://one" },
+      { externalId: "ext-2", title: "Two v2", storageKey: "ipfs://two", price: 5 },
+      { externalId: "ext-3", title: "Three", storageKey: "ipfs://three" },
+      { title: "", storageKey: "ipfs://bad" },
+    ], existing);
+
+    assert.deepEqual(result.summary, { create: 1, update: 1, skip: 1, error: 1 });
+    assert.deepEqual(result.rows.map((r) => r.action), ["skip", "update", "create", "error"]);
+    assert.deepEqual(result.rows[1].fields, ["title"]);
+  });
+
+  test("is idempotent: re-running an applied file yields only skips", () => {
+    const records = [
+      { externalId: "ext-1", title: "One", storageKey: "ipfs://one", learningOutcomes: ["a"] },
+    ];
+    const first = plan(records, []);
+    assert.equal(first.summary.create, 1);
+
+    const applied = [{ _id: "m1", ...first.rows[0].record }];
+    const second = plan(records, applied);
+    assert.deepEqual(second.summary, { create: 0, update: 0, skip: 1, error: 0 });
+  });
+
+  test("flags duplicate externalId and storageKey within one batch", () => {
+    const result = plan([
+      { externalId: "dup", title: "A", storageKey: "ipfs://a" },
+      { externalId: "dup", title: "B", storageKey: "ipfs://b" },
+      { title: "C", storageKey: "ipfs://c" },
+      { title: "D", storageKey: "ipfs://c" },
+    ], []);
+
+    assert.deepEqual(result.rows.map((r) => r.action), ["create", "error", "create", "error"]);
+    assert.match(result.rows[1].errors[0].message, /Duplicate of row 1/);
+    assert.match(result.rows[3].errors[0].message, /Duplicate of row 3/);
+  });
+
+  test("skips rows without externalId whose storageKey is already imported", () => {
+    const result = plan([{ title: "Again", storageKey: "ipfs://a" }], [{ _id: "m1", storageKey: "ipfs://a" }]);
+    assert.equal(result.rows[0].action, "skip");
+    assert.equal(result.rows[0].reason, "storageKey already imported");
+  });
+
+  test("publicPlanRows drops internal payloads", () => {
+    const result = plan([{ externalId: "e", title: "T v2", storageKey: "ipfs://a" }], [{ _id: "m1", externalId: "e", title: "T", storageKey: "ipfs://a" }]);
+    const [row] = publicPlanRows(result.rows);
+    assert.equal(row.record, undefined);
+    assert.equal(row.previous, undefined);
+    assert.equal(row.action, "update");
   });
 });
