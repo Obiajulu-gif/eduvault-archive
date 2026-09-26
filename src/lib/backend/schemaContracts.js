@@ -38,6 +38,7 @@ export const COLLECTIONS = {
   adminTransfers: "admin_transfers",
   checkoutQuotes: "checkout_quotes",
   storageQuotaHistory: "storage_quota_history",
+  notifications: "notifications",
 };
 
 export const REQUIRED_INDEXES = {
@@ -47,6 +48,13 @@ export const REQUIRED_INDEXES = {
   ],
   materials: [
     { keys: { userAddress: 1, createdAt: -1 } },
+    // #791: makes re-imports idempotent per creator — a concurrent duplicate
+    // insert of the same externalId fails instead of creating a second copy.
+    {
+      keys: { userAddress: 1, externalId: 1 },
+      options: { unique: true, partialFilterExpression: { externalId: { $type: "string" } }, name: "materials_import_external_id_idx" },
+    },
+    { keys: { importBatchId: 1 }, options: { sparse: true, name: "materials_import_batch_idx" } },
     { keys: { visibility: 1, createdAt: -1 } },
     { keys: { materialId: 1 }, options: { sparse: true } },
     { keys: { tokenId: 1 }, options: { unique: true, sparse: true } },
@@ -213,6 +221,12 @@ export const REQUIRED_INDEXES = {
   material_previews: [
     { keys: { contentHash: 1 }, options: { unique: true, name: "material_previews_content_hash_idx", background: true } },
     { keys: { state: 1, updatedAt: 1 }, options: { name: "material_previews_state_idx", background: true } },
+  ],
+  // #794: one notification per (recipient, dedupeKey), so a retried event
+  // can't notify twice even when two workers race.
+  notifications: [
+    { keys: { recipient: 1, dedupeKey: 1 }, options: { unique: true, name: "notifications_dedupe_idx" } },
+    { keys: { recipient: 1, read: 1, createdAt: -1 }, options: { name: "notifications_inbox_idx" } },
   ],
 };
 

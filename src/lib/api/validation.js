@@ -4,6 +4,7 @@ import {
   normalizeLevel,
   validateCategorySubject,
 } from "../backend/taxonomy.js";
+import { isSafeUrl } from "./safeUrl.js";
 
 export class ValidationError extends Error {
   constructor(message, details = {}) {
@@ -22,6 +23,18 @@ const CURRENCY_CODE_PATTERN = /^[A-Z][A-Z0-9]{2,11}$/;
 export function sanitizeString(value, { maxLength = 5000 } = {}) {
   if (value === undefined || value === null) return "";
   return String(value).replace(CONTROL_CHARS, "").trim().slice(0, maxLength);
+}
+
+// User-supplied URLs are stored and later rendered as href/src, so an unsafe
+// scheme (javascript:, data:, protocol-relative) is rejected at write time
+// rather than trusted to every renderer. Empty input stays null.
+export function validateOptionalUrl(value, field, { maxLength = 2048 } = {}) {
+  const url = sanitizeString(value, { maxLength });
+  if (!url) return null;
+  if (!isSafeUrl(url)) {
+    throw new ValidationError(`Unsafe or invalid URL for ${field}`, { field });
+  }
+  return url;
 }
 
 export function sanitizeObject(input, fieldLimits = {}) {
@@ -91,10 +104,10 @@ export function validateProfilePayload(body) {
     institution: sanitizeString(body?.institution, { maxLength: 160 }) || null,
     country: sanitizeString(body?.country, { maxLength: 80 }) || null,
     bio: sanitizeString(body?.bio, { maxLength: 1000 }) || null,
-    avatarUrl: sanitizeString(body?.avatarUrl, { maxLength: 2048 }) || null,
-    twitterUrl: sanitizeString(body?.twitterUrl, { maxLength: 256 }) || null,
-    githubUrl: sanitizeString(body?.githubUrl, { maxLength: 256 }) || null,
-    websiteUrl: sanitizeString(body?.websiteUrl, { maxLength: 256 }) || null,
+    avatarUrl: validateOptionalUrl(body?.avatarUrl, "avatarUrl", { maxLength: 2048 }),
+    twitterUrl: validateOptionalUrl(body?.twitterUrl, "twitterUrl", { maxLength: 256 }),
+    githubUrl: validateOptionalUrl(body?.githubUrl, "githubUrl", { maxLength: 256 }),
+    websiteUrl: validateOptionalUrl(body?.websiteUrl, "websiteUrl", { maxLength: 256 }),
     walletAddress,
     walletAddressLower: walletAddress ? walletAddress.toLowerCase() : null,
   };
@@ -183,8 +196,8 @@ export function validateMaterialPayload(body) {
     price,
     usageRights: sanitizeString(body?.usageRights, { maxLength: 1000 }),
     visibility,
-    coverImageUrl: sanitizeString(body?.coverImageUrl, { maxLength: 2048 }) || null,
-    thumbnailUrl: sanitizeString(body?.thumbnailUrl, { maxLength: 2048 }) || null,
+    coverImageUrl: validateOptionalUrl(body?.coverImageUrl, "coverImageUrl"),
+    thumbnailUrl: validateOptionalUrl(body?.thumbnailUrl, "thumbnailUrl"),
     tokenId: sanitizeString(body?.tokenId, { maxLength: 80 }) || null,
     txHash: sanitizeString(body?.txHash, { maxLength: 100 }) || null,
     category,
@@ -245,7 +258,7 @@ export function validateMaterialUpdatePayload(body) {
   }
 
   if (body.thumbnailUrl !== undefined) {
-    allowed.thumbnailUrl = sanitizeString(body.thumbnailUrl, { maxLength: 2048 }) || null;
+    allowed.thumbnailUrl = validateOptionalUrl(body.thumbnailUrl, "thumbnailUrl");
   }
 
   if (body.category !== undefined) {

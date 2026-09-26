@@ -178,16 +178,61 @@ Response:
 
 ### `POST /api/materials/import`
 
+Auth: `auth_token` cookie; the caller must have a wallet address.
+
 Request:
 
 - `format`: `json` or `csv`.
-- `dryRun`: boolean flag. When `true`, the API validates without saving.
-- `records` or `items`: array of material records.
+- `dryRun`: boolean, default `true`. A dry run only reads and never writes.
+- `records` or `items`: 1–500 material records. An optional `externalId` makes re-imports idempotent.
 
 Response:
 
-- `dryRun`, `total`, `valid`, `invalid`, `invalidRows`.
-- `imported` when the import is committed.
+- Always: `dryRun`, `total`, `valid`, `invalid`, `invalidRows`, `summary` (`create`/`update`/`skip`/`error` counts) and `rows` (the per-row plan).
+- On commit, also: `importBatchId`, `imported`, `created`, `updated`, `failedRows` and `rollback`.
+- Statuses: `200` for a dry run or a commit with nothing to write; `201` when everything was written; `207` for a partial write; `400` for invalid rows (nothing written).
+
+Full rules, examples and rollback steps: [`material-import.md`](material-import.md).
+
+### `GET /api/notifications`
+
+Auth: `auth_token` cookie; `401` `{ "error": "Unauthorized" }` otherwise.
+
+Query: `unread=true` (optional), `limit` (1–50, default 20).
+
+Success `200`:
+
+```json
+{
+  "notifications": [
+    { "id": "66f…", "type": "import_partial_failure", "severity": "error", "title": "Import partially failed",
+      "message": "1 created, 0 updated, 0 skipped, 1 failed.", "link": "/dashboard/my-materials",
+      "read": false, "createdAt": "2026-09-26T09:00:00.000Z" }
+  ],
+  "unreadCount": 1
+}
+```
+
+### `PATCH /api/notifications`
+
+Request: `{ "ids": ["66f…"] }` (up to 100) or `{ "all": true }`. Success `200` `{ "updated": 1 }`. Failure `400` `{ "error": "Provide ids or all: true" }`. Ids that belong to another user don't match and are not counted.
+
+### Notifications (#794)
+
+Stored in the `notifications` collection and written only through `notify()` in `src/lib/notifications/notifications.js`:
+
+| Type | Recipient | Emitted when | Deep link |
+| --- | --- | --- | --- |
+| `import_completed` | the importing creator (`sub`) | an import commit writes every planned row | `/dashboard/my-materials` |
+| `import_partial_failure` | the importing creator (`sub`) | some or all import writes fail | `/dashboard/my-materials` |
+
+- **Deduplication:** each event passes a `dedupeKey` that is stable across retries (for example `import:<importBatchId>`). A unique index on `{ recipient, dedupeKey }` plus an upsert means a retried or concurrent emit creates the notification only once.
+- **Privacy:** every read and every mark-read query filters on `recipient`. The API never returns `recipient` or `dedupeKey`.
+- **New event types:** add the type to `NOTIFICATION_TYPES`, choose a `dedupeKey` that is stable across retries, and add the type to the `Notification.type` enum in `openapi.yaml`.
+
+### Contract tests (#793)
+
+`src/app/api/__tests__/contract.test.js` runs the import and notification route handlers against an in-memory Mongo and checks every response body against the schema `docs/openapi.yaml` documents for that status code. The test fails if an undocumented status is returned, a required field is missing, or a documented field changes type. If you change a response on purpose, update `openapi.yaml` in the same PR. Run it with `npx vitest run src/app/api/__tests__/contract.test.js`.
 
 ### `GET /api/materials`
 

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { sanitizeRichText, isSafeUrl } from './contentSanitizer';
+import { sanitizeRichText, isSafeUrl, safeExternalLinkProps } from './contentSanitizer';
 
 describe('sanitizeRichText', () => {
   it('preserves plain text and basic formatting', () => {
@@ -162,5 +162,58 @@ describe('isSafeUrl', () => {
   it('is case-insensitive for the scheme', () => {
     expect(isSafeUrl('JAVASCRIPT:alert(1)')).toBe(false);
     expect(isSafeUrl('HTTPS://example.com')).toBe(true);
+  });
+
+  // #792: the browser strips these characters before resolving the scheme,
+  // so a check on the raw string sees something different than the browser.
+  it('rejects schemes obfuscated with whitespace or control characters', () => {
+    expect(isSafeUrl('java\tscript:alert(1)')).toBe(false);
+    expect(isSafeUrl('java\nscript:alert(1)')).toBe(false);
+    expect(isSafeUrl(' javascript:alert(1)')).toBe(false);
+    expect(isSafeUrl('\x01javascript:alert(1)')).toBe(false);
+  });
+
+  it('rejects backslash protocol-relative URLs', () => {
+    expect(isSafeUrl('\\\\evil.example.com')).toBe(false);
+    expect(isSafeUrl('/\\evil.example.com')).toBe(false);
+  });
+
+  it('keeps an entity-encoded colon inert (treated as a relative path)', () => {
+    // React sets href literally, so "javascript&colon;" is never decoded into
+    // a scheme; it resolves as a same-origin relative path.
+    expect(isSafeUrl('javascript&colon;alert(1)')).toBe(true);
+  });
+});
+
+describe('safeExternalLinkProps', () => {
+  it('returns hardened anchor props for http(s) URLs', () => {
+    expect(safeExternalLinkProps(' https://example.com/a ')).toEqual({
+      href: 'https://example.com/a',
+      target: '_blank',
+      rel: 'noopener noreferrer nofollow',
+    });
+  });
+
+  it('returns null for unsafe, relative, or non-web URLs', () => {
+    expect(safeExternalLinkProps('javascript:alert(1)')).toBeNull();
+    expect(safeExternalLinkProps('/internal')).toBeNull();
+    expect(safeExternalLinkProps('mailto:a@b.co')).toBeNull();
+    expect(safeExternalLinkProps('//evil.example.com')).toBeNull();
+  });
+});
+
+describe('sanitizeRichText markdown-adjacent input', () => {
+  it('strips inline event handlers and style from allowed tags', () => {
+    const result = sanitizeRichText('<p onclick="alert(1)" style="background:url(javascript:x)">hi</p>');
+    expect(result).toBe('<p>hi</p>');
+  });
+
+  it('strips a javascript: link written as markdown-converted HTML', () => {
+    const result = sanitizeRichText('<a href="  javascript:alert(1)">[x](javascript:alert(1))</a>');
+    expect(result).not.toMatch(/href="\s*javascript:/);
+  });
+
+  it('strips <img onerror> payloads', () => {
+    expect(sanitizeRichText('<img src=x onerror=alert(1)>')).toBe('');
   });
 });

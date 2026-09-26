@@ -1,13 +1,14 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
-import { FaBell, FaCheckDouble, FaTrash } from "react-icons/fa";
+import Link from "next/link";
+import { FaBell, FaCheckDouble } from "react-icons/fa";
 import { useNotifications } from "@/hooks/useNotifications";
 
 export default function NotificationCenter() {
   const [isOpen, setIsOpen] = useState(false);
   const panelRef = useRef(null);
-  const { notifications, unreadCount, markRead, markAllRead, clearAll } =
+  const { notifications, unreadCount, markRead, markAllRead } =
     useNotifications();
 
   const recent = notifications.slice(0, 5);
@@ -53,13 +54,6 @@ export default function NotificationCenter() {
                   <FaCheckDouble className="w-3 h-3" /> All read
                 </button>
               )}
-              <button
-                onClick={clearAll}
-                title="Clear all"
-                className="text-xs text-gray-400 hover:text-red-500 transition-colors"
-              >
-                <FaTrash className="w-3 h-3" />
-              </button>
             </div>
           </div>
 
@@ -81,7 +75,13 @@ export default function NotificationCenter() {
                   <div className="flex items-start justify-between gap-2">
                     <div className="flex-1 min-w-0">
                       <p className={`text-xs font-bold ${notif.read ? "text-gray-700 dark:text-gray-300" : "text-gray-900 dark:text-gray-100"}`}>
-                        {notif.title}
+                        {notif.link ? (
+                          <Link href={notif.link} onClick={() => setIsOpen(false)} className="hover:underline">
+                            {notif.title}
+                          </Link>
+                        ) : (
+                          notif.title
+                        )}
                       </p>
                       <p className="text-xs text-gray-500 mt-0.5 leading-relaxed">
                         {notif.message}

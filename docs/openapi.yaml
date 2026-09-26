@@ -91,7 +91,12 @@ components:
 
     MaterialImportRecord:
       type: object
+      required: [title, storageKey]
       properties:
+        externalId:
+          type: string
+          maxLength: 128
+          description: Stable id from the source system. Re-importing a row with the same externalId updates or skips instead of duplicating.
         title:
           type: string
         storageKey:
@@ -132,8 +137,52 @@ components:
           items:
             type: string
 
+    ImportRowError:
+      type: object
+      required: [row, errors]
+      properties:
+        row:
+          type: integer
+          description: 1-based position in the submitted records array
+        errors:
+          type: array
+          items:
+            type: object
+            required: [field, message]
+            properties:
+              field:
+                type: string
+              message:
+                type: string
+
+    ImportPlanRow:
+      type: object
+      required: [row, action]
+      properties:
+        row:
+          type: integer
+        action:
+          type: string
+          enum: [create, update, skip, error]
+        externalId:
+          type: [string, "null"]
+        materialId:
+          type: string
+        fields:
+          type: array
+          description: Fields an update would change
+          items:
+            type: string
+        reason:
+          type: string
+        errors:
+          type: array
+          items:
+            type: object
+
     MaterialImportResponse:
       type: object
+      required: [dryRun, total, valid, invalid, invalidRows, summary, rows]
       properties:
         dryRun:
           type: boolean
@@ -143,24 +192,107 @@ components:
           type: integer
         invalid:
           type: integer
-        imported:
-          type: integer
         invalidRows:
           type: array
           items:
-            type: object
-            properties:
-              row:
-                type: integer
-              errors:
-                type: array
-                items:
-                  type: object
-                  properties:
-                    field:
-                      type: string
-                    message:
-                      type: string
+            $ref: "#/components/schemas/ImportRowError"
+        summary:
+          type: object
+          required: [create, update, skip, error]
+          properties:
+            create:
+              type: integer
+            update:
+              type: integer
+            skip:
+              type: integer
+            error:
+              type: integer
+        rows:
+          type: array
+          items:
+            $ref: "#/components/schemas/ImportPlanRow"
+        message:
+          type: string
+
+    MaterialImportCommitResponse:
+      allOf:
+        - $ref: "#/components/schemas/MaterialImportResponse"
+        - type: object
+          required: [importBatchId, imported, created, updated, failedRows, rollback]
+          properties:
+            importBatchId:
+              type: string
+            imported:
+              type: integer
+              description: created + updated
+            created:
+              type: integer
+            updated:
+              type: integer
+            failedRows:
+              type: array
+              items:
+                type: object
+                required: [row, action, message]
+                properties:
+                  row:
+                    type: integer
+                  action:
+                    type: string
+                    enum: [create, update]
+                  code:
+                    type: integer
+                  message:
+                    type: string
+            rollback:
+              type: object
+              required: [importBatchId, created, updated, retry]
+              properties:
+                importBatchId:
+                  type: string
+                created:
+                  type: string
+                updated:
+                  type: string
+                retry:
+                  type: string
+
+    Notification:
+      type: object
+      required: [id, type, severity, title, message, link, read, createdAt]
+      properties:
+        id:
+          type: string
+        type:
+          type: string
+          enum: [import_completed, import_partial_failure]
+        severity:
+          type: string
+          enum: [success, error]
+        title:
+          type: string
+        message:
+          type: string
+        link:
+          type: [string, "null"]
+          description: Internal app path to the related workflow
+        read:
+          type: boolean
+        createdAt:
+          type: string
+          format: date-time
+
+    NotificationList:
+      type: object
+      required: [notifications, unreadCount]
+      properties:
+        notifications:
+          type: array
+          items:
+            $ref: "#/components/schemas/Notification"
+        unreadCount:
+          type: integer
 
     UserProfile:
       type: object
@@ -216,6 +348,26 @@ components:
         grantedAt:
           type: string
           format: date-time
+
+  responses:
+    Unauthorized:
+      description: Not authenticated
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    BadRequest:
+      description: Validation error
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    RateLimited:
+      description: Too many requests
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
 
 security:
   - cookieAuth: []
@@ -306,23 +458,104 @@ paths:
                     $ref: "#/components/schemas/MaterialImportRecord"
       responses:
         "200":
-          description: Validation results for a dry run
+          description: Dry-run plan with no errors, or a commit where every row was already imported. Dry runs never write.
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/MaterialImportResponse"
         "201":
-          description: Imported records
+          description: Every planned create/update was written
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/MaterialImportResponse"
+                $ref: "#/components/schemas/MaterialImportCommitResponse"
+        "207":
+          description: Partial import — some writes failed; see failedRows and rollback
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MaterialImportCommitResponse"
         "400":
-          $ref: "#/components/responses/BadRequest"
+          description: Invalid or duplicate rows (plan included, nothing written), or a malformed payload
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/MaterialImportResponse"
+                  - $ref: "#/components/schemas/Error"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "429":
           $ref: "#/components/responses/RateLimited"
+
+  # ---------------------------------------------------------------------------
+  # Notifications
+  # ---------------------------------------------------------------------------
+  /api/notifications:
+    get:
+      summary: List the caller's notifications, newest first
+      operationId: listNotifications
+      tags: [Notifications]
+      security:
+        - cookieAuth: []
+      parameters:
+        - name: unread
+          in: query
+          schema:
+            type: boolean
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 50
+            default: 20
+      responses:
+        "200":
+          description: Notifications and unread count
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NotificationList"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+    patch:
+      summary: Mark the caller's notifications read
+      operationId: markNotificationsRead
+      tags: [Notifications]
+      security:
+        - cookieAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                ids:
+                  type: array
+                  maxItems: 100
+                  items:
+                    type: string
+                all:
+                  type: boolean
+      responses:
+        "200":
+          description: Number of notifications changed to read
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [updated]
+                properties:
+                  updated:
+                    type: integer
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
 
   # ---------------------------------------------------------------------------
   # Market materials (public browse)
@@ -586,23 +819,3 @@ paths:
           $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
-
-  responses:
-    Unauthorized:
-      description: Not authenticated
-      content:
-        application/json:
-          schema:
-            $ref: "#/components/schemas/Error"
-    BadRequest:
-      description: Validation error
-      content:
-        application/json:
-          schema:
-            $ref: "#/components/schemas/Error"
-    RateLimited:
-      description: Too many requests
-      content:
-        application/json:
-          schema:
-            $ref: "#/components/schemas/Error"
