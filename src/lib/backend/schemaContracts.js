@@ -39,6 +39,7 @@ export const COLLECTIONS = {
   checkoutQuotes: "checkout_quotes",
   storageQuotaHistory: "storage_quota_history",
   notifications: "notifications",
+  backgroundJobs: "background_jobs",
 };
 
 export const REQUIRED_INDEXES = {
@@ -227,6 +228,14 @@ export const REQUIRED_INDEXES = {
   notifications: [
     { keys: { recipient: 1, dedupeKey: 1 }, options: { unique: true, name: "notifications_dedupe_idx" } },
     { keys: { recipient: 1, read: 1, createdAt: -1 }, options: { name: "notifications_inbox_idx" } },
+  ],
+  // #789: Background worker framework jobs queue indexes
+  background_jobs: [
+    { keys: { jobId: 1 }, options: { unique: true, name: "background_jobs_id_idx" } },
+    { keys: { idempotencyKey: 1 }, options: { unique: true, sparse: true, name: "background_jobs_idempotency_idx" } },
+    { keys: { status: 1, scheduledFor: 1, lockedUntil: 1 }, options: { name: "background_jobs_lease_idx", background: true } },
+    { keys: { name: 1, status: 1 }, options: { name: "background_jobs_name_status_idx", background: true } },
+    { keys: { createdAt: -1 }, options: { name: "background_jobs_created_idx", background: true } },
   ],
 };
 

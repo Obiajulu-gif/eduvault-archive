@@ -156,6 +156,10 @@ npm run lint
 npm test
 npm run test:contracts
 npm run test:backend
+npm run worker:background
+npm run worker:background:once
+npm run worker:background:status
+npm run worker:background:reprocess
 npm run audit:deps
 npm run scan:secrets
 ```
@@ -193,6 +197,7 @@ npm run test:contracts
 - [Creator Publishing Guide](docs/creator-publishing-guide.md)
 - [Soroban Contract Architecture](docs/soroban-contract-architecture.md)
 - [Stellar Integration Guide](docs/stellar-integration.md)
+- [Background Workers](docs/background-workers.md)
 
 ## Deployment Notes
 
