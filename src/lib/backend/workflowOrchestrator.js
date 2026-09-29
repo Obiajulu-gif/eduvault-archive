@@ -77,35 +77,6 @@ export async function updateWorkflowState(workflowId, newState, updates = {}) {
   return result;
 }
 
-/**
- * Add retry attempt to workflow
- * @param {string} workflowId - Workflow ID
- * @param {string} errorReason - Reason for retry
- * @returns {Promise<Object|null>} Updated workflow
- */
-export async function addRetryAttempt(workflowId, errorReason) {
-  const db = await getDb();
-  const collection = db.collection(COLLECTIONS.syncState);
-
-  const workflow = await collection.findOne({ _id: workflowId });
-  if (!workflow) return null;
-
-  const newRetries = (workflow.retries || 0) + 1;
-
-  if (newRetries >= workflow.maxRetries) {
-    return updateWorkflowState(workflowId, WORKFLOW_STATES.NEEDS_RECONCILIATION, {
-      retryError: errorReason,
-      lastRetryAt: new Date(),
-      retries: newRetries,
-    });
-  }
-
-  return updateWorkflowState(workflowId, workflow.state, {
-    retryError: errorReason,
-    lastRetryAt: new Date(),
-    retries: newRetries,
-  });
-}
 
 /**
  * Get workflow by ID
