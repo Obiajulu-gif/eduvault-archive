@@ -2,6 +2,7 @@
 import { NextResponse } from 'next/server'
 import { auditLog } from '@/lib/api/audit'
 import { withApiHardening } from '@/lib/api/hardening'
+import { requirePermission } from '@/lib/api/auth'
 import { getDb } from '@/lib/mongodb'
 import { runPinVerificationWorker, runRepairActions } from '@/lib/workers/pinVerificationWorker'
 import { runGarbageCollectionWorker, getGarbageCollectionStatus, estimateStorageRecovery } from '@/lib/workers/garbageCollectionWorker'
@@ -9,29 +10,13 @@ import { runIntegrityVerificationWorker, getIntegrityHealthReport } from '@/lib/
 
 export const dynamic = 'force-dynamic'
 
-// Middleware to verify admin access
-async function requireAdmin(request) {
-  // In production, verify JWT or admin token
-  const adminToken = request.headers.get('x-admin-token')
-  if (!adminToken || adminToken !== process.env.ADMIN_API_TOKEN) {
-    return {
-      authorized: false,
-      response: NextResponse.json(
-        { error: 'Unauthorized' },
-        { status: 401 }
-      ),
-    }
-  }
-  return { authorized: true }
-}
-
 export async function POST(request) {
   return withApiHardening(
     request,
     { route: 'admin/storage-jobs', rateLimit: { limit: 10, windowMs: 60_000 } },
     async () => {
-      const { authorized, response: authResponse } = await requireAdmin(request)
-      if (!authorized) return authResponse
+      const authorization = await requirePermission(request, 'storage:maintain', { allowService: true })
+      if (!authorization.ok) return NextResponse.json({ error: 'Forbidden' }, { status: authorization.status })
 
       try {
         const body = await request.json()
@@ -164,8 +149,8 @@ export async function GET(request) {
     request,
     { route: 'admin/storage-jobs', rateLimit: { limit: 20, windowMs: 60_000 } },
     async () => {
-      const { authorized, response: authResponse } = await requireAdmin(request)
-      if (!authorized) return authResponse
+      const authorization = await requirePermission(request, 'storage:maintain', { allowService: true })
+      if (!authorization.ok) return NextResponse.json({ error: 'Forbidden' }, { status: authorization.status })
 
       try {
         const query = request.nextUrl.searchParams.get('status')

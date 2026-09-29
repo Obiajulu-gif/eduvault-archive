@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { requireAdmin } from '@/lib/api/auth';
+import { requirePermission } from '@/lib/api/auth';
 import { getDb } from '@/lib/mongodb';
 import { getOperationalHealth } from '@/lib/backend/operationalHealth';
 
@@ -9,18 +9,13 @@ export const dynamic = 'force-dynamic';
  * GET /api/admin/health-dashboard
  *
  * Operational health and unresolved exceptions report endpoint.
- * Protected by admin authorization (session cookie or x-admin-token).
+ * Protected by an admin session or the least-privilege operations service token.
  */
 export async function GET(request) {
   try {
-    const adminToken = request.headers.get('x-admin-token');
-    const isTokenAuthed = adminToken && process.env.ADMIN_API_TOKEN && adminToken === process.env.ADMIN_API_TOKEN;
-
-    if (!isTokenAuthed) {
-      const admin = await requireAdmin(request);
-      if (!admin) {
-        return NextResponse.json({ error: 'Unauthorized: Admin access required' }, { status: 401 });
-      }
+    const authorization = await requirePermission(request, 'operations:read', { allowService: true });
+    if (!authorization.ok) {
+      return NextResponse.json({ error: 'Forbidden: operations access required' }, { status: authorization.status });
     }
 
     const db = await getDb();
