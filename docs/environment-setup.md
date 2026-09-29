@@ -121,6 +121,7 @@ Checks that apply:
 - **Webhook secrets** — when webhooks are enabled (`WEBHOOK_URL`,
   `STELLAR_WEBHOOK_SECRET`, or `CRON_SECRET` set), the signing secret must
   be present and at least 32 characters in production.
+- **Local mode safety** — local mode will fail fast if production-like secrets are accidentally used (e.g., using a `mongodb+srv://` production URI or a real Pinata JWT locally).
 - **Placeholders** — values such as `replace-with-a-long-random-string`,
   `YOUR_PINATA_JWT`, and the like are rejected in production.
 
