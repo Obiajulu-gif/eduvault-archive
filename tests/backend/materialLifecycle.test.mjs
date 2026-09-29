@@ -1,105 +1,103 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import test from 'node:test';
+import assert from 'node:assert';
 import { ObjectId } from 'mongodb';
 import { MaterialLifecycleState, isValidTransition, transitionMaterialState } from '../../src/lib/db/materialLifecycle.js';
 
-describe('Material Lifecycle State Machine', () => {
-  describe('isValidTransition', () => {
-    it('allows valid transitions', () => {
-      // DRAFT
-      expect(isValidTransition(MaterialLifecycleState.DRAFT, MaterialLifecycleState.ACTIVE)).toBe(true);
-      
-      // ACTIVE
-      expect(isValidTransition(MaterialLifecycleState.ACTIVE, MaterialLifecycleState.PAUSED)).toBe(true);
-      expect(isValidTransition(MaterialLifecycleState.ACTIVE, MaterialLifecycleState.ARCHIVED)).toBe(true);
-      expect(isValidTransition(MaterialLifecycleState.ACTIVE, MaterialLifecycleState.SUSPENDED)).toBe(true);
-      expect(isValidTransition(MaterialLifecycleState.ACTIVE, MaterialLifecycleState.RETIRED)).toBe(true);
-      expect(isValidTransition(MaterialLifecycleState.ACTIVE, MaterialLifecycleState.REMOVED)).toBe(true);
+test('Material Lifecycle State Machine - isValidTransition', async (t) => {
+  await t.test('allows valid transitions', () => {
+    // DRAFT
+    assert.strictEqual(isValidTransition(MaterialLifecycleState.DRAFT, MaterialLifecycleState.ACTIVE), true);
+    
+    // ACTIVE
+    assert.strictEqual(isValidTransition(MaterialLifecycleState.ACTIVE, MaterialLifecycleState.PAUSED), true);
+    assert.strictEqual(isValidTransition(MaterialLifecycleState.ACTIVE, MaterialLifecycleState.ARCHIVED), true);
+    assert.strictEqual(isValidTransition(MaterialLifecycleState.ACTIVE, MaterialLifecycleState.SUSPENDED), true);
+    assert.strictEqual(isValidTransition(MaterialLifecycleState.ACTIVE, MaterialLifecycleState.RETIRED), true);
+    assert.strictEqual(isValidTransition(MaterialLifecycleState.ACTIVE, MaterialLifecycleState.REMOVED), true);
 
-      // PAUSED
-      expect(isValidTransition(MaterialLifecycleState.PAUSED, MaterialLifecycleState.ACTIVE)).toBe(true);
-      expect(isValidTransition(MaterialLifecycleState.PAUSED, MaterialLifecycleState.ARCHIVED)).toBe(true);
-      expect(isValidTransition(MaterialLifecycleState.PAUSED, MaterialLifecycleState.SUSPENDED)).toBe(true);
-      expect(isValidTransition(MaterialLifecycleState.PAUSED, MaterialLifecycleState.RETIRED)).toBe(true);
-      expect(isValidTransition(MaterialLifecycleState.PAUSED, MaterialLifecycleState.REMOVED)).toBe(true);
+    // PAUSED
+    assert.strictEqual(isValidTransition(MaterialLifecycleState.PAUSED, MaterialLifecycleState.ACTIVE), true);
+    assert.strictEqual(isValidTransition(MaterialLifecycleState.PAUSED, MaterialLifecycleState.ARCHIVED), true);
+    assert.strictEqual(isValidTransition(MaterialLifecycleState.PAUSED, MaterialLifecycleState.SUSPENDED), true);
+    assert.strictEqual(isValidTransition(MaterialLifecycleState.PAUSED, MaterialLifecycleState.RETIRED), true);
+    assert.strictEqual(isValidTransition(MaterialLifecycleState.PAUSED, MaterialLifecycleState.REMOVED), true);
 
-      // ARCHIVED
-      expect(isValidTransition(MaterialLifecycleState.ARCHIVED, MaterialLifecycleState.ACTIVE)).toBe(true);
-      expect(isValidTransition(MaterialLifecycleState.ARCHIVED, MaterialLifecycleState.RETIRED)).toBe(true);
-      expect(isValidTransition(MaterialLifecycleState.ARCHIVED, MaterialLifecycleState.SUSPENDED)).toBe(true);
-      expect(isValidTransition(MaterialLifecycleState.ARCHIVED, MaterialLifecycleState.REMOVED)).toBe(true);
+    // ARCHIVED
+    assert.strictEqual(isValidTransition(MaterialLifecycleState.ARCHIVED, MaterialLifecycleState.ACTIVE), true);
+    assert.strictEqual(isValidTransition(MaterialLifecycleState.ARCHIVED, MaterialLifecycleState.RETIRED), true);
+    assert.strictEqual(isValidTransition(MaterialLifecycleState.ARCHIVED, MaterialLifecycleState.SUSPENDED), true);
+    assert.strictEqual(isValidTransition(MaterialLifecycleState.ARCHIVED, MaterialLifecycleState.REMOVED), true);
 
-      // SUSPENDED
-      expect(isValidTransition(MaterialLifecycleState.SUSPENDED, MaterialLifecycleState.ACTIVE)).toBe(true);
-      expect(isValidTransition(MaterialLifecycleState.SUSPENDED, MaterialLifecycleState.REMOVED)).toBe(true);
+    // SUSPENDED
+    assert.strictEqual(isValidTransition(MaterialLifecycleState.SUSPENDED, MaterialLifecycleState.ACTIVE), true);
+    assert.strictEqual(isValidTransition(MaterialLifecycleState.SUSPENDED, MaterialLifecycleState.REMOVED), true);
 
-      // RETIRED
-      expect(isValidTransition(MaterialLifecycleState.RETIRED, MaterialLifecycleState.ACTIVE)).toBe(true);
-      expect(isValidTransition(MaterialLifecycleState.RETIRED, MaterialLifecycleState.REMOVED)).toBe(true);
-    });
-
-    it('rejects invalid transitions', () => {
-      // Reject DRAFT to anything but ACTIVE
-      expect(isValidTransition(MaterialLifecycleState.DRAFT, MaterialLifecycleState.ARCHIVED)).toBe(false);
-      expect(isValidTransition(MaterialLifecycleState.DRAFT, MaterialLifecycleState.SUSPENDED)).toBe(false);
-      expect(isValidTransition(MaterialLifecycleState.DRAFT, MaterialLifecycleState.RETIRED)).toBe(false);
-      expect(isValidTransition(MaterialLifecycleState.DRAFT, MaterialLifecycleState.REMOVED)).toBe(false);
-
-      // Reject terminal state transitions
-      expect(isValidTransition(MaterialLifecycleState.REMOVED, MaterialLifecycleState.ACTIVE)).toBe(false);
-      expect(isValidTransition(MaterialLifecycleState.REMOVED, MaterialLifecycleState.ARCHIVED)).toBe(false);
-
-      // Reject SUSPENDED to ARCHIVED (must be overturned first)
-      expect(isValidTransition(MaterialLifecycleState.SUSPENDED, MaterialLifecycleState.ARCHIVED)).toBe(false);
-      
-      // Reject RETIRED to PAUSED (must be restored first)
-      expect(isValidTransition(MaterialLifecycleState.RETIRED, MaterialLifecycleState.PAUSED)).toBe(false);
-    });
+    // RETIRED
+    assert.strictEqual(isValidTransition(MaterialLifecycleState.RETIRED, MaterialLifecycleState.ACTIVE), true);
+    assert.strictEqual(isValidTransition(MaterialLifecycleState.RETIRED, MaterialLifecycleState.REMOVED), true);
   });
 
-  describe('transitionMaterialState', () => {
-    let mockDb;
-    let mockCollection;
-    let materialId;
-    let mockAuditLog;
+  await t.test('rejects invalid transitions', () => {
+    // Reject DRAFT to anything but ACTIVE
+    assert.strictEqual(isValidTransition(MaterialLifecycleState.DRAFT, MaterialLifecycleState.ARCHIVED), false);
+    assert.strictEqual(isValidTransition(MaterialLifecycleState.DRAFT, MaterialLifecycleState.SUSPENDED), false);
+    assert.strictEqual(isValidTransition(MaterialLifecycleState.DRAFT, MaterialLifecycleState.RETIRED), false);
+    assert.strictEqual(isValidTransition(MaterialLifecycleState.DRAFT, MaterialLifecycleState.REMOVED), false);
 
-    beforeEach(() => {
-      materialId = new ObjectId();
-      mockCollection = {
-        findOne: async ({ _id }) => {
-          if (_id === materialId) return { _id: materialId, lifecycleState: MaterialLifecycleState.ACTIVE };
-          return null;
-        },
-        updateOne: async () => ({ modifiedCount: 1 })
-      };
-      mockDb = {
-        collection: () => mockCollection
-      };
-    });
+    // Reject terminal state transitions
+    assert.strictEqual(isValidTransition(MaterialLifecycleState.REMOVED, MaterialLifecycleState.ACTIVE), false);
+    assert.strictEqual(isValidTransition(MaterialLifecycleState.REMOVED, MaterialLifecycleState.ARCHIVED), false);
 
-    it('updates database and applies backwards-compatible flags', async () => {
-      let updateOp;
-      mockCollection.updateOne = async (filter, update) => {
+    // Reject SUSPENDED to ARCHIVED (must be overturned first)
+    assert.strictEqual(isValidTransition(MaterialLifecycleState.SUSPENDED, MaterialLifecycleState.ARCHIVED), false);
+    
+    // Reject RETIRED to PAUSED (must be restored first)
+    assert.strictEqual(isValidTransition(MaterialLifecycleState.RETIRED, MaterialLifecycleState.PAUSED), false);
+  });
+});
+
+test('Material Lifecycle State Machine - transitionMaterialState', async (t) => {
+  const materialId = new ObjectId();
+  
+  await t.test('updates database and applies backwards-compatible flags', async () => {
+    let updateOp;
+    const mockCollection = {
+      findOne: async ({ _id }) => {
+        if (String(_id) === String(materialId)) return { _id: materialId, lifecycleState: MaterialLifecycleState.ACTIVE };
+        return null;
+      },
+      updateOne: async (filter, update) => {
         updateOp = update;
         return { modifiedCount: 1 };
-      };
-
-      await transitionMaterialState(mockDb, materialId, MaterialLifecycleState.RETIRED, { actor: 'admin' });
-      
-      expect(updateOp.$set.lifecycleState).toBe(MaterialLifecycleState.RETIRED);
-      expect(updateOp.$set.isDeleted).toBe(true);
-      expect(updateOp.$set.deletedBy).toBe('admin');
-    });
-
-    it('throws on invalid transition', async () => {
-      mockCollection.findOne = async () => ({ _id: materialId, lifecycleState: MaterialLifecycleState.REMOVED });
-      
-      let error;
-      try {
-        await transitionMaterialState(mockDb, materialId, MaterialLifecycleState.ACTIVE);
-      } catch (err) {
-        error = err;
       }
-      expect(error.message).toMatch(/Invalid lifecycle transition/);
-    });
+    };
+    const mockDb = {
+      collection: () => mockCollection
+    };
+
+    await transitionMaterialState(mockDb, materialId, MaterialLifecycleState.RETIRED, { actor: 'admin' });
+    
+    assert.strictEqual(updateOp.$set.lifecycleState, MaterialLifecycleState.RETIRED);
+    assert.strictEqual(updateOp.$set.isDeleted, true);
+    assert.strictEqual(updateOp.$set.deletedBy, 'admin');
+  });
+
+  await t.test('throws on invalid transition', async () => {
+    const mockCollection = {
+      findOne: async () => ({ _id: materialId, lifecycleState: MaterialLifecycleState.REMOVED }),
+      updateOne: async () => ({ modifiedCount: 1 })
+    };
+    const mockDb = {
+      collection: () => mockCollection
+    };
+    
+    let error;
+    try {
+      await transitionMaterialState(mockDb, materialId, MaterialLifecycleState.ACTIVE);
+    } catch (err) {
+      error = err;
+    }
+    assert.ok(error, 'Expected an error to be thrown');
+    assert.match(error.message, /Invalid lifecycle transition/);
   });
 });
