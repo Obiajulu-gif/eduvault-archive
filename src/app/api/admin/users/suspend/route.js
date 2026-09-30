@@ -4,7 +4,7 @@ export const runtime = 'nodejs'
 import { NextResponse } from 'next/server'
 import { ObjectId } from 'mongodb'
 import { getDb } from '@/lib/mongodb'
-import { verifyDashboardToken } from '@/lib/auth/session'
+import { requirePermission } from '@/lib/api/auth'
 import { auditLog } from '@/lib/api/audit'
 import { recordAdminAction } from '@/lib/db/adminAudit'
 import { ADMIN_AUDIT_ACTIONS } from '@/lib/db/schemas/auditLog'
@@ -16,16 +16,7 @@ import {
 import { sendSuspensionEmail, sendReactivationEmail } from '@/lib/email/suspensionNotifier'
 import { appendAuditRecord } from '@/lib/backend/auditLedger'
 import { enqueueMaterialSearchProjection } from '@/lib/backend/materialSearchProjection'
-
-async function getAdminUser(request) {
-  const cookieHeader = request.headers.get('cookie') || ''
-  const cookieMatch = cookieHeader.match(/auth_token=([^;]+)/)
-  const token = cookieMatch ? decodeURIComponent(cookieMatch[1]) : null
-  if (!token) return null
-  const verification = await verifyDashboardToken(token, process.env.JWT_SECRET)
-  if (!verification.valid) return null
-  return verification.payload
-}
+import { notify } from '@/lib/notifications/notifications'
 
 /**
  * POST /api/admin/users/suspend
@@ -35,19 +26,23 @@ async function getAdminUser(request) {
  *     userId: string,          // MongoDB _id of the target user
  *     action: "suspend" | "reactivate",
  *     reason?: string          // Required when action === "suspend"
+ *     approval: { reason, scope, actor, expiresAt }
  *   }
  *
  * Suspends or reactivates a user account and dispatches a notification email.
+ * Both directions are protected maintainer actions and require a role-scoped
+ * approval with a reason, actor, and future expiry.
  */
 export async function POST(request) {
   try {
-    const admin = await getAdminUser(request)
-    if (!admin) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    const authorization = await requirePermission(request, 'admin:users:manage')
+    if (!authorization.ok) {
+      return NextResponse.json({ error: 'Forbidden' }, { status: authorization.status })
     }
+    const admin = authorization.user
 
     const body = await request.json()
-    const { userId, action, reason } = body
+    const { userId, action, reason, approval } = body
 
     if (!userId || !action) {
       return NextResponse.json({ error: 'userId and action are required.' }, { status: 400 })
@@ -65,6 +60,13 @@ export async function POST(request) {
       return NextResponse.json({ error: 'Invalid userId.' }, { status: 400 })
     }
 
+    const isSuspending = action === 'suspend'
+    const requiredScope = isSuspending ? APPROVAL_SCOPES.USER_SUSPEND : APPROVAL_SCOPES.USER_REACTIVATE
+    const validation = validateApproval({ approval, requiredScope, actor: admin.sub })
+    if (!validation.valid) {
+      return NextResponse.json({ error: validation.code }, { status: 403 })
+    }
+
     const db = await getDb()
     const users = db.collection('users')
     const targetUser = await users.findOne({ _id: new ObjectId(userId) })
@@ -73,7 +75,6 @@ export async function POST(request) {
       return NextResponse.json({ error: 'User not found.' }, { status: 404 })
     }
 
-    const isSuspending = action === 'suspend'
     const newStatus = isSuspending ? 'suspended' : 'active'
 
     await users.updateOne(
@@ -88,7 +89,7 @@ export async function POST(request) {
     // Hide (or restore) the creator's listings. Denormalised onto each material
     // so public discovery stays one indexed query instead of a per-result
     // lookup against users.
-    const listings = await setCreatorSuspendedFlag({
+    const listings = await setCreatorSuspendedFlag( {
       db,
       user: targetUser,
       suspended: isSuspending,
@@ -123,6 +124,7 @@ export async function POST(request) {
       intent: { action, reason },
       result: { status: newStatus, listingsUpdated: listings.modified },
       reason,
+      approval: validation.approval,
     })
 
     auditLog({
@@ -152,6 +154,25 @@ export async function POST(request) {
       } catch (emailErr) {
         console.error(JSON.stringify({ level: 'error', event: 'suspension_email_failed', to: recipientEmail, error: emailErr.message, timestamp: new Date().toISOString() }))
       }
+    }
+
+    // #776: in-app notification for the account state change. The recipient is
+    // the target user's own id, so this is the one workflow that can notify
+    // directly (it already has the session user id, not just a wallet address).
+    // Gated behind the critical-lifecycle flag; failures never block the action.
+    try {
+      await notify(db, {
+        recipient: userId,
+        type: isSuspending ? 'account_suspended' : 'account_reactivated',
+        dedupeKey: `account:${action}:${userId}`,
+        title: isSuspending ? 'Account suspended' : 'Account reactivated',
+        message: isSuspending
+          ? `Your account was suspended. Reason: ${reason}. Contact support if you believe this is a mistake.`
+          : 'Your account was reactivated. You can now use all features again.',
+        link: isSuspending ? '/support' : '/dashboard',
+      })
+    } catch (notifyErr) {
+      console.error(JSON.stringify({ level: 'error', event: 'suspension_notification_failed', target: userId, error: notifyErr.message, timestamp: new Date().toISOString() }))
     }
 
     return NextResponse.json({

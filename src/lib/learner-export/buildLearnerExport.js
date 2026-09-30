@@ -154,15 +154,27 @@ export function buildLearnerExport({
   };
 
   const summary = buildSummary(purchaseEntries);
+  const generatedAt = new Date().toISOString();
 
   return {
     schemaVersion: EXPORT_SCHEMA_VERSION,
     exportId:      generateExportId(),
-    generatedAt:   new Date().toISOString(),
+    generatedAt,
     redactionLevel,
     identity,
     purchases:     purchaseEntries,
     summary,
+    // #790: retention metadata. Exports are generated on demand and never
+    // stored server-side, so there is no artifact to expire — this block
+    // states that explicitly so consumers and auditors don't have to guess.
+    retention: {
+      artifactLifetime: 'ephemeral',
+      generatedAt,
+      expiresAt: null,
+      policy:
+        'Exports are generated on demand and are not retained on the server. ' +
+        'Download and store your export locally; it is not recoverable once lost.',
+    },
   };
 }
 

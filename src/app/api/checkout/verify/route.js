@@ -38,9 +38,23 @@ export async function POST(req) {
       return NextResponse.json({ error: 'Missing payloadAddress in request body' }, { status: 400 });
     }
 
-    const sessionAddress = user.walletAddress || user.address || user.publicKey || '';
+    // Canonicalize the payload address before comparison. This normalizes
+    // casing, whitespace, and key ordering so equivalent payloads map to the
+    // same canonical output. Non-canonical inputs are normalized consistently.
+    let canonicalPayloadAddress;
+    try {
+      canonicalPayloadAddress = canonicalizePayload(payloadAddress);
+    } catch (canonicalErr) {
+      logger.warn({ error: canonicalErr.message }, 'Checkout verify: non-canonical payload rejected');
+      return NextResponse.json(
+        { error: 'Invalid or non-canonical payload address' },
+        { status: 400 }
+      );
+    }
 
-    if (!sessionAddress) {
+    const sessionAddressRaw = user.walletAddress || user.address || user.publicKey || '';
+
+    if (!sessionAddressRaw) {
       logger.warn({ userId: user.id }, 'Checkout verify: session has no wallet address');
       return NextResponse.json({ error: 'Session wallet address not found' }, { status: 400 });
     }

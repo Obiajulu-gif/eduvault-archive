@@ -35,6 +35,8 @@ export async function appendAuditRecord({
   result,
   reason = null,
   intent = {},
+  before = null,
+  after = null,
 }) {
   if (!operationId || !action || !target) throw new Error('operationId, action, and target are required');
   const collection = db.collection(COLLECTIONS.auditLedger);
@@ -58,6 +60,11 @@ export async function appendAuditRecord({
       action: String(action),
       target: normalize(target),
       intentHash: digest(intent),
+      // Keep the change evidence in the hashed record, rather than relying on
+      // mutable timestamps or a separate history collection. Callers must pass
+      // a minimized, non-secret metadata snapshot.
+      before: normalize(before),
+      after: normalize(after),
       result: normalize(result || {}),
       reason: reason ? String(reason).slice(0, 500) : null,
       createdAt,
@@ -73,6 +80,44 @@ export async function appendAuditRecord({
     }
   }
   throw new Error('Could not append audit record without a chain conflict');
+}
+
+/**
+ * Append evidence for a mutation that can affect ownership, money,
+ * permissions, or access. A rejected/no-op update must not claim a change in
+ * the ledger, so this helper rejects it before anything is appended.
+ */
+export async function appendCriticalMutation({
+  db,
+  operationId,
+  actor,
+  actorContext,
+  action,
+  target,
+  reason,
+  before,
+  after,
+  intent = {},
+}) {
+  if (!reason || !String(reason).trim()) {
+    throw new Error('A reason is required for a critical mutation');
+  }
+  if (canonicalize(before) === canonicalize(after)) {
+    throw new Error('A critical mutation must change the recorded metadata');
+  }
+  return appendAuditRecord({
+    db,
+    operationId,
+    actor,
+    actorContext,
+    action,
+    target,
+    reason,
+    before,
+    after,
+    intent,
+    result: { status: 'applied' },
+  });
 }
 
 export async function readAuditRecords(db, filter = {}) {

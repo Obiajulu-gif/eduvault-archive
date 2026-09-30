@@ -13,6 +13,7 @@
  *   purchases         – 3 completed purchases (one per buyer)
  *   entitlement_cache – 3 active entitlement entries derived from purchases
  *   refunds           – 2 refund records (one pending, one completed)
+ *   failures          – 6 failure records (varied categories/severities/ages)
  *
  * Usage:
  *   node scripts/seed-local-fixtures.mjs
@@ -21,6 +22,8 @@
  *   MONGODB_URI  – defaults to mongodb://localhost:27017/eduvault
  *   MONGODB_DB   – defaults to eduvault
  *   FORCE_RESEED – set to "true" to drop and recreate all fixture documents
+ *
+ * The `failures` collection feeds scripts/health-report.mjs (operational health report).
  */
 
 import { MongoClient, ObjectId } from 'mongodb';
@@ -348,6 +351,118 @@ const REFUNDS = [
   },
 ];
 
+/**
+ * Failure records powering the operational health report.
+ *
+ * Categories (aligned with scripts/health-report.mjs):
+ *   storage_sync    – IPFS/storage upload or pinning failures
+ *   entitlement     – entitlement cache reconciliation failures
+ *   payment         – on-chain payment / purchase confirmation failures
+ *   refund          – refund workflow failures
+ *   marketplace     – listing / marketplace metadata failures
+ *
+ * Severity levels:
+ *   critical – user-impacting, blocks access or funds
+ *   high     – user-impacting, degrades experience
+ *   medium   – operational, no direct user impact
+ *   low      – informational / cleanup
+ *
+ * `resolvedAt: null` marks an unresolved failure. `redacted` flags records
+ * whose sensitive details (wallet, email, tx payload) must be masked in reports.
+ */
+const FAILURES = [
+  {
+    _id:          deterministicId('failure:storage:carol-zk-draft'),
+    category:     'storage_sync',
+    severity:     'high',
+    status:       'unresolved',
+    materialId:   MATERIALS[5].materialId,
+    userAddress:  WALLETS.carol,
+    message:      'IPFS pinning timed out after 3 retries',
+    details:      { storageKey: MATERIALS[5].storageKey, attempts: 3, lastError: 'ETIMEDOUT' },
+    redacted:     false,
+    occurredAt:   daysAgo(1),
+    resolvedAt:   null,
+    createdAt:    daysAgo(1),
+    updatedAt:    daysAgo(1),
+  },
+  {
+    _id:          deterministicId('failure:entitlement:eve-bob-defi'),
+    category:     'entitlement',
+    severity:     'critical',
+    status:       'unresolved',
+    materialId:   MATERIALS[2].materialId,
+    userAddress:  WALLETS.eve,
+    message:      'Entitlement cache missing for confirmed purchase',
+    details:      { purchaseId: PURCHASE_IDS.eve, expectedActive: true },
+    redacted:     true,
+    occurredAt:   daysAgo(2),
+    resolvedAt:   null,
+    createdAt:    daysAgo(2),
+    updatedAt:    daysAgo(2),
+  },
+  {
+    _id:          deterministicId('failure:payment:frank-carol-security'),
+    category:     'payment',
+    severity:     'critical',
+    status:       'unresolved',
+    materialId:   MATERIALS[4].materialId,
+    userAddress:  WALLETS.frank,
+    message:      'Purchase confirmation not observed on-chain within SLA',
+    details:      { purchaseId: PURCHASE_IDS.frank, slaMinutes: 15 },
+    redacted:     true,
+    occurredAt:   daysAgo(3),
+    resolvedAt:   null,
+    createdAt:    daysAgo(3),
+    updatedAt:    daysAgo(3),
+  },
+  {
+    _id:          deterministicId('failure:refund:eve-bob-defi'),
+    category:     'refund',
+    severity:     'high',
+    status:       'unresolved',
+    materialId:   MATERIALS[2].materialId,
+    userAddress:  WALLETS.eve,
+    message:      'Refund stuck in pending state beyond expected window',
+    details:      { purchaseId: PURCHASE_IDS.eve, pendingDays: 2 },
+    redacted:     true,
+    occurredAt:   daysAgo(2),
+    resolvedAt:   null,
+    createdAt:    daysAgo(2),
+    updatedAt:    daysAgo(2),
+  },
+  {
+    _id:          deterministicId('failure:marketplace:bob-xlm-payments'),
+    category:     'marketplace',
+    severity:     'medium',
+    status:       'unresolved',
+    materialId:   MATERIALS[3].materialId,
+    userAddress:  WALLETS.bob,
+    message:      'Listing metadata missing shortSummary for unlisted material',
+    details:      { materialId: MATERIALS[3].materialId, field: 'shortSummary' },
+    redacted:     false,
+    occurredAt:   daysAgo(6),
+    resolvedAt:   null,
+    createdAt:    daysAgo(6),
+    updatedAt:    daysAgo(6),
+  },
+  {
+    _id:          deterministicId('failure:storage:alice-intro-resolved'),
+    category:     'storage_sync',
+    severity:     'low',
+    status:       'resolved',
+    materialId:   MATERIALS[0].materialId,
+    userAddress:  WALLETS.alice,
+    message:      'Transient IPFS gateway 502 during initial upload',
+    details:      { storageKey: MATERIALS[0].storageKey, attempts: 1 },
+    redacted:     false,
+    occurredAt:   daysAgo(30),
+    resolvedAt:   daysAgo(29),
+    createdAt:    daysAgo(30),
+    updatedAt:    daysAgo(29),
+  },
+];
+
 // ── seeding logic ─────────────────────────────────────────────────────────────
 
 async function upsertAll(collection, docs, labelFn) {
@@ -384,12 +499,14 @@ async function main() {
         ...PURCHASES.map(d => d._id),
         ...ENTITLEMENTS.map(d => d._id),
         ...REFUNDS.map(d => d._id),
+        ...FAILURES.map(d => d._id),
       ];
       await db.collection('users').deleteMany({ _id: { $in: ids } });
       await db.collection('materials').deleteMany({ _id: { $in: ids } });
       await db.collection('purchases').deleteMany({ _id: { $in: ids } });
       await db.collection('entitlement_cache').deleteMany({ _id: { $in: ids } });
       await db.collection('refunds').deleteMany({ _id: { $in: ids } });
+      await db.collection('failures').deleteMany({ _id: { $in: ids } });
       warn('Existing fixture documents cleared.');
     }
 
@@ -413,6 +530,10 @@ async function main() {
     const refResult = await upsertAll(db.collection('refunds'), REFUNDS);
     ok(`refunds: ${refResult.inserted} inserted, ${refResult.updated} updated`);
 
+    log('Seeding failures (5 unresolved + 1 resolved) …');
+    const failResult = await upsertAll(db.collection('failures'), FAILURES);
+    ok(`failures: ${failResult.inserted} inserted, ${failResult.updated} updated`);
+
     // Print counts for quick verification.
     const counts = {
       users:             await db.collection('users').countDocuments(),
@@ -420,6 +541,7 @@ async function main() {
       purchases:         await db.collection('purchases').countDocuments(),
       entitlement_cache: await db.collection('entitlement_cache').countDocuments(),
       refunds:           await db.collection('refunds').countDocuments(),
+      failures:          await db.collection('failures').countDocuments(),
     };
 
     log('Collection totals after seed:');

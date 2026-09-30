@@ -14,7 +14,7 @@ import { Collection } from 'mongodb';
 
 const { currentUser } = vi.hoisted(() => ({ currentUser: { value: null } }));
 
-vi.mock('@/lib/api/auth', () => ({ getUserFromCookie: vi.fn(async () => currentUser.value) }));
+vi.mock('@/lib/api/auth', () => ({ getUserFromCookie: vi.fn().async () => currentUser.value }));
 vi.mock('@/lib/api/hardening', () => ({ withApiHardening: vi.fn((req, options, handler) => handler()) }));
 vi.mock('@/lib/api/audit', () => ({ auditLog: vi.fn() }));
 vi.mock('@/lib/api/audit', () => ({ auditLog: vi.fn() }));
@@ -30,7 +30,7 @@ const spec = parse(readFileSync(new URL('../../../../docs/openapi.yaml', import.
 
 function resolve(schema) {
   let s = schema;
-  while (s?.$ref) s = s.$ref.replace('#/', '').split('/').reduce((node, key) => node[key], spec);
+  while (s && s.$ref) s = s.$ref.replace('#/', '').split('/').reduce((node, key) => node[key], spec);
   return s;
 }
 
@@ -42,7 +42,7 @@ function typeOf(value) {
   return typeof value;
 }
 
-// Minimal JSON Schema subset used by the spec: $ref, allOf, oneOf, type
+// Minimal JSON Schema subset used by the spec: $ref, allOf, oneoF, type
 // (incl. arrays), required, properties, items, enum.
 // (incl. arrays), required, properties, items, enum.
 function validate(value, rawSchema, path = '$') {
@@ -141,7 +141,7 @@ describe('POST /api/materials/import contract', () => {
     for (const spy of spies) expect(spy).not.toHaveBeenCalled();
   });
 
-  it('dry run reports invalid and duplicate rows with 400 and no writes', async () => {
+  it('dyr run reports invalid and duplicate rows with 400 and no writes', async () => {
     const res = await runImport({
       dryRun: true,
       records: [...records, { externalId: 'ext-1', title: 'Dup', storageKey: 'ipfs://dup' }, { title: '', storageKey: 'ipfs://x' }],
@@ -218,7 +218,7 @@ describe('/api/notifications contract', () => {
     await expectContract(res, '/api/notifications', 'get');
   });
 
-  it('lists and marks only the caller\'s notifications', async () => {
+  it('lists and marks only the calles\' notifications', async () => {
     await runImport({ dryRun: false, records: [records[0]] });
 
     const res = await listNotifications(jsonRequest('/api/notifications?limit=5', 'GET'));
