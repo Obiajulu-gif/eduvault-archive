@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { appendAuditRecord, verifyAuditRecords } from '../auditLedger';
+import { appendAuditRecord, appendCriticalMutation, verifyAuditRecords } from '../auditLedger';
 
 function makeDb() {
   const records = [];
@@ -37,5 +37,37 @@ describe('audit ledger', () => {
     expect(verifyAuditRecords(edited).valid).toBe(false);
     expect(verifyAuditRecords(db.collectionStore.all().reverse()).valid).toBe(false);
     expect(verifyAuditRecords(db.collectionStore.all().slice(1)).valid).toBe(false);
+  });
+
+  it('records before/after metadata and rejects a no-op critical update', async () => {
+    const db = makeDb();
+    await appendCriticalMutation({
+      db,
+      operationId: 'material.update:m-1:2',
+      actor: 'creator-1',
+      action: 'material.access_terms_updated',
+      target: { type: 'material', id: 'm-1' },
+      reason: 'Corrected the price',
+      before: { price: 12, visibility: 'public' },
+      after: { price: 15, visibility: 'public' },
+      intent: { source: 'creator' },
+    });
+
+    const [record] = db.collectionStore.all();
+    expect(record.before).toEqual({ price: 12, visibility: 'public' });
+    expect(record.after).toEqual({ price: 15, visibility: 'public' });
+    expect(verifyAuditRecords([record])).toMatchObject({ valid: true, records: 1 });
+
+    await expect(appendCriticalMutation({
+      db,
+      operationId: 'material.update:m-1:3',
+      actor: 'creator-1',
+      action: 'material.access_terms_updated',
+      target: { type: 'material', id: 'm-1' },
+      reason: 'No change',
+      before: { price: 15 },
+      after: { price: 15 },
+    })).rejects.toThrow('must change');
+    expect(db.collectionStore.all()).toHaveLength(1);
   });
 });

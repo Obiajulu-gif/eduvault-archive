@@ -8,8 +8,8 @@ This guide describes the local setup required to run EduVault and test the main 
 - npm 10 or a compatible pnpm version
 - Docker, if you want to run MongoDB locally through `docker compose`
 - A MongoDB connection string
-- Pinata credentials for IPFS uploads
-- Wallet tooling for testing wallet-connected flows
+- Pinata credentials for IPFS uploads (not required in sandbox mode)
+- Wallet tooling for testing wallet-connected flows (not required in sandbox mode)
 
 For contributors working on Soroban smart contracts in `soroban/`:
 
@@ -102,6 +102,27 @@ Required local values for the main app are:
 | `REDIS_URL`               | Redis connection URL for distributed sliding-window rate limiting and catalog cache |
 
 Optional values include SMTP settings, WalletConnect project configuration, and planned Stellar/Soroban settings such as `NEXT_PUBLIC_STELLAR_NETWORK`, `NEXT_PUBLIC_STELLAR_RPC_URL`, `NEXT_PUBLIC_HORIZON_URL`, and `NEXT_PUBLIC_SOROBAN_CONTRACT_ID`.
+
+## Credential-free sandbox mode
+
+Set `EDUVAULT_SANDBOX=true` in `.env.local` to run storage and checkout integration points without Pinata credentials, a Stellar wallet, Horizon access, or production gateway traffic. The sandbox is deliberately **opt-in** and is not a production deployment mode.
+
+```bash
+EDUVAULT_SANDBOX=true npm run dev
+npm run test:sandbox
+```
+
+The storage adapter produces repeatable local CIDs and `https://sandbox.eduvault.invalid/ipfs/...` URLs. The checkout adapter returns an active trustline and a confirmed transaction by default, allowing upload and checkout paths to proceed without external services. Set `EDUVAULT_SANDBOX_SCENARIO` to exercise deterministic failures:
+
+| Scenario | Simulated response |
+| --- | --- |
+| `success` | Storage pin succeeds, trustline is active, transaction is confirmed. |
+| `storage_failure` | Every local pin attempt fails. |
+| `missing_trustline` | Checkout receives a trustline remediation response. |
+| `transaction_pending` | Reconciliation retains a purchase as pending. |
+| `transaction_failed` | Reconciliation marks a purchase as failed. |
+
+Sandbox storage is in-memory and does not persist files; URLs are contract fixtures, not downloadable content. It does not emulate wallet signing, MongoDB, Soroban execution, or production authorization. Before a release, disable sandbox mode and run the normal integration checks with the required service credentials.
 
 ## Fail-fast environment validation
 

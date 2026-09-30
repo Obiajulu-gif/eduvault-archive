@@ -64,7 +64,25 @@ export default async function RootLayout({ children }) {
           <ToastProvider>
             <CartProvider>
               <ComparisonProvider>
-                {children}
+                {/*
+                  #795: skip-to-content link — the first focusable element on
+                  every page, so keyboard users can jump past the navigation
+                  straight to the main content. Visually hidden until focused.
+                */}
+                <a
+                  href="#main-content"
+                  className="sr-only focus:not-sr-only focus:absolute focus:top-2 focus:left-2 focus:z-50 focus:rounded-md focus:bg-blue-600 focus:px-4 focus:py-2 focus:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                >
+                  Skip to main content
+                </a>
+                {/*
+                  #795: single <main> landmark wrapping all page content, with
+                  the skip-link target. tabIndex={-1} lets it receive programmatic
+                  focus when the skip link is activated.
+                */}
+                <main id="main-content" tabIndex={-1} className="focus:outline-none">
+                  {children}
+                </main>
                 <CartDrawer />
                 <ComparisonMatrix />
                 <SupportWidget />

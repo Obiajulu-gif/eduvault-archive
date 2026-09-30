@@ -1,4 +1,4 @@
-import { auditLog } from '@/lib/api/audit';
+import { auditLog } from '../api/audit.js';
 
 export const MaterialLifecycleState = {
   DRAFT: 'draft',
