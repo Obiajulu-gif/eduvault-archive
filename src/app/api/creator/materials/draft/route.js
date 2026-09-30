@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getDb } from "@/lib/mongodb";
-import { getUserFromCookie } from "@/lib/api/auth";
+import { requirePermission } from "@/lib/api/auth";
 
 export const dynamic = "force-dynamic";
 
@@ -9,10 +9,11 @@ const COLLECTION = "resource_drafts";
 // Restore a saved draft for the authenticated creator.
 export async function GET(request) {
   try {
-    const user = await getUserFromCookie(request);
-    if (!user) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    const authorization = await requirePermission(request, "creator:manage");
+    if (!authorization.ok) {
+      return NextResponse.json({ error: "Forbidden" }, { status: authorization.status });
     }
+    const user = authorization.user;
 
     const { searchParams } = new URL(request.url);
     const draftId = searchParams.get("draftId");
@@ -39,10 +40,11 @@ export async function GET(request) {
 // Persist a draft for the authenticated creator.
 export async function PUT(request) {
   try {
-    const user = await getUserFromCookie(request);
-    if (!user) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    const authorization = await requirePermission(request, "creator:manage");
+    if (!authorization.ok) {
+      return NextResponse.json({ error: "Forbidden" }, { status: authorization.status });
     }
+    const user = authorization.user;
 
     const body = await request.json();
     const { draftId, value } = body;
@@ -78,10 +80,11 @@ export async function PUT(request) {
 // Discard a saved draft (e.g. after a successful publish).
 export async function DELETE(request) {
   try {
-    const user = await getUserFromCookie(request);
-    if (!user) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    const authorization = await requirePermission(request, "creator:manage");
+    if (!authorization.ok) {
+      return NextResponse.json({ error: "Forbidden" }, { status: authorization.status });
     }
+    const user = authorization.user;
 
     const { searchParams } = new URL(request.url);
     const draftId = searchParams.get("draftId");

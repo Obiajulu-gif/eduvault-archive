@@ -3,7 +3,7 @@ export const runtime = "nodejs";
 
 import { NextResponse } from "next/server";
 import { ObjectId } from "mongodb";
-import { getUserFromCookie } from "@/lib/api/auth";
+import { requirePermission } from "@/lib/api/auth";
 import { withApiHardening } from "@/lib/api/hardening";
 import { getDb } from "@/lib/mongodb";
 import { auditLog } from "@/lib/api/audit";
@@ -19,15 +19,16 @@ export async function POST(request, context) {
     request,
     { route: "creator-material-archive" },
     async () => {
-      const user = await getUserFromCookie(request);
-      if (!user) {
-        auditLog({ event: "auth_failed", route: "creator/materials/[id]/archive", method: "POST", status: 401 });
+      const authorization = await requirePermission(request, "creator:manage");
+      if (!authorization.ok) {
+        auditLog({ event: "auth_failed", route: "creator/materials/[id]/archive", method: "POST", status: authorization.status });
         return errorResponse({
-          status: 401,
-          detail: "Authentication required.",
+          status: authorization.status,
+          detail: authorization.status === 401 ? "Authentication required." : "Creator access required.",
           instance: "/api/creator/materials/[id]/archive",
         });
       }
+      const user = authorization.user;
 
       const { params } = context || {};
       const resolvedParams = params ? await params : {};

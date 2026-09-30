@@ -79,13 +79,17 @@ The status is `200` when no rows have errors and `400` when any do.
 
 A committed response adds `importBatchId`, `created`, `updated`, `imported` (created + updated), `failedRows` and `rollback`. The creator also gets an `import_completed` or `import_partial_failure` notification.
 
+## Provenance
+
+Every created record stores a `provenance` block naming its import batch, source file (`sourceName` / `fileName` in the request), row number, transform version, and actor. An import update preserves the record's origin and appends a revision instead of overwriting it. See [Record Provenance](provenance.md) for the model and the maintainer export.
+
 ## Fixing invalid rows and partial imports
 
 - **Invalid rows (400):** fix each entry in `invalidRows` (the `row` number is its 1-based position in `records`), then dry-run again until `summary.error` is 0.
 - **Partial import (207):** the rows that succeeded are already saved. Fix the rows in `failedRows` and re-run the **same file**. Rows with an `externalId` that already succeeded are skipped, so only the failed rows get written. A `code: 11000` failure means another import created that `externalId` first; a dry run will now show that row as `skip` or `update`.
 - **Rolling back an import:**
   - To undo creates, delete `materials` with `{ importBatchId: "<id>" }`. `materials_import_batch_idx` indexes that field.
-  - To undo updates, use the `material_history` entries with `changeReason: "import <id>"`. Their `changes` store the `from` value of every field the import changed. Materials an import updated also carry `lastImportBatchId`.
+  - To undo updates, use the `material_history` entries with `changeReason: "import <id>"`. Their `changes` store the `from` value of every field the import changed. Materials an import updated also carry `lastImportBatchId` and a provenance revision record.
 
 ## Deployment
 

@@ -2,7 +2,7 @@ export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 import { NextResponse } from "next/server";
-import { getUserFromCookie } from "@/lib/api/auth";
+import { requireActiveUser } from "@/lib/api/auth";
 
 /**
  * GET /api/auth/session
@@ -13,14 +13,15 @@ import { getUserFromCookie } from "@/lib/api/auth";
  * session-timeout countdown (SessionWarning) uses to schedule its warning.
  */
 export async function GET(request) {
-  const user = await getUserFromCookie(request);
+  const result = await requireActiveUser(request);
 
-  if (!user || typeof user.exp !== "number") {
-    return NextResponse.json({ authenticated: false }, { status: 401 });
+  if (!result.ok || typeof result.user.exp !== "number") {
+    return NextResponse.json({ authenticated: false }, { status: result.status || 401 });
   }
 
   return NextResponse.json({
     authenticated: true,
-    expiresAt: user.exp * 1000,
+    expiresAt: result.user.exp * 1000,
+    role: result.user.role || null,
   });
 }

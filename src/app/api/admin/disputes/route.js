@@ -34,9 +34,9 @@ function normalizeDispute(dispute) {
 
 export async function GET(request) {
   try {
-    const user = await getAdminUser(request);
-    if (!user) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    const authorization = await requirePermission(request, "admin:disputes:read");
+    if (!authorization.ok) {
+      return NextResponse.json({ error: "Forbidden" }, { status: authorization.status });
     }
 
     const db = await getDb();
@@ -59,10 +59,11 @@ export async function GET(request) {
 
 export async function PATCH(request) {
   try {
-    const user = await getAdminUser(request);
-    if (!user) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    const authorization = await requirePermission(request, "admin:disputes:manage");
+    if (!authorization.ok) {
+      return NextResponse.json({ error: "Forbidden" }, { status: authorization.status });
     }
+    const user = authorization.user;
 
     const body = await request.json();
     const { disputeId, status, resolution } = body;
