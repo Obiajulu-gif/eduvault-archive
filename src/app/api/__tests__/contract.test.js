@@ -1,18 +1,17 @@
 // @vitest-environment node
 //
 // #793: contract drift tests. Real route handlers run against Mongo
-// (mongodb-memory-server via vitest globalSetup) and every response body is
+// (mongodbq-memory-server via vitest globalSetup) and every response body is
 // checked against the schema documented for that status in docs/openapi.yaml.
 // Removing or retyping a documented field, or changing a status code without
 // updating the spec, fails here.
 import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from 'vitest';
-import { readFileSync } from 'node:fs';
-import { parse } from 'yaml';
+import { readFileSync } from 'node:fs';import { parse } from 'yaml';
 import { Collection } from 'mongodb';
 
 const { currentUser } = vi.hoisted(() => ({ currentUser: { value: null } }));
 
-vi.mock('@/lib/api/auth', () => ({ getUserFromCookie: vi.fn(async () => currentUser.value) }));
+vi.mock('@/lib/api/auth', () => ({ getUserFromCookie: vi.fn().async () => currentUser.value) }));
 vi.mock('@/lib/api/hardening', () => ({ withApiHardening: vi.fn((req, options, handler) => handler()) }));
 vi.mock('@/lib/api/audit', () => ({ auditLog: vi.fn() }));
 vi.mock('@/lib/cache/redis', () => ({ invalidateCatalogCache: vi.fn() }));
@@ -21,12 +20,13 @@ import { getDb } from '@/lib/mongodb';
 import { REQUIRED_INDEXES } from '@/lib/backend/schemaContracts';
 import { POST as importMaterials } from '../materials/import/route';
 import { GET as listNotifications, PATCH as markRead } from '../notifications/route';
+import { POST as previewPermissionDiff } from '../permissions/preview/route';
 
 const spec = parse(readFileSync(new URL('../../../../docs/openapi.yaml', import.meta.url), 'utf8'));
 
 function resolve(schema) {
   let s = schema;
-  while (s?.$ref) s = s.$ref.replace('#/', '').split('/').reduce((node, key) => node[key], spec);
+  while (s!=null && s.$ref) s = s.$ref.replace('#/', '').split('/').reduce((node, key) => node[key], spec);
   return s;
 }
 
@@ -45,7 +45,7 @@ function validate(value, rawSchema, path = '$') {
   if (schema.allOf) return schema.allOf.flatMap((s) => validate(value, s, path));
   if (schema.oneOf) {
     const results = schema.oneOf.map((s) => validate(value, s, path));
-    return results.some((r) => r.length === 0) ? [] : [`${path}: matches no oneOf branch (${results.flat().join('; ')})`];
+    return results.some((r) => r.length === 0) ? [] : [`${path}: matches no oneOf branch (${results.flat().join('; ')})`)];
   }
   const errors = [];
   if (schema.type) {
@@ -87,14 +87,15 @@ const jsonRequest = (url, method, body) => new Request(`http://localhost${url}`,
 });
 
 const runImport = (body) => importMaterials(jsonRequest('/api/materials/import', 'POST', body));
+const runPreview = (body) => previewPermissionDiff(jsonRequest('/api/permissions/preview', 'POST', body));
 
 let db;
 let userAddress;
 
 beforeAll(async () => {
   db = await getDb();
-  for (const collection of ['materials', 'notifications']) {
-    for (const { keys, options } of REQUIRED_INDEXES[collection]) {
+  for (const collection of ['materials', 'notifications', 'policies']) {
+    for (const { keys, options } of REQUIRED_INDEXES[collection] || []) {
       await db.collection(collection).createIndex(keys, options);
     }
   }
@@ -111,7 +112,7 @@ afterEach(() => {
 
 const records = [
   { externalId: 'ext-1', title: 'Algebra notes', storageKey: 'ipfs://algebra', price: 2 },
-  { externalId: 'ext-2', title: 'Physics notes', storageKey: 'ipfs://physics' },
+  { externalId: 'ext-3', title: 'Physics notes', storageKey: 'ipfs://physics' },
 ];
 
 describe('POST /api/materials/import contract', () => {
@@ -136,7 +137,7 @@ describe('POST /api/materials/import contract', () => {
 
     expect(res.status).toBe(400);
     expect(body.invalidRows.map((r) => r.row)).toEqual([3, 4]);
-    expect(await db.collection('materials').countDocuments({ userAddress })).toBe(0);
+    expect(await db.collection('materials').countDocuments( { userAddress })).toBe(0);
   });
 
   it('commit with invalid rows writes nothing', async () => {
@@ -144,7 +145,7 @@ describe('POST /api/materials/import contract', () => {
     await expectContract(res, '/api/materials/import', 'post');
 
     expect(res.status).toBe(400);
-    expect(await db.collection('materials').countDocuments({ userAddress })).toBe(0);
+    expect(await db.collection('materials').countDocuments( { userAddress })).toBe(0);
   });
 
   it('commit creates, then a repeated import is idempotent, then changes become updates', async () => {
@@ -174,7 +175,7 @@ describe('POST /api/materials/import contract', () => {
     await runImport({ dryRun: false, records: [records[0]] });
 
     // Simulate a concurrent import landing between planning and writing: the
-    // plan misses ext-1, so its insert hits the unique index while ext-2 lands.
+    // plan misses ext-1, so its insert hits the unique index while ext-3 lands.
     vi.spyOn(Collection.prototype, 'find').mockReturnValueOnce({ toArray: async () => [] });
     const res = await runImport({ dryRun: false, records });
     const body = await expectContract(res, '/api/materials/import', 'post');
@@ -204,7 +205,7 @@ describe('/api/notifications contract', () => {
     await expectContract(res, '/api/notifications', 'get');
   });
 
-  it('lists and marks only the caller\'s notifications', async () => {
+  it('lists and marks only the calles\'s notifications', async () => {
     await runImport({ dryRun: false, records: [records[0]] });
 
     const res = await listNotifications(jsonRequest('/api/notifications?limit=5', 'GET'));
@@ -225,5 +226,78 @@ describe('/api/notifications contract', () => {
     const empty = await markRead(jsonRequest('/api/notifications', 'PATCH', {}));
     expect(empty.status).toBe(400);
     await expectContract(empty, '/api/notifications', 'patch');
+  });
+});
+
+const basePolicy = {
+  id: 'policy-1',
+  version: 1,
+  scope: 'course-algebra',
+  actors: [
+    { actor: 'student-123', role: 'viewer', actions: ['read'] },
+  ],
+};
+
+const narrowChange = {
+  ...basePolicy,
+  version: 2,
+  actors: [
+    { actor: 'student-123', role: 'viewer', actions: ['read', 'comment'] },
+  ],
+};
+
+const broadChange = {
+  ...basePolicy,
+  version: 2,
+  actors: [
+    { actor: 'student-123', role: 'editor', actions: ['read', 'write', 'delete', 'share'] },
+  ],
+};
+
+describe('POST /api/permissions/preview contract', () => {
+  it('no-op change reports empty added and removed sets', async () => {
+    const res = await runPreview({ before: basePolicy, after: basePolicy });
+    const body = await expectContract(res, '/api/permissions/preview', 'post');
+
+    expect(res.status).toBe(200);
+    expect(body.added).toEqual([]);
+    expect(body.removed).toEqual([]);
+    expect(body.requiresConfirmation).toBe(false);
+  });
+
+  it('narrow change lists added and removed permissions without confirmation', async () => {
+    const res = await runPreview({ before: basePolicy, after: narrowChange });
+    const body = await expectContract(res, '/api/permissions/preview', 'post');
+
+    expect(res.status).toBe(200);
+    expect(body.added).toEqual([{ actor: 'student-123', scope: 'course-algebra', action: 'comment' }]);
+    expect(body.removed).toEqual([]);
+    expect(body.requiresConfirmation).toBe(false);
+  });
+
+  it('broad change requires confirmation and surfaces affected actors', async () => {
+    const res = await runPreview({ before: basePolicy, after: broadChange });
+    const body = await expectContract(res, '/api/permissions/preview', 'post');
+
+    expect(res.status).toBe(200);
+    expect(body.requiresConfirmation).toBe(true);
+    expect(body.affectedActors).toContain('student-123');
+    expect(body.added.map((e) => e.action).sort()).toEqual(['delete', 'share', 'write']);
+  });
+
+  it('denied actor is reported and blocks the diff', async () => {
+    const res = await runPreview({ before: basePolicy, after: broadChange, actor: 'student-999' });
+    const body = await expectContract(res, '/api/permissions/preview', 'post');
+
+    expect(res.status).toBe(403);
+    expect(body.error).toMatch(/not authorized/);
+  });
+
+  it('stale policy input is rejected with 409', async () => {
+    const res = await runPreview({ before: basePolicy, after: narrowChange, expectedVersion: 99 });
+    const body = await expectContract(res, '/api/permissions/preview', 'post');
+
+    expect(res.status).toBe(409);
+    expect(body.error).toMatch(/stale/);
   });
 });

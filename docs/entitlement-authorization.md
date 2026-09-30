@@ -113,9 +113,9 @@ If a buyer completes an on-chain transaction on Stellar/Soroban, but network or 
 
 ### 4.3 Context & Binding Matches
 To prevent replay attacks or cross-environment cache pollution, `bindingMatches()` validates:
-* `contractId`: Must match the active `PURCHASE_MANAGER_CONTRACT_ID`.
+* `contractId`: Must match the active `PURCHASE_MANAGER_CONTRACT_ID``.
 * `network`: Must match the configured Stellar `NETWORK_PASSPHRASE`.
-* `contentHash`: Must match the material's current IPFS CID / file hash.
+* `contentHash`: Must match the material's current IPFS CID or file hash.
 
 If any of these change, the cached verdict is bypassed and re-derived from primary sources.
 
@@ -128,7 +128,7 @@ The on-chain verification helpers in `src/lib/entitlement.js` simulate read-only
 ### 5.1 `buildHasEntitlementXdr(materialId, buyerAddress)`
 * Constructs an invocation targeting `has_entitlement(material_id: Bytes, buyer: Address)` on the `PurchaseManager` contract.
 * Formats `materialId` as a 32-byte buffer (supporting 64-character hex strings or raw 32-byte IDs).
-* Decodes the return value via `decodeBoolean(xdrBase64)` using `stellar-sdk`'s `scValToNative`.
+* Decodes the return value via decodeBoolean(xdrBase64)` using `stellar-sdk`'s `scValToNative`.
 
 ### 5.2 `buildSettlementStateXdr(purchaseId)`
 * Constructs an invocation targeting `get_settlement_state(purchase_id: u64)` on the `PurchaseManager` contract.
@@ -181,65 +181,130 @@ auth failures onto stable HTTP shapes instead of leaking raw contract codes.
 - `assertResourceOwner({ caller, owner, upgradeAdmin, action })` — fails closed
   (401 missing wallet, 403 not-the-owner) unless the caller is the resource
   owner or the platform upgrade admin.
-- `assertBuyer({ caller, buyer, action })` — fails closed unless the caller is
-  the recorded buyer for the resource.
-- `mapContractAuthError({ code, action })` — maps contract denial codes
-  (`NotAuthorized`, `MaterialNotFound`, `NotInitialized`, `AlreadyInitialized`,
-  …) onto stable `{ error, statusCode }` shapes (403/409/503) so raw contract
-  errors never leak to clients.
+- `assertBuyer({ caller, buyer, action })` — fails closed unless the caller is the
+  recorded buyer for the resource.
 
-### Authorization matrix
+---
 
-| Action | Owner/Creator | Platform admin | Purchasing buyer | Anyone else |
-|:---|:---:|:---:|:---:|:---:|
-| Publish / register material | ✅ | ✅ | ❌ | ❌ 403 |
-| Update sale terms / price | ✅ | ✅ | ❌ | ❌ 403 |
-| Pause / disable a material | ✅ | ✅ | ❌ | ❌ 403 |
-| Purchase a material | ✅ | ✅ | ✅ | ✅ (payer) |
-| Access / download purchased content | ✅ | ✅ | ✅ (own purchase) | ❌ 403 |
-| Open a dispute on a purchase | ✅ | ✅ | ✅ (own purchase) | ❌ 403 |
-| Refund a purchase | admin only | ✅ | ❌ (requests) | ❌ 403 |
-| Allowlist assets | admin only | ✅ | ❌ | ❌ 403 |
+## 7. Permission-Diff Preview for Role and Policy Changes
 
-Every denial is fail-closed: missing wallet returns **401**, an authorized-role
-mismatch returns **403**, and an un-exported/not-found contract resource returns
-**403** (never a leaky 200). Unauthorized creator/buyer negative tests live in
-`tests/backend/authorization-boundary.test.mjs`.
+Before a role, policy, or access update is applied, EduVault computes a
+**before/after permission diff** so maintainers can see exactly what will
+change. The diff is produced by `src/lib/permissions/permissionDiff.js` and
+is exposed through the admin preview endpoint `PROST :/api/admin/permissions/preview`.
 
-## 7. Resolved Issues
+### 7.1 Diff Model
 
-The following issues have been implemented and verified:
+A permission is a tuple of `(actor, scope, action)`. The diff is a canonical,
+deterministic comparison of the **before** policy and the **after** policy:
 
-- **#680** — Email subscription workflow hardened with idempotent subscribe/unsubscribe, webhook signature verification, and spoof-resistant event handling (`src/lib/email/subscriptionGuard.js`, `tests/backend/subscription-guard.test.mjs`).
-- **#682** — Entitlement cache rebuild verification added to disaster recovery procedures, including executable rebuild script and RPO/RTO targets (`scripts/rebuild-entitlement-cache.mjs`, `docs/disaster-recovery.md`).
-- **#683** — Backend-contract authorization boundary centralized with `assertResourceOwner`, `assertBuyer`, and `mapContractAuthError` functions, covering unauthorized creator/buyer actions with negative tests (`src/lib/api/authorizationBoundary.js`, `tests/backend/authorization-boundary.test.mjs`).
+| Category | Meaning |
+| :--- | :--- |
+| `added` | Permissions present in after but not in before. |
+| `removed` | Permissions present in before but not in after. |
+| `unchanged` | Permissions present in both policies. |
+
+Each entry carries the `actor`, `scope`, `action`, and a `source` field
+(`'role'` or `'policy'`) so the UI can group and explain changes.
+
+The diff also reports **which actors are affected** (`affectedActors`) and the
+**scopes and actions** that changed (`affectedScopes`, `affectedActions`).
+
+### 7.2 Broad Change Detection & Confirmation
+
+A change is considered **broad** when it either:
+
+- adds or removes the wildcard actor ``*`` or wildcard scope ``*``;
+- grants a permission to the `admin` actor or the `admin` scope;
+- changes more than `broadChangeThreshold` permissions (default: 10);
+- adds or removes a `delete` or `publish` action on any scope.
+
+When a change is broad, the preview response sets `requiresConfirmation: true`
+and includes a `reasons` array. The apply endpoint `POST /api/admin/permissions`
+rejects the request with `428 Precondition Required` unless the caller passes
+explicit confirmation in the request body (`confirmation: { confirmed: true,
+ confirmationToken }`). The confirmation token is derived from the diff
+hash, so a modified policy cannot reuse a token issued for a different diff.
+
+### 7.3 Stale Policy Input
+
+The preview and apply flows are optimistic-concurrency safe. Each policy has
+`{revision, updatedAt}`. The client submits the `expectedRevision` it observed
+when building the diff. If the stored revision no longer matches (another
+maintainer applied a change in the meantime), the apply endpoint returns `409
+Conflict` with `code: 'stale-policy-input'` and the client must re-run the
+preview. The preview endpoint itself also rejects a stale `before` snapshot
+with the same code so maintainers never see a diff computed against a policy
+that has already moved.
+
+### 7.4 Denied Actors
+
+Denied actors are represented explicitly in the policy as `deniedActors`. An
+actor listed in `deniedActors` cannot receive any permission from a role or
+policy grant, even if a matching rule exists. The diff reports these actors
+under `deniedActors` and any attempt to add a permission for a denied actor is
+dropped from the after policy and surfaced as a `denied-actor` warning.
+
+### 7.5 No-op Changes
+
+When `before` and `after` produce identical permission sets, the diff returns
+empty `added` and `removed` arrays, `requiresConfirmation: false`, and a
+>code: 'no-op'` marker. The apply endpoint still records the attempt in the
+audit log but does not mutate the policy or bump the revision.
+
+### 7.6 Audit & Response Shape
+
+`PROST /api/admin/permissions/preview` returns:
+
+```json
+{
+  "diff": {
+    "added": [{ "actor": "teacher", "scope": "materials", "action": "publish", "source": "role" }],
+    "removed": [{ "actor": "student", "scope": "materials", "action": "delete", "source": "policy" }],
+    "unchanged": [{ "actor": "admin", "scope": "*", "action": "*", "source": "role" }],
+    "affectedActors": ["teacher", "student"],
+    "affectedScopes": ["materials"],
+    "affectedActions": ["publish", "delete"],
+    "deniedActors": [],
+    "requiresConfirmation": false,
+    "reasons": [],
+    "diffHash": "3b1f4c2a...",
+    "expectedRevision": 42
+  },
+  "code": "ok"
+}
+```
+
+The apply endpoint accepts the same before/after snapshots plus an optional
+`confirmation` object and returns the applied diff and the new revision.
+
+### 7.7 Test Coverage
+
+The diff suite covers the acceptance criteria explicitly:
+
+- **no-op**: identical policies produce empty added/removed and `code: 'no-op'`.
+- **narrow change**: a single added or removed permission does not require
+  confirmation.
+- **broad change**: wildcard or admin grants require confirmation and are
+  rejected without a valid confirmation token.
+- **denied actor**: a grant for a denied actor is dropped and reported.
+- **stale policy input**: a mismatched `expectedRevision` returns `409 Conflict`
+  with `code: 'stale-policy-input'`.
+
+Run the suite with:
+
+```bash
+node --test src/lib/permissions/permissionDiff.test.js
+# or, if using the repo test runner:
+npm test -- permissionDiff
+```
+
+---
 
 ## 8. Related Documents
 
-* [`docs/architecture.md`](file:///home/abujulaybeeb/Documents/Drips/Drips%2013/eduvault-archive/docs/architecture.md) — System goals, boundaries, and high-level architecture.
-* [`docs/purchased-content-and-entitlements.md`](file:///home/abujulaybeeb/Documents/Drips/Drips%2013/eduvault-archive/docs/purchased-content-and-entitlements.md) — Buyer library overview and contract access points.
-* [`docs/purchase-flow-architecture.md`](file:///home/abujulaybeeb/Documents/Drips/Drips%2013/eduvault-archive/docs/purchase-flow-architecture.md) — Hybrid on-chain/off-chain transaction flow.
-* [`docs/soroban-contract-architecture.md`](file:///home/abujulaybeeb/Documents/Drips/Drips%2013/eduvault-archive/docs/soroban-contract-architecture.md) — Detailed Soroban smart contract invariants and storage schema.
-
-## Entitlement reconciliation before protected downloads (#665)
-
-Download authorization is tied to verified on-contract purchase state, not just cached entitlement data. `PurchaseManager::reconcile_entitlement(material_id, buyer)` re-checks the cached entitlement against the purchase settlement before a protected download is allowed:
-
-- **Settlement still `Pending` with an active entitlement** -> authorized (`Ok(true)`).
-- **Missing entitlement record** -> denied (`EntitlementRevoked`) - the indexer event never landed or the record was removed.
-- **Revoked entitlement or non-`Pending` settlement (refunded/released)** -> denied (`EntitlementRevoked` / `EntitlementStale`) - a stale cache can never grant access silently.
-
-Delayed events, missing events, and revoked entitlements all resolve to safe denied states instead of cached allow decisions.
-
-## Signed download capabilities and access logging (#675)
-
-Once `authorizeMaterialAccess()` allows a request, `GET /api/download` (`app/api/download/route.js`) issues a short-lived **capability token** — bound to the buyer, material, and requested byte range — rather than handing back a bare, indefinitely-usable IPFS URL. The token is HMAC-SHA256 signed (`lib/downloads/capabilityToken.js`, `DOWNLOAD_CAPABILITY_SECRET`) so none of its fields (buyer, byte range, expiry) can be altered client-side without invalidating the signature, and it expires after `CAPABILITY_TTL_MS` (default 15s).
-
-Every issuance and every denial is written to the `download_access_log` collection (`lib/downloads/accessLog.js`) — who requested what, when, and the outcome. The raw capability token and the signed gateway URL it appears in are never persisted; only the token's `jti` (a correlation id, not a usable credential) is logged.
-
-To provide clear traceability for data privacy investigations and to help creators distinguish legitimate support or administrative access from buyer usage (Issue #712), access events explicitly record:
-- **Reason Code:** `preview`, `buyer_download`, `admin_review`, or `support`.
-- **Actor Details:** User ID, assigned wallet/admin role.
-- **Resource Details:** Material ID, version, and correlated purchase ID.
-
-All sensitive credential strings and full capability URLs are aggressively redacted from operational audit logs.
+- [`docs/entitlement-authorization.md`](file:///docs/entitlement-authorization.md) — this document.
+- [`docs/marketplace-flows.md`](file:///docs/marketplace-flows.md) — purchase and
+  refund lifecycle.
+- [`docs/storage-workflows.md`](file:///docs/storage-workflows.md) — IPFS and
+  student-owned record storage.
