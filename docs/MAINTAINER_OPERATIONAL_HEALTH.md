@@ -23,10 +23,35 @@ The Maintainer Operational Health system aggregates indicators across storage wo
    - **Access Denial Spikes**: Download denials due to entitlement check failures in the last 24 hours.
    - **Suspended Users**: Moderated or suspended creator accounts with listings hidden from discovery.
 
+## Severity Levels
+
+Each category reports a count and a severity derived from the count and age of the unresolved records:
+
+| Severity | Trigger | Meaning |
+| --- | --- | --- |
+| `critical` | Unresolved count > 0 and oldest unresolved record is older than 24 hours, or any user-impacting incident is present | Customer-facing breakage or data loss risk; page on-call |
+| `warning` | Unresolved count > 0 and oldest record is between 1 and 24 hours old | Retry budget exhausted or slowing; triage today |
+| `info` | Unresolved count > 0 and all records are less than 1 hour old | Newly observed failure; monitor for escalation |
+| `okay` | Unresolved count is 0 | No action needed |
+
+Age is measured from the record's failure timestamp (`failedAt`, `errorAt`, `lastAttemptAt`, or equivalent) to the report generation time. The report also includes a seven-day failure trend per category so maintainers can distinguish a one-off incident from a regression.
+
+## Report Shape
+
+The report is a single JSON object with a `totals` summary, a `categories` array, and a `trends` array. Each category entry includes:
+
+- **`id`**: Stable machine readable identifier (for example `failed_outbox`).
+- **`collection`**: Source collection or query scope.
+- **`count***: Number of unresolved records.
+- **oldestAgeHours**: Age of the oldest unresolved record in hours.
+- **`severity`**: One of `critical`, `warning`, `info`, `okay`.
+- **`sampleIds`**: Up to five record identifiers (redacted) for investigation.
+- **`investigationUrl`**: Deep link into the admin UI for the collection and filter.
+
 ## Sensitive Data Redaction
 Maintainer summaries and sample exception records automatically redact sensitive information before presentation:
-- Stellar private keys (`S...` 56-char keys) -> `[REDACTED_STELLAR_SECRET_KEY]`
-- EVM private keys (`0x...` 32-byte keys) -> `[REDACTED_EVM_PRIVATE_KEY]`
+- Stellar private keys (`S` 56-char keys`) -> `[REDACTED_STELLAR_SECRET_KEY]`
+- EVM private keys (`0x` 32-byte keys`) -> `[REDACTED_EVM_PRIVATE_KEY]`
 - Auth headers, JWT secrets, passwords -> `[REDACTED]`
 - Email addresses -> `jXxx@domain.com`
 

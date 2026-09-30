@@ -12,6 +12,7 @@ import { ADMIN_AUDIT_ACTIONS } from '@/lib/db/schemas/auditLog'
 import { restoreMaterial, softDeleteMaterial } from '@/lib/db/softDelete'
 import { enqueueMaterialSearchProjection } from '@/lib/backend/materialSearchProjection'
 import { invalidateCatalogCache } from '@/lib/cache/redis'
+import { appendCriticalMutation } from '@/lib/backend/auditLedger'
 
 /**
  * POST /api/materials/delete
@@ -114,6 +115,19 @@ export async function POST(request) {
       reason: action === 'delete' ? 'material_soft_deleted' : 'material_restored',
     })
     await invalidateCatalogCache()
+
+    await appendCriticalMutation({
+      db,
+      operationId: `material.${action}:${String(result.updatedMaterial._id)}:${result.updatedMaterial.searchVersion}`,
+      actor: actorId || actingUser?.walletAddress || 'system',
+      actorContext: { userId: admin?.sub || actingUser?._id?.toString() || null },
+      action: action === 'delete' ? 'material.catalog_access_revoked' : 'material.catalog_access_restored',
+      target: { type: 'material', id: String(result.updatedMaterial._id) },
+      reason: reason || (action === 'delete' ? 'Creator retired catalog listing' : 'Creator restored catalog listing'),
+      before: { isDeleted: Boolean(result.material.isDeleted) },
+      after: { isDeleted: Boolean(result.updatedMaterial.isDeleted) },
+      intent: { source: admin ? 'admin' : 'creator', action },
+    })
 
     if (admin) {
       // Awaited before responding: an admin takedown that cannot be attributed

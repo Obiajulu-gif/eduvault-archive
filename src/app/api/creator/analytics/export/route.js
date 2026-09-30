@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getDb } from "@/lib/mongodb";
-import { getUserFromCookie } from "@/lib/api/auth";
+import { requirePermission } from "@/lib/api/auth";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -158,10 +158,11 @@ function inRange(date, from, to) {
 
 export async function GET(request) {
   try {
-    const user = await getUserFromCookie(request);
-    if (!user) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    const authorization = await requirePermission(request, "creator:analytics:read");
+    if (!authorization.ok) {
+      return NextResponse.json({ error: "Forbidden" }, { status: authorization.status });
     }
+    const user = authorization.user;
 
     const creatorAddress = user.walletAddress || user.address || user.id;
     if (!creatorAddress) {
@@ -251,6 +252,7 @@ export async function GET(request) {
         amount: -Number(p.amount || 0),
       });
     }
+    const records = [...buckets.values()];
 
     for (const a of domainActivity) {
       const date = normalizeDate(a.createdAt || a.updatedAt);
