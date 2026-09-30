@@ -314,6 +314,22 @@ export function resolveAssetIssuer(assetCode, issuerAddress) {
   );
 }
 
+export function buildTrustlineInstructions(assetCode, issuer) {
+  return {
+    message: `Your wallet does not have an active trustline for ${assetCode}.`,
+    steps: [
+      `Open your Stellar wallet and add ${assetCode} as a trusted asset before retrying checkout.`,
+      `Issuer: ${issuer}`,
+      'After the trustline is active, return to EduVault and submit the payment again.',
+    ],
+    assetCode,
+    issuer,
+    helpUrl: isMainnet
+      ? 'https://accountviewer.stellar.org/'
+      : 'https://laboratory.stellar.org/',
+  };
+}
+
 /**
  * Check whether an account holds an active trustline for the specified asset.
  * Returns { hasTrustline, balance?, issuer? } on success.
@@ -345,17 +361,7 @@ export async function checkBuyerTrustline(publicKey, assetCode, issuerAddress) {
     return {
       hasTrustline: false,
       issuer,
-      instructions: {
-        message: `Your wallet does not have an active trustline for ${assetCode}.`,
-        steps: [
-          `Use the Stellar Laboratory or your wallet to establish a trustline for ${assetCode} issued by ${issuer}.`,
-          'Or run the following in the Stellar CLI:',
-          `  stellar-cli asset add-Trust ${issuer}:${assetCode}`,
-          `Trustline URL: ${isMainnet
-            ? 'https://accountviewer.stellar.org/'
-            : 'https://laboratory.stellar.org/'}`,
-        ],
-      },
+      instructions: buildTrustlineInstructions(assetCode, issuer),
     };
   }
 

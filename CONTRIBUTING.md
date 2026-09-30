@@ -108,4 +108,13 @@ When opening an issue, include:
 
 Do not disclose secrets, private keys, or production credentials in issues or pull requests. If you discover a sensitive security issue, contact the maintainer privately before public disclosure.
 
+## Operational incidents
+
+Maintainers responding to a production incident should follow the
+[incident triage and emergency rollback runbook](docs/incident-triage-runbook.md).
+It identifies safe diagnostics, containment and rollback decision points, and
+the reconciliation checks required before recovery is announced. Contributors
+must not add credentials, signed URLs, raw student records, or unredacted logs
+to incident reports or pull requests.
+
 🌟 Stellar Contributors: See the [Stellar Integration Guide](docs/stellar-integration.md) for setup instructions. See the [full contribution guide](docs/contributing.md) for detailed Rust and Soroban setup steps.

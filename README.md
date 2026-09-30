@@ -197,7 +197,7 @@ npm run test:contracts
 - [Creator Publishing Guide](docs/creator-publishing-guide.md)
 - [Soroban Contract Architecture](docs/soroban-contract-architecture.md)
 - [Stellar Integration Guide](docs/stellar-integration.md)
-- [Background Workers](docs/background-workers.md)
+- [Incident Triage and Emergency Rollback Runbook](docs/incident-triage-runbook.md)
 
 ## Deployment Notes
 
