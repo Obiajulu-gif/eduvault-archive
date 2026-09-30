@@ -4,7 +4,7 @@ export const runtime = "nodejs";
 import { NextResponse } from "next/server";
 import { ObjectId } from "mongodb";
 import { getDb } from "@/lib/mongodb";
-import { getUserFromCookie } from "@/lib/api/auth";
+import { requirePermission } from "@/lib/api/auth";
 import { withApiHardening } from "@/lib/api/hardening";
 import { auditLog } from "@/lib/api/audit";
 import { errorResponse } from "@/lib/utils/errorResponse";
@@ -69,10 +69,11 @@ export async function GET(request) {
     { route: "creator-download-logs", rateLimit: { limit: 60, windowMs: 60_000 } },
     async () => {
       try {
-        const user = await getUserFromCookie(request);
-        if (!user) {
-          return errorResponse({ status: 401, detail: "Unauthorized", instance: "/api/creator/download-logs" });
+        const authorization = await requirePermission(request, "creator:analytics:read");
+        if (!authorization.ok) {
+          return errorResponse({ status: authorization.status, detail: "Forbidden", instance: "/api/creator/download-logs" });
         }
+        const user = authorization.user;
 
         const creatorAddress = user.walletAddress || user.address || user.id;
         if (!creatorAddress) {

@@ -31,15 +31,14 @@ function ModerationDashboard({ user }) {
       return;
     }
 
-    // Check user session from API if not passed via props
-    fetch('/api/profile')
+    // Resolve the current database role; JWT role claims may be stale.
+    fetch('/api/auth/session', { cache: 'no-store' })
       .then((res) => {
         if (!res.ok) throw new Error('Unauthenticated');
         return res.json();
       })
-      .then((data) => {
-        const u = data.user || data;
-        setCurrentUser(u);
+      .then((session) => {
+        setCurrentUser({ role: session.role });
         setAuthChecked(true);
       })
       .catch(() => {

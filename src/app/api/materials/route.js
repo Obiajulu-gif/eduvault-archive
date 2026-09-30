@@ -4,7 +4,7 @@ import { NextResponse } from "next/server";
 import { auditLog } from "@/lib/api/audit";
 import { withApiHardening } from "@/lib/api/hardening";
 import { validateMaterialPayload, validateMaterialUpdatePayload, validateChangeReason, validateExpectedVersion } from "@/lib/api/validation";
-import { getUserFromCookie } from "@/lib/api/auth";
+import { requirePermission } from "@/lib/api/auth";
 import { getDb } from "@/lib/mongodb";
 import { ObjectId } from "mongodb";
 import { buildMaterialHistoryEntry, EDITABLE_MATERIAL_FIELDS } from "@/lib/backend/schemaContracts";
@@ -41,11 +41,12 @@ export async function POST(request) {
     { route: "materials", rateLimit: { limit: 40, windowMs: 60_000 } },
     async () => {
       try {
-        const user = await getUserFromCookie(request);
-        if (!user) {
-          auditLog({ event: "auth_failed", route: "materials", method: "POST", status: 401 });
-          return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+        const authorization = await requirePermission(request, "creator:manage");
+        if (!authorization.ok) {
+          auditLog({ event: "auth_failed", route: "materials", method: "POST", status: authorization.status });
+          return NextResponse.json({ error: "Creator access required" }, { status: authorization.status });
         }
+        const user = authorization.user;
 
         // #803: an older client may pin the shape it knows via X-Schema-Version.
         const negotiation = negotiateSchemaVersion(request, "materials");
@@ -120,11 +121,12 @@ export async function GET(request) {
     { route: "materials", rateLimit: { limit: 80, windowMs: 60_000 } },
     async () => {
       try {
-        const user = await getUserFromCookie(request);
-        if (!user) {
-          auditLog({ event: "auth_failed", route: "materials", method: "GET", status: 401 });
-          return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+        const authorization = await requirePermission(request, "creator:manage");
+        if (!authorization.ok) {
+          auditLog({ event: "auth_failed", route: "materials", method: "GET", status: authorization.status });
+          return NextResponse.json({ error: "Creator access required" }, { status: authorization.status });
         }
+        const user = authorization.user;
 
         // #803: legacy documents are upgraded in-memory to the requested
         // shape, so old records stay readable before a backfill reaches them.
@@ -159,11 +161,12 @@ export async function PUT(request) {
     { route: "materials", rateLimit: { limit: 40, windowMs: 60_000 } },
     async () => {
       try {
-        const user = await getUserFromCookie(request);
-        if (!user) {
-          auditLog({ event: "auth_failed", route: "materials", method: "PUT", status: 401 });
-          return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+        const authorization = await requirePermission(request, "creator:manage");
+        if (!authorization.ok) {
+          auditLog({ event: "auth_failed", route: "materials", method: "PUT", status: authorization.status });
+          return NextResponse.json({ error: "Creator access required" }, { status: authorization.status });
         }
+        const user = authorization.user;
 
         const url = new URL(request.url);
         const materialId = url.searchParams.get("id");

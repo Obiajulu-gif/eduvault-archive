@@ -2,7 +2,7 @@ export const dynamic = "force-dynamic";
 
 import { NextResponse } from "next/server";
 import { getDb } from "@/lib/mongodb";
-import { getUserFromCookie } from "@/lib/api/auth";
+import { requirePermission } from "@/lib/api/auth";
 import { auditLog } from "@/lib/api/audit";
 import {
   validatePublishRequest,
@@ -28,11 +28,12 @@ export async function POST(request, { params }) {
     }
 
     // ── Authenticate ──────────────────────────────────────────────────────
-    const user = await getUserFromCookie(request);
-    if (!user) {
-      auditLog({ event: "publish_auth_failed", route: "material-publish", method: "POST", status: 401, materialId });
-      return NextResponse.json({ error: "Authentication required" }, { status: 401 });
+    const authorization = await requirePermission(request, "creator:publish");
+    if (!authorization.ok) {
+      auditLog({ event: "publish_auth_failed", route: "material-publish", method: "POST", status: authorization.status, materialId });
+      return NextResponse.json({ error: authorization.status === 401 ? "Authentication required" : "Creator access required" }, { status: authorization.status });
     }
+    const user = authorization.user;
 
     const userAddress = user.walletAddress || user.address || user.id;
     if (!userAddress) {
@@ -199,10 +200,11 @@ export async function GET(request, { params }) {
       return NextResponse.json({ error: "Material not found" }, { status: 404 });
     }
 
-    const user = await getUserFromCookie(request);
-    if (!user) {
-      return NextResponse.json({ error: "Authentication required" }, { status: 401 });
+    const authorization = await requirePermission(request, "creator:publish");
+    if (!authorization.ok) {
+      return NextResponse.json({ error: "Creator access required" }, { status: authorization.status });
     }
+    const user = authorization.user;
 
     const userAddress = user.walletAddress || user.address || user.id;
     if (!userAddress) {

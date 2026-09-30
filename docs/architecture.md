@@ -258,9 +258,11 @@ Events are normalized by the indexer into stable shapes and logged idempotently 
 - v1 does not support refunds or entitlement revocation.
 
 ### Admin Authorization Policy
-- Admin routes must always verify JWT session tokens server-side using `requireAdmin(request)` from `src/lib/api/auth.js` and verify `user.role === 'admin'`.
-- Client-side admin views must fail closed using `withAdminGuard` from `src/lib/auth/adminAuth.js` and never default-grant admin privileges when user state is missing or unverified.
-- Any action modifying disputes, moderation cases, user bans, or refunds must enforce server-side `requireAdmin`.
+- Authorization capabilities are defined in `src/lib/auth/permissions.js`; API handlers enforce them with `requirePermission(request, capability)` in `src/lib/api/auth.js`. The authenticated user's current database role is authoritative, so stale JWT role claims cannot preserve privileges after a role change. Missing users, suspended users, and lookup failures fail closed.
+- `user` and `learner` roles can manage their profile, use the marketplace, purchase, and manage learning activity. `creator` has those capabilities plus publishing, creator analytics, and payout management. `admin` can access all capabilities, including user and role management, verification, disputes, moderation, audit exports, refunds, storage maintenance, and operations health.
+- `service` actors have only `operations:read` and `storage:maintain`, and are accepted only on those endpoints using `ADMIN_API_TOKEN` in the `x-admin-token` header. Keep this secret server-side and rotate it like any other service credential.
+- Client-side admin navigation is hidden unless `/api/auth/session` reports the current role as `admin`; `withAdminGuard` and `withPermissionGuard` use the same capability matrix. UI checks are presentation only and never replace API authorization.
+- Every privileged admin action must enforce a named capability server-side. Creator mutations must additionally verify resource ownership; role checks do not replace object-level authorization.
 
 ## 8. Deployment Direction
 

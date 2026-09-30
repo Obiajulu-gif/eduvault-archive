@@ -4,7 +4,7 @@ export const runtime = 'nodejs'
 import { NextResponse } from 'next/server'
 import { ObjectId } from 'mongodb'
 import { getDb } from '@/lib/mongodb'
-import { verifyDashboardToken } from '@/lib/auth/session'
+import { requirePermission } from '@/lib/api/auth'
 import { auditLog } from '@/lib/api/audit'
 import { recordAdminAction } from '@/lib/db/adminAudit'
 import { ADMIN_AUDIT_ACTIONS } from '@/lib/db/schemas/auditLog'
@@ -17,16 +17,6 @@ import { sendSuspensionEmail, sendReactivationEmail } from '@/lib/email/suspensi
 import { appendAuditRecord } from '@/lib/backend/auditLedger'
 import { enqueueMaterialSearchProjection } from '@/lib/backend/materialSearchProjection'
 import { notify } from '@/lib/notifications/notifications'
-
-async function getAdminUser(request) {
-  const cookieHeader = request.headers.get('cookie') || ''
-  const cookieMatch = cookieHeader.match(/auth_token=([^;]+)/)
-  const token = cookieMatch ? decodeURIComponent(cookieMatch[1]) : null
-  if (!token) return null
-  const verification = await verifyDashboardToken(token, process.env.JWT_SECRET)
-  if (!verification.valid) return null
-  return verification.payload
-}
 
 /**
  * POST /api/admin/users/suspend
@@ -45,10 +35,11 @@ async function getAdminUser(request) {
  */
 export async function POST(request) {
   try {
-    const admin = await getAdminUser(request)
-    if (!admin) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    const authorization = await requirePermission(request, 'admin:users:manage')
+    if (!authorization.ok) {
+      return NextResponse.json({ error: 'Forbidden' }, { status: authorization.status })
     }
+    const admin = authorization.user
 
     const body = await request.json()
     const { userId, action, reason, approval } = body

@@ -3,18 +3,7 @@ export const runtime = "nodejs";
 
 import { NextResponse } from "next/server";
 import { getDb } from "@/lib/mongodb";
-import { verifyDashboardToken } from "@/lib/auth/session";
-
-async function getAdminUser(request) {
-  const cookieHeader = request.headers.get("cookie") || "";
-  const cookieMatch = cookieHeader.match(/auth_token=([^;]+)/);
-  const token = cookieMatch ? decodeURIComponent(cookieMatch[1]) : null;
-  if (!token) return null;
-  const verification = await verifyDashboardToken(token, process.env.JWT_SECRET);
-  if (!verification.valid) return null;
-  // Extend this check once a role field is added to the users collection
-  return verification.payload;
-}
+import { requirePermission } from "@/lib/api/auth";
 
 const SEVERITY_WEIGHTS = {
   critical: 4,
@@ -148,9 +137,9 @@ export function calculateIncidentImpact(input = {}) {
 
 export async function GET(request) {
   try {
-    const user = await getAdminUser(request);
-    if (!user) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    const authorization = await requirePermission(request, "admin:disputes:read");
+    if (!authorization.ok) {
+      return NextResponse.json({ error: "Forbidden" }, { status: authorization.status });
     }
 
     const db = await getDb();
@@ -170,10 +159,11 @@ export async function GET(request) {
 
 export async function PATCH(request) {
   try {
-    const user = await getAdminUser(request);
-    if (!user) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    const authorization = await requirePermission(request, "admin:disputes:manage");
+    if (!authorization.ok) {
+      return NextResponse.json({ error: "Forbidden" }, { status: authorization.status });
     }
+    const user = authorization.user;
 
     const { disputeId, status, resolution } = await request.json();
     if (!disputeId || !status) {
