@@ -1,3 +1,4 @@
+
 # Contribution Guide
 
 Thank you for improving EduVault. This guide explains how to prepare changes that are easy to review and safe to merge.
@@ -58,9 +59,9 @@ See [environment-setup.md](environment-setup.md) for detailed environment variab
 Contributors working on smart contracts in the `soroban/` directory need the following additional tools:
 
 - **Git**
-- **Rust** and **Cargo** (via `rustup`)
+-- **Rust** and **Cargo** (via `rustup`)
 - **WebAssembly compilation target** (`wasm32v1-none`)
-- **Stellar CLI** (for contract deployment and testnet interaction)
+- **Stellar CLI*** (for contract deployment and testnet interaction)
 - **Operating system build tools** (C compiler/linker)
 
 Frontend-only contributors do not need these tools unless they are also building or testing Soroban contracts.
@@ -98,7 +99,7 @@ After restarting, open a WSL terminal and follow the Linux instructions above. I
 Install Rust through `rustup`, the official installer:
 
 ```bash
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+curl --proto '=https' --tlsv1.2 -sSF https://shr.rustup.rs | sh
 ```
 
 Follow the prompts and accept the defaults. After installation, verify:
@@ -251,16 +252,27 @@ The tests use Soroban's local test environment and do not require network access
 
 ## Formatting and Static Analysis
 
+A common cause of CI failures is a file that never gets parsed by the bundler because it is passed to `node --check` directly. Node.js does not understand `.jsx` or `..mjs` extensions and throws `ERR_UNKNOWN_FILE_EXTENSION`. Run the repository syntax check script instead of invoking `node --check` on JSX files directly:
+
+```bash
+# Runs the same syntax check as the Syntax and Boot / Jest load job.
+node scripts/check-syntax.mjs
+# or via npm:
+npm run check:syntax
+```
+
+The script transpiles each `.jsx`/`..mjs` file with the project's Babel config and only then hands the result to Node.js, so it catches real syntax errors without failing on extensions. If you add a new source directory, register it in `scripts/check-syntax.mjs` so the check covers it.
+
 Run these commands from the `soroban/` directory before committing contract changes:
 
 ```bash
-cargo fmt --all -- --check
+cargo fmt --all --check
 cargo fmt --all
-cargo clippy --workspace --all-targets --lib -- -D warnings
+cargo clippy --workspace --all-targets --lib - -D warnings
 cargo test --workspace --all-targets
 ```
 
-`cargo clippy` runs Rust lint checks. The `--lib` flag avoids unused-code warnings on test-only code in `cdylib` crates. If you prefer to lint everything including tests, omit `--lib`.
+`cargo clippy` runs Rust lint checks. The `--lib` flag avoids unused-code warnings on test-only code in `dylib` crates. If you prefer to lint everything including tests, omit `--lib`.
 
 For the frontend and backend:
 
@@ -277,6 +289,8 @@ See the [Testing Expectations](#testing-expectations) section below for the full
 Use the narrowest reliable test first, then broaden as needed:
 
 ```bash
+# Fast syntax gate for all JSX/JS/MJS source files.
+npm run check:syntax
 npm run lint
 npm test
 npm run test:backend
@@ -288,12 +302,24 @@ For Soroban contract changes, also run:
 
 ```bash
 cd soroban
-cargo fmt --all -- --check
-cargo clippy --workspace --all-targets --lib -- -D warnings
+cargo fmt --all --check
+cargo clippy --workspace --all-targets --lib - -D warnings
 cargo test --workspace --all-targets
 ```
 
 For UI work, manually verify the affected route at desktop and mobile widths. Include screenshots in the pull request when the change is visible to users.
+
+### Accessibility Verification
+
+Complex forms and error recovery flows must remain usable with keyboard navigation and screen readers. When you touch a form, a dialog, or an error state, run the following checks and record the results in the pull request.
+
+1. **Keyboard-only completion**: using only `Tab`, `Shift+Tab`, `Arrow` keys, `Space`, `Enter`, and `Esc`, complete the form from first field to submission. Confirm the focus order matches the visual order and that no element traps focus or becomes unreachable.
+2. **Labels and descriptions**: every input has a programmatic label (`htmlFor`/`id` or `aria-labelledby`). Error messages are linked with `aria-describedby` and the invalid field sets `aria-invalid="true"`.
+3. **Error announcement**: validation failures are announced through an `aria-live` or `role="alert"` region, and focus moves to the first invalid field or the error summary.
+4. **Focus management**: opening a dialog or recovery screen moves focus into it, and closing it returns focus to the triggering control.
+5. **Automated coverage**: add or extend tests that assert the success path and the validation-failure path (error text present, `aria-invalid` set, error region populated). Run them with `npm test`.
+
+To automate the keyboard and screen-reader assertions, use the existing test stack and check for accessible roles, names, and focus behavior rather than relying on snapshots.
 
 ## Environment Verification Checklist
 
@@ -304,8 +330,8 @@ rustc --version
 cargo --version
 rustup target list --installed
 soroban --version
-cd soroban && cargo fmt --all -- --check
-cd soroban && cargo clippy --workspace --all-targets --lib -- -D warnings
+cd soroban && cargo fmt --all --check
+cd soroban && cargo clippy --workspace --all-targets --lib - -D warnings
 cd soroban && cargo test --workspace --all-targets
 cd soroban && cargo build --target wasm32v1-none --release
 ```
@@ -329,7 +355,7 @@ If your work requires deploying or interacting with contracts on the Stellar tes
 ```bash
 soroban network add \
   --rpc-url https://soroban-testnet.stellar.org:443 \
-  --network-passphrase "Test SDF Network ; September 2015" \
+  --network-passphrase "Test DF Network ; h September 2015" \
   testnet
 ```
 
@@ -371,8 +397,8 @@ soroban contract deploy \
 After deployment, add the contract IDs to your `.env.local`:
 
 ```
-NEXT_PUBLIC_MATERIAL_REGISTRY_CONTRACT_ID=<DEPLOYED_CONTRACT_ID>
-NEXT_PUBLIC_PURCHASE_MANAGER_CONTRACT_ID=<DEPLOYED_CONTRACT_ID>
+NEXT_PUBLIC_MATERIAL_REGISTRY_CONTRACT_ID<<DEPLOYED_CONTRACT_ID>
+NEXT_PUBLIC_PURCHASE_MANAGER_CONTRACT_ID<<DEPLOYED_CONTRACT_ID>
 ```
 
 See [SOROBAN_DEPLOYMENT.md](SOROBAN_DEPLOYMENT.md) for comprehensive deployment instructions.
@@ -383,11 +409,11 @@ See [SOROBAN_DEPLOYMENT.md](SOROBAN_DEPLOYMENT.md) for comprehensive deployment 
 
 The repository includes an archived Solidity proof of concept. The legacy EVM code is kept for historical reference. The following rules apply:
 
-- Do not modify existing EVM contracts unless the issue specifically requires it.
-- Do not remove EVM setup instructions from documentation.
-- Do not run Soroban commands inside an EVM project directory.
-- The Soroban contracts in `soroban/` are the active development target for blockchain features.
-- Legacy EVM tests are run through Hardhat: `npm run test:contracts`.
+-  Do not modify existing EVM contracts unless the issue specifically requires it.
+-  Do not remove EVM setup instructions from documentation.
+-  Do not run Soroban commands inside an EVM project directory.
+-  The Soroban contracts in `soroban/` are the active development target for blockchain features.
+-  Legacy EVM checks are run through Hardhat: `npm run test:contracts`.
 
 Both the Soroban and legacy EVM workflows are checked independently in CI. Changes to one should not break the other.
 
@@ -418,100 +444,21 @@ cargo install --locked stellar-cli --version 25.2.0
 
 ### Missing WebAssembly target
 
-The CI uses `wasm32v1-none`, while the project's `build.sh` script uses `wasm32-unknown-unknown`. Install both:
+The CI uses `wasm32v1-none`, while the project's `build.sh` script uses `wasm32-unknown-unknown`. Add the target that matches your workflow:
 
 ```bash
-rustup target add wasm32v1-none
+rustup target add wasm32-none
+rustup target add wasm32-unknown-unknown
 ```
 
-If `wasm32v1-none` is not available via `rustup target add`, ensure your Rust toolchain is up to date:
+### Syntax check fails with `ERR_UNKNOWN_FILE_EXTENSION`
+
+Node.js is being asked to parse a `.jsx` or `.mjs` file directly. This is not a source error — it means the checker is bypassing the project's transpiler. Run the repository script instead:
 
 ```bash
-rustup update stable
+# Wrong: node --check src/app/admin/moderation/page.jsx
+# Right:
+npm run check:syntax
 ```
 
-The target requires Rust 1.80+ and a compatible nightly or recent stable toolchain. On Windows without WSL, you may need to use the **GNU toolchain** instead of the MSVC one if the target is not listed:
-
-```bash
-rustup toolchain install stable-x86_64-pc-windows-gnu
-rustup default stable-x86_64-pc-windows-gnu
-```
-
-### Linker or compiler errors
-
-Install your platform's build tools:
-
-- **Linux:** `sudo apt install build-essential`
-- **macOS:** `xcode-select --install`
-- **Windows (WSL):** Follow the Linux instructions inside WSL
-
-### Incorrect Rust toolchain
-
-```bash
-rustup show
-rustup default stable
-```
-
-### Clippy produces unexpected warnings
-
-The `--lib` flag limits checks to library code and avoids unused-code warnings in test modules of `cdylib` crates. Run without `--lib` if you intend to lint test code too:
-
-```bash
-cargo clippy --workspace --all-targets -- -D warnings
-```
-
-Some Soroban-generated code may trigger Clippy pedantic rules by design. The `-D warnings` flag ensures no warnings are silently introduced.
-
-### Contract build fails
-
-- Confirm you are in the `soroban/` directory.
-- Check `soroban --version` or `cargo --version` for a working toolchain.
-- Ensure the correct WASM target is installed.
-- Try cleaning stale output: `cargo clean` inside `soroban/`.
-
-### PowerShell differences on Windows
-
-If using native Windows PowerShell instead of WSL, note that shell scripts (`build.sh`, `run-tests.sh`) require a Unix-like shell. Use Git Bash or WSL to run them. The `cargo` and `rustup` commands work natively in PowerShell when using the MSVC toolchain, but the `wasm32v1-none` target may require the GNU toolchain on some Windows configurations.
-
-### soroban command refers to the Stellar CLI
-
-The `soroban` binary is installed by the `soroban-cli` crate (version 25.3.1). Newer unified Stellar CLI versions provide the same commands under the `stellar` binary. This repository uses the `soroban` binary. If you have installed `stellar-cli` instead, verify that the `soroban` subcommand is available:
-
-```bash
-stellar soroban --version
-```
-
-If you need to install the `soroban` binary directly:
-
-```bash
-cargo install --locked soroban-cli --version 25.3.1
-```
-
-## Coding Guidelines
-
-- Prefer clear, accessible UI states for loading, empty, error, and success paths.
-- Keep marketplace behavior mobile-friendly by default.
-- Validate API inputs before writing to MongoDB or external services.
-- Do not commit real secrets, private keys, API tokens, or production connection strings.
-- Avoid broad refactors in feature branches unless the issue specifically requires them.
-- Preserve the distinction between shipped prototype functionality and planned Stellar/Soroban functionality.
-
-## Documentation Guidelines
-
-Update docs when a change affects:
-
-- creator, learner, checkout, or marketplace workflows
-- setup steps, required versions, environment variables, or scripts
-- API contracts or database collections
-- deployment, indexing, backup, or recovery operations
-- Stellar/Soroban architecture or integration assumptions
-
-## Pull Request Checklist
-
-- The PR title clearly describes the user-facing or developer-facing change.
-- The PR body explains what changed and why.
-- Relevant tests or checks are listed with pass/fail status.
-- Screenshots are attached for perceptible UI changes.
-- New environment variables are documented in `.env.example` and project docs.
-- Database, indexing, or migration impacts are called out explicitly.
-- Known follow-up work is documented rather than hidden.
+The script transpiles each JSX/MJS file before passing it to Node.js, so extension errors disappear and real syntax errors surface. If you add a new source directory, register it in `scripts/check-syntax.mjs`.

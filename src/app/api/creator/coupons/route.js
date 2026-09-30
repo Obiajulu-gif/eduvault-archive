@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getUserFromCookie } from "@/lib/api/auth";
+import { requirePermission } from "@/lib/api/auth";
 import { withApiHardening } from "@/lib/api/hardening";
 import { getDb } from "@/lib/mongodb";
 
@@ -31,7 +31,9 @@ function validateCoupon(payload) {
 
 export async function GET(request) {
   return withApiHardening(request, { route: "creator-coupons", rateLimit: { limit: 60, windowMs: 60_000 } }, async () => {
-    const ownerId = creatorId(await getUserFromCookie(request));
+    const authorization = await requirePermission(request, "creator:manage");
+    if (!authorization.ok) return error("Forbidden", authorization.status);
+    const ownerId = creatorId(authorization.user);
     if (!ownerId) return error("Authentication required.", 401);
     try {
       const coupons = await (await getDb()).collection("creatorCoupons").find({ ownerId }).sort({ createdAt: -1 }).toArray();
@@ -44,7 +46,9 @@ export async function GET(request) {
 
 export async function POST(request) {
   return withApiHardening(request, { route: "creator-coupons", rateLimit: { limit: 20, windowMs: 60_000 } }, async () => {
-    const ownerId = creatorId(await getUserFromCookie(request));
+    const authorization = await requirePermission(request, "creator:manage");
+    if (!authorization.ok) return error("Forbidden", authorization.status);
+    const ownerId = creatorId(authorization.user);
     if (!ownerId) return error("Authentication required.", 401);
     let payload;
     try { payload = await request.json(); } catch { return error("Invalid JSON body."); }

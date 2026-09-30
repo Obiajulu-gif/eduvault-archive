@@ -3,6 +3,7 @@
 import { NextResponse } from 'next/server'
 import { auditLog } from '@/lib/api/audit'
 import { withApiHardening } from '@/lib/api/hardening'
+import { requirePermission } from '@/lib/api/auth'
 import { getDb } from '@/lib/mongodb'
 import {
   enqueueJob,
@@ -13,32 +14,17 @@ import {
 import { runPinVerificationWorker, runRepairActions } from '@/lib/workers/pinVerificationWorker'
 import { runGarbageCollectionWorker, getGarbageCollectionStatus, estimateStorageRecovery } from '@/lib/workers/garbageCollectionWorker'
 import { runIntegrityVerificationWorker, getIntegrityHealthReport } from '@/lib/workers/integrityVerificationWorker'
+import { runStaleCacheRepairWorker, DERIVED_REGISTRY } from '@/lib/workers/staleCacheRepairWorker'
 
 export const dynamic = 'force-dynamic'
-
-// Middleware to verify admin access
-async function requireAdmin(request) {
-  // In production, verify JWT or admin token
-  const adminToken = request.headers.get('x-admin-token')
-  if (!adminToken || adminToken !== process.env.ADMIN_API_TOKEN) {
-    return {
-      authorized: false,
-      response: NextResponse.json(
-        { error: 'Unauthorized' },
-        { status: 401 }
-      ),
-    }
-  }
-  return { authorized: true }
-}
 
 export async function POST(request) {
   return withApiHardening(
     request,
     { route: 'admin/storage-jobs', rateLimit: { limit: 10, windowMs: 60_000 } },
     async () => {
-      const { authorized, response: authResponse } = await requireAdmin(request)
-      if (!authorized) return authResponse
+      const authorization = await requirePermission(request, 'storage:maintain', { allowService: true })
+      if (!authorization.ok) return NextResponse.json({ error: 'Forbidden' }, { status: authorization.status })
 
       try {
         const body = await request.json()
@@ -154,7 +140,7 @@ export async function POST(request) {
           { status: 202 }
         )
       } catch (error) {
-        auditLog({
+        auditLog( {
           event: 'storage_job_error',
           route: 'admin/storage-jobs',
           method: 'POST',
@@ -176,8 +162,8 @@ export async function GET(request) {
     request,
     { route: 'admin/storage-jobs', rateLimit: { limit: 20, windowMs: 60_000 } },
     async () => {
-      const { authorized, response: authResponse } = await requireAdmin(request)
-      if (!authorized) return authResponse
+      const authorization = await requirePermission(request, 'storage:maintain', { allowService: true })
+      if (!authorization.ok) return NextResponse.json({ error: 'Forbidden' }, { status: authorization.status })
 
       try {
         const url = request.nextUrl
@@ -234,6 +220,14 @@ export async function GET(request) {
           return NextResponse.json({ success: true, status: 'integrity', ...result })
         }
 
+        if (query === 'stale-cache-configs') {
+          return NextResponse.json({
+            success: true,
+            status: 'stale_cache_configs',
+            configs: Object.keys(DERIVED_REGISTRY),
+          })
+        }
+
         return NextResponse.json({
           success: true,
           status: 'all',
@@ -243,6 +237,7 @@ export async function GET(request) {
             'gc-status',
             'gc-estimate',
             'integrity-health',
+            'stale-cache-configs',
           ],
           message: 'Append ?status=<query> to get specific status, or ?jobId=<id> to inspect a job',
         })

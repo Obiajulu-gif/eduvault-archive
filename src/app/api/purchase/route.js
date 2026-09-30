@@ -13,6 +13,7 @@ import { broadcastPurchaseEvent } from '@/lib/webhooks/sender';
 import { sendReceiptIfEligible } from '@/lib/email';
 import { createCheckoutQuote, consumeCheckoutQuote } from '@/lib/checkout/quotes';
 import { buildAnalyticsEvent, recordServerAnalyticsEvent } from '@/lib/backend/analyticsEvents';
+import { appendCriticalMutation } from '@/lib/backend/auditLedger';
 
 function duplicateKey(error) {
   return error?.code === 11000;
@@ -81,6 +82,17 @@ async function respondForExistingPurchase(db, existing, { materialId, buyerAddre
   );
 
   const purchase = await db.collection('purchases').findOne({ _id: existing._id });
+  await appendCriticalMutation({
+    db,
+    operationId: `purchase.confirmed:${String(existing._id)}`,
+    actor: buyerAddress,
+    action: 'purchase.payment_confirmed',
+    target: { type: 'purchase', id: String(existing._id) },
+    reason: 'Confirmed checkout payment',
+    before: { status: existing.status, amount: existing.amount ?? null, asset: existing.asset ?? null },
+    after: { status: purchase.status, amount: purchase.amount ?? null, asset: purchase.asset ?? null, materialId: purchase.materialId },
+    intent: { materialId, paymentCompleted: true },
+  });
   const access = await getMaterialAccessStatus(db, materialId, buyerAddress);
 
   sendReceiptIfEligible(db, existing._id).catch(err => console.error(err));
@@ -210,6 +222,20 @@ export async function POST(req) {
       throw error;
     }
     const access = await getMaterialAccessStatus(db, materialId, buyerAddress);
+
+    if (paymentCompleted) {
+      await appendCriticalMutation({
+        db,
+        operationId: `purchase.confirmed:${String(result.insertedId)}`,
+        actor: buyerAddress,
+        action: 'purchase.payment_confirmed',
+        target: { type: 'purchase', id: String(result.insertedId) },
+        reason: 'Confirmed checkout payment',
+        before: { status: null },
+        after: { status: purchaseRecord.status, amount: purchaseRecord.amount, asset: purchaseRecord.asset, materialId },
+        intent: { materialId, paymentCompleted: true, quoteId: quote?.quoteId || null },
+      });
+    }
 
     if (paymentCompleted) {
       await createEntitlement(materialId, buyerAddress, {

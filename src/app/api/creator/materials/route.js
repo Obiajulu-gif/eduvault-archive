@@ -2,7 +2,7 @@ export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 import { NextResponse } from "next/server";
-import { getUserFromCookie } from "@/lib/api/auth";
+import { requirePermission } from "@/lib/api/auth";
 import { withApiHardening } from "@/lib/api/hardening";
 import { getDb } from "@/lib/mongodb";
 import { auditLog } from "@/lib/api/audit";
@@ -21,15 +21,16 @@ export async function GET(request) {
     request,
     { route: "creator-materials", rateLimit: { limit: 60, windowMs: 60_000 } },
     async () => {
-      const user = await getUserFromCookie(request);
-      if (!user) {
-        auditLog({ event: "auth_failed", route: "creator/materials", method: "GET", status: 401 });
+      const authorization = await requirePermission(request, "creator:manage");
+      if (!authorization.ok) {
+        auditLog({ event: "auth_failed", route: "creator/materials", method: "GET", status: authorization.status });
         return errorResponse({
-          status: 401,
-          detail: "Authentication required.",
+          status: authorization.status,
+          detail: authorization.status === 401 ? "Authentication required." : "Creator access required.",
           instance: "/api/creator/materials",
         });
       }
+      const user = authorization.user;
 
       const url = new URL(request.url);
       const page = Math.max(1, parseInt(url.searchParams.get("page") || "1", 10));

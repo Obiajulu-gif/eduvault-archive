@@ -30,6 +30,15 @@ export class DualReadEntitlementProvider extends EntitlementProvider {
       };
     }
 
+    // A revoked status on the primary chain is terminal and must not be bypassed by legacy checks
+    if (primary?.state === 'REVOKED' || primary?.state === 'revoked') {
+      return {
+        ...primary,
+        source: `dual-read:${primary.source || this.primaryProvider.getChainType()}`,
+        compatibilityPath: 'soroban-primary',
+      };
+    }
+
     const legacy = await this.legacyProvider.checkAccess({
       ...params,
       chain: 'evm',
@@ -43,9 +52,18 @@ export class DualReadEntitlementProvider extends EntitlementProvider {
       };
     }
 
+    if (legacy?.state === 'REVOKED' || legacy?.state === 'revoked') {
+      return {
+        ...legacy,
+        source: `dual-read:${legacy.source || this.legacyProvider.getChainType()}`,
+        compatibilityPath: 'evm-legacy',
+        fallbackFrom: primary?.source || this.primaryProvider.getChainType(),
+      };
+    }
+
     return {
       hasAccess: false,
-      state: primary?.state || legacy?.state || 'UNLICENSED',
+      state: (primary?.state !== 'UNLICENSED' ? primary?.state : null) || legacy?.state || 'UNLICENSED',
       source: 'dual-read:none',
       primary,
       legacy,

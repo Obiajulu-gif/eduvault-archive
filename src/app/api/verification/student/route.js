@@ -3,6 +3,7 @@ import connectToDatabase from "@/lib/mongodb";
 import { validateAuth } from "@/lib/auth/session";
 import { withApiHardening } from "@/lib/api/hardening";
 import { auditLog } from "@/lib/api/audit";
+import { appendAuditRecord } from "@/lib/backend/auditLedger";
 import { validateUploadedFile } from "@/lib/ipfs/uploadValidator";
 import { pinata } from "@/lib/pinata";
 import { createQuarantineRecord } from "@/lib/publishing/quarantine";
@@ -265,6 +266,14 @@ export async function POST(request) {
           status: 201,
           reason: "pending",
           walletAddress: walletAddressLower,
+        });
+        await appendAuditRecord({
+          db,
+          operationId: `student_verif:${result.insertedId.toString()}`,
+          actor: walletAddressLower,
+          action: 'user.student_verification_submitted',
+          target: { type: 'user', id: walletAddressLower },
+          result: { status: 'pending', verificationId: result.insertedId.toString() }
         });
 
         return NextResponse.json(

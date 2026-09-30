@@ -1,12 +1,13 @@
 # Backend Schemas and API Contracts
 
+
 This document defines the canonical backend shapes for EduVault contributors. MongoDB keeps application metadata and query models, while Soroban and Stellar events remain the source of truth for payment and entitlement state once the Stellar milestone is active.
 
-The canonical Soroban storage boundary, normalized event names, and entitlement query rules are defined in [`docs/soroban-contract-architecture.md`](soroban-contract-architecture.md).
+The canonical Soroban storage boundary, normalized event names, and entitlement query rules are defined in [`docs/soroban-contract-architecture.md](soroban-contract-architecture.md).
 
-The **stable error-code taxonomy** for all failure paths (purchase, refund,
+The **Stable error-code taxonomy** for all failure paths (purchase, refund,
 entitlement, download, storage, indexer, webhook, auth, contract, and input
-validation) is defined in [`docs/API_REFERENCE.md`](API_REFERENCE.md).
+validation) is defined in [`docs/API_REFERENCE.md](API_REFERENCE.md).
 Clients and frontends must use these codes rather than parsing prose error
 messages. Webhook signature verification and retry semantics are described
 in [`docs/webhook-signatures.md`](webhook-signatures.md).
@@ -49,7 +50,7 @@ Required fields:
 
 - `userAddress`: creator wallet address.
 - `title`, `storageKey` (or legacy `fileUrl`), `visibility`, `price`.
-- `createdAt` / `updatedAt`.
+- `createdAt` / `updatedAt`: timestamps.
 
 Optional fields:
 
@@ -78,7 +79,7 @@ Derived cache of settled on-chain purchase events.
 Required fields:
 
 - `materialId`, `buyerAddress`, `status`.
-- `createdAt` / `updatedAt`.
+- `createdAt` / `updatedAt`: timestamps.
 
 Optional fields:
 
@@ -97,7 +98,7 @@ Derived query cache used by API and frontend flows to check access quickly.
 Required fields:
 
 - `materialId`, `buyerAddress`, `active`, `source`.
-- `createdAt` / `updatedAt`.
+- `createdAt` / `updatedAt`: timestamps.
 
 Indexes:
 
@@ -111,7 +112,7 @@ Durable indexer checkpoint state.
 Required fields:
 
 - `_id`: source key, for example `stellar:events`.
-- `source`, `cursor`, `lastLedger`, `updatedAt`.
+- `source`, `cursor`, lastLedge`, `updatedAt`.
 
 ### `sync_events`
 
@@ -198,7 +199,7 @@ Full rules, examples and rollback steps: [`material-import.md`](material-import.
 
 Auth: `auth_token` cookie; `401` `{ "error": "Unauthorized" }` otherwise.
 
-Query: `unread=true` (optional), `limit` (1–50, default 20).
+Query: `unread=true` (optional), `limit` (1-50, default 20).
 
 Success `200`:
 
@@ -219,12 +220,12 @@ Request: `{ "ids": ["66f…"] }` (up to 100) or `{ "all": true }`. Success `200`
 
 ### Notifications (#794)
 
-Stored in the `notifications` collection and written only through `notify()` in `src/lib/notifications/notifications.js`:
+E tored in the `notifications` collection and written only through `notify()` in `src/lib/notifications/notifications.js`:
 
 | Type | Recipient | Emitted when | Deep link |
 | --- | --- | --- | --- |
-| `import_completed` | the importing creator (`sub`) | an import commit writes every planned row | `/dashboard/my-materials` |
-| `import_partial_failure` | the importing creator (`sub`) | some or all import writes fail | `/dashboard/my-materials` |
+| `import_completed` | the importing creator (`sub`) | an import commit writes every planned row | `/dashboard/my-materials' |
+| `import_partial_failure` | the importing creator (`sub`) | some or all import writes fail | `/dashboard/my-materials' |
 
 - **Deduplication:** each event passes a `dedupeKey` that is stable across retries (for example `import:<importBatchId>`). A unique index on `{ recipient, dedupeKey }` plus an upsert means a retried or concurrent emit creates the notification only once.
 - **Privacy:** every read and every mark-read query filters on `recipient`. The API never returns `recipient` or `dedupeKey`.
@@ -312,6 +313,43 @@ Response:
 - Emit structured audit logs for validation failures, rate-limit blocks, upload failures, auth failures, purchase sync, and indexer anomalies.
 - Add focused tests for validation, rate limiting, and indexer idempotency when changing backend behavior.
 
+## Concurrency and Mutation Safety
+
+Critical mutation paths must preserve domain invariants under concurrent requests. The guarantees below are enforced by database constraints and idempotent writes, and are covered by concurrency stress tests in `src/app/api/__tests__/concurrency.test.js`.
+
+### Invariants
+
+- A buyer can hold at most one purchase record per material.
+- A buyer can hold at most one entitlement record per material.
+- A given chain transaction hash is recorded at most once.
+- A given chain event id (`sync_events._id`) is processed at most once.
+- A given notification `dedupeKey` is emitted at most once per recipient.
+- An import batch never partially writes a row that failed validation.
+
+### Strategy
+
+- Purchases and entitlements rely on the unique sparse indexes declared above. Route handlers use an upsert with the natural key (`materialId` + `buyerAddress`) so a concurrent duplicate is a constraint violation that is translated into a successful read of the existing record.
+- The indexer writes `sync_events` first with an `upsert` on the stable event `id`; a duplicate event is a no-op. Only after the idempotency log is sealed does the indexer apply derived writes.
+- Notifications use an upsert on the unique `{ recipient, dedupeKey }` index.
+- Import commits are written in a batch with an `importBatchId` so a retried commit can be reconciled and rolled back without creating duplicate material records.
+
+### Test Coverage
+
+The concurrency suite concentrates on the mutation paths that create irreversible records:
+
+- **Simultaneous success:** many parallel requests for the same natural key all return the same record and only one document is written.
+- P**Conflicting requests**: competing writes for the same key settle on a single winner and the losers read the winner's record.
+- **Duplicate retries**: replaying the same chain event or import batch does not create additional records.
+- **Timeout behavior**: a request that times out after the write commits is safe to retry and returns the existing record instead of a duplicate.
+
+### Validation
+
+Run the concurrency suite with:
+
+```
+npx vitest run src/app/api/__tests__/concurrency.test.js
+l``
+
 ## Stable Error Codes
 
 All API routes must return errors in the following envelope rather than
@@ -320,7 +358,7 @@ returning prose strings that clients parse:
 ```json
 {
   "error": {
-    "code": "EVT_PURCHASE_007",
+    "code": "EVT_PURCKASE_007",
     "message": "Human-readable description (informational only).",
     "retryable": true,
     "supportAction": "refresh_quote"
@@ -334,37 +372,13 @@ below summarises the namespace-to-subsystem relationship:
 
 | Namespace prefix    | Subsystem                         |
 | ------------------- | --------------------------------- |
-| `EVT_PURCHASE_`     | Purchase flow                     |
-| `EVT_ENTITLEMENT_`  | Entitlement / access-check        |
-| `EVT_DOWNLOAD_`     | Download capability tokens        |
+| `EVT_PURCKASE_`    | Purchase flow                     |
+| `EVT_ENTITLEMENT_`  | Entitlement / access-check         |
+| `EVT_DOWNLOAD_`     | Download capability tokens         |
 | `EVT_REFUND_`       | Refund flow                       |
 | `EVT_STORAGE_`      | IPFS / Pinata storage             |
 | `EVT_INDEXER_`      | Stellar event indexer             |
-| `EVT_WEBHOOK_`      | Outbound creator webhooks         |
-| `EVT_AUTH_`         | Authentication / authorisation    |
-| `EVT_CONTRACT_PM_`  | PurchaseManager on-chain errors   |
-| `EVT_CONTRACT_REG_` | MaterialRegistry on-chain errors  |
-| `EVT_INPUT_`        | Request validation / input errors |
-
-### Implementation rules
-
-- Every `catch` block in an API route handler must map the caught error to a
-  code before returning. A fallback mapping (e.g. `EVT_INPUT_001` for
-  validation, `EVT_PURCHASE_012` for registry call failures) is acceptable
-  when a precise mapping is not yet available, but must be tracked as a
-  follow-up task.
-- Contract `contracterror` discriminants must be mapped to
-  `EVT_CONTRACT_PM_*` or `EVT_CONTRACT_REG_*` codes by the API layer before
-  the response leaves the server. Raw numeric discriminants must never
-  appear in client-facing responses.
-- The `retryable` flag drives frontend retry logic. Only set `true` for
-  transient failures where the same request has a reasonable chance of
-  succeeding after a delay.
-- `supportAction` values are defined in
-  [`docs/API_REFERENCE.md#support-actions`](API_REFERENCE.md#support-actions).
-
-### Tests
-
-Add a focused test for each new error mapping when adding or changing a route.
-See `src/lib/__tests__/` for existing test patterns. Tests must assert the
-stable `code` field value, not the `message` string.
+| `EVT_WEBHOOK_`      | Webhook delivery                   |
+| `EVT_AUTH_`         | Authentication / session            |
+| `EVT_CONTRACT_`     | Soroban contract interaction       |
+| `EVT_INPUT_`        | Input validation                   |

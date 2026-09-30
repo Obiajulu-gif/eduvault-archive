@@ -184,6 +184,10 @@ All event payloads follow a common envelope:
 | `timestamp`  | `number` | Unix epoch seconds matching `X-EduVault-Timestamp`.      |
 | `data`       | `object` | Event-specific payload.                                  |
 
+The envelope and every nested `data` object must be serialized canonically
+before hashing, signing, or comparison. See
+[Canonical Serialization](#canonical-serialization).
+
 ---
 
 ## Event Types
@@ -302,6 +306,50 @@ Fired when a creator updates a material's price or payout configuration.
 ```
 
 ---
+
+## Canonical Serialization
+
+Payloads that are hashed, signed, compared, or verified must be serialized
+canonically so that equivalent payloads always produce identical bytes. This
+applies to webhook signing inputs, `metadataHash` / `rightsHash` values, and
+any payload stored or re-verified by EduVault.
+
+### Rules
+
+1. **UTF-8 encoding.** All strings are encoded as UTF-8. No BOM.
+
+2. **Object key ordering.** Object keys are sorted by Unicode code point
+   (lexicographic, ascending) at every nesting level. Arrays preserve their
+   original order.
+
+3. **No insignificant whitespace.** No spaces, tabs, or newlines between
+   tokens. Separators are exactly `,` and `:`.
+
+4. **String normalization.** Strings are normalized to Unicode NFC. Control
+   characters are escaped using the shortest valid JSON escape (`\n`, `\t`,
+   `\"`, `\\`, `\u00XX`). Non-ASCII characters are emitted as literal UTF-8,
+   not `\u` escapes.
+
+5. **Key casing.** Keys are case-sensitive and preserved as-is. Duplicate
+   keys (case-insensitive collision) are rejected with `EVT_WEBHOOK_009`.
+
+6. **Numeric precision.**
+   - Integers are emitted without a decimal point or exponent.
+   - Decimal values are emitted with at most 18 significant digits, trailing
+     zeros trimmed, and no exponent notation.
+   - Monetary amounts are represented as **decimal strings** (as in the
+     payload examples) and are never coerced to floating point.
+   - `NaN`, `Infinity`, and `-Infinity` are rejected with `EVT_WEBHOOK_009`.
+
+7. **Null and booleans.** Emitted as `null`, `true`, `false`.
+
+8. **Absent vs. null.** Absent keys are omitted. Explicit `null` is preserved
+   and emitted as `null`. These are distinct canonical outputs.
+
+### Canonical Example
+
+Given this non-canonical input:
+
 
 ## Retry Policy
 
