@@ -1,4 +1,5 @@
 // @vitest-environment node
+// @vitest-environment node
 //
 // #793: contract drift tests. Real route handlers run against Mongo
 // (mongodb-memory-server via vitest globalSetup) and every response body is
@@ -6,6 +7,7 @@
 // Removing or retyping a documented field, or changing a status code without
 // updating the spec, fails here.
 import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from 'vitest';
+import { readFileSync } from 'node:fs';
 import { readFileSync } from 'node:fs';
 import { parse } from 'yaml';
 import { Collection } from 'mongodb';
@@ -15,6 +17,7 @@ const { currentUser } = vi.hoisted(() => ({ currentUser: { value: null } }));
 vi.mock('@/lib/api/auth', () => ({ getUserFromCookie: vi.fn(async () => currentUser.value) }));
 vi.mock('@/lib/api/hardening', () => ({ withApiHardening: vi.fn((req, options, handler) => handler()) }));
 vi.mock('@/lib/api/audit', () => ({ auditLog: vi.fn() }));
+vi.mock('@/lib/api/audit', () => ({ auditLog: vi.fn() }));
 vi.mock('@/lib/cache/redis', () => ({ invalidateCatalogCache: vi.fn() }));
 
 import { getDb } from '@/lib/mongodb';
@@ -22,6 +25,7 @@ import { REQUIRED_INDEXES } from '@/lib/backend/schemaContracts';
 import { POST as importMaterials } from '../materials/import/route';
 import { GET as listNotifications, PATCH as markRead } from '../notifications/route';
 
+const spec = parse(readFileSync(new URL('../../../../docs/openapi.yaml', import.meta.url), 'utf8'));
 const spec = parse(readFileSync(new URL('../../../../docs/openapi.yaml', import.meta.url), 'utf8'));
 
 function resolve(schema) {
@@ -31,6 +35,7 @@ function resolve(schema) {
 }
 
 function typeOf(value) {
+function typeOf(value) {
   if (value === null) return 'null';
   if (Array.isArray(value)) return 'array';
   if (Number.isInteger(value)) return 'integer';
@@ -38,6 +43,7 @@ function typeOf(value) {
 }
 
 // Minimal JSON Schema subset used by the spec: $ref, allOf, oneOf, type
+// (incl. arrays), required, properties, items, enum.
 // (incl. arrays), required, properties, items, enum.
 function validate(value, rawSchema, path = '$') {
   const schema = resolve(rawSchema);
@@ -48,6 +54,7 @@ function validate(value, rawSchema, path = '$') {
     return results.some((r) => r.length === 0) ? [] : [`${path}: matches no oneOf branch (${results.flat().join('; ')})`];
   }
   const errors = [];
+  const errors = [];
   if (schema.type) {
     const allowed = [].concat(schema.type);
     const actual = typeOf(value);
@@ -55,6 +62,7 @@ function validate(value, rawSchema, path = '$') {
       return [`${path}: expected ${allowed.join('|')}, got ${actual}`];
     }
   }
+  if (schema.enum && !schema.enum.includes(value)) errors.push(`${path}: ${JSON.stringify(value)} not in enum`);
   if (schema.enum && !schema.enum.includes(value)) errors.push(`${path}: ${JSON.stringify(value)} not in enum`);
   if (value && typeof value === 'object' && !Array.isArray(value)) {
     for (const key of schema.required || []) {
@@ -65,6 +73,7 @@ function validate(value, rawSchema, path = '$') {
     }
   }
   if (Array.isArray(value) && schema.items) {
+  if (Array.isArray(value) && schema.items) {
     value.forEach((item, i) => errors.push(...validate(item, schema.items, `${path}[${i}]`)));
   }
   return errors;
@@ -72,6 +81,7 @@ function validate(value, rawSchema, path = '$') {
 
 async function expectContract(res, route, method) {
   const operation = spec.paths[route][method];
+  const documented = operation.responses[String(res.status)];
   const documented = operation.responses[String(res.status)];
   expect(documented, `${method.toUpperCase()} ${route} returned undocumented status ${res.status}`).toBeDefined();
   const body = await res.json();
@@ -81,6 +91,7 @@ async function expectContract(res, route, method) {
 }
 
 const jsonRequest = (url, method, body) => new Request(`http://localhost${url}`, {
+const jsonRequest = (url, method, body) => new Request(`http://localhost${url}`, {
   method,
   headers: { 'Content-Type': 'application/json' },
   body: body === undefined ? undefined : JSON.stringify(body),
@@ -88,6 +99,7 @@ const jsonRequest = (url, method, body) => new Request(`http://localhost${url}`,
 
 const runImport = (body) => importMaterials(jsonRequest('/api/materials/import', 'POST', body));
 
+let db;
 let db;
 let userAddress;
 
@@ -110,6 +122,7 @@ afterEach(() => {
 });
 
 const records = [
+const records = [
   { externalId: 'ext-1', title: 'Algebra notes', storageKey: 'ipfs://algebra', price: 2 },
   { externalId: 'ext-2', title: 'Physics notes', storageKey: 'ipfs://physics' },
 ];
@@ -117,6 +130,7 @@ const records = [
 describe('POST /api/materials/import contract', () => {
   it('dry run returns the plan and performs no persistent writes', async () => {
     const writeMethods = ['insertOne', 'insertMany', 'updateOne', 'updateMany', 'bulkWrite', 'replaceOne', 'deleteOne', 'deleteMany', 'findOneAndUpdate'];
+    const spies = writeMethods.map((m) => vi.spyOn(Collection.prototype, m));
     const spies = writeMethods.map((m) => vi.spyOn(Collection.prototype, m));
 
     const res = await runImport({ dryRun: true, records });
