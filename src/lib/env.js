@@ -20,28 +20,16 @@ const PLACEHOLDERS = new Set([
 
 /**
  * A Soroban contract ID is a 56-char Stellar address beginning with C
- * (e.g. CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADWKM).
- * Anything else — a placeholder, a 0x address, a truncated value — cannot
- * possibly be a deployed contract, so it must fail fast rather than surface
- * as a confusing runtime error deep in a contract call.
  */
 const CONTRACT_ID_PATTERN = /^C[A-Z0-9]{55}$/;
 
-/**
- * True when `value` is missing, blank, or still carrying a placeholder
- * token. This is deliberately strict: a deployment that "works" with a
- * placeholder secret is one that cannot authenticate anything, and failing
- * at startup is cheaper than failing mid-request (#678).
- */
 function isPlaceholder(value) {
   return typeof value !== "string" || PLACEHOLDERS.has(value.trim());
 }
 
-/** True when `value` does not look like a deployed Soroban contract ID. */
-function isInvalidContractId(value) {
-  return typeof value !== "string" || !CONTRACT_ID_PATTERN.test(value.trim());
-}
-
+/**
+ * Validates a value is not a placeholder
+ */
 function required(name, value, errors, { productionOnly = false } = {}) {
   if (productionOnly && process.env.NODE_ENV !== "production") {
     return;
@@ -50,6 +38,13 @@ function required(name, value, errors, { productionOnly = false } = {}) {
   if (isPlaceholder(value)) {
     errors.push(`${name} is missing or still set to a placeholder value.`);
   }
+}
+
+/**
+ * True when `value` does not look like a deployed Soroban contract ID.
+ */
+function isInvalidContractId(value) {
+  return typeof value !== "string" || !CONTRACT_ID_PATTERN.test(value.trim());
 }
 
 function optionalWhenEnabled(name, value, errors, enabled, { productionOnly = false } = {}) {
@@ -68,21 +63,38 @@ function requiredWhenSet(name, value, errors, dependencyValue, { productionOnly 
   }
 }
 
-/**
- * Checks a configured contract ID is well-formed. Applies in every
- * environment the check runs in (not just production), because a malformed ID
- * breaks local development too — there is no dev-only way to make a bad
- * contract ID work.
- */
 function validContractId(name, value, errors) {
   if (isPlaceholder(value)) return;
   if (isInvalidContractId(value)) {
     errors.push(
-      `${name} (${value}) is not a valid Soroban contract ID — expected a 56-character C-prefixed Stellar address.`
+      `${name} is not a valid Soroban contract ID — expected a 56-character C-prefixed Stellar address.`
     );
   }
 }
 
+/**
+ * @typedef {Object} EnvSchema
+ * @property {string} [NODE_ENV]
+ * @property {string} [CI]
+ * @property {string} [NEXT_PUBLIC_APP_URL]
+ * @property {string} [MONGODB_URI]
+ * @property {string} [JWT_SECRET]
+ * @property {string} [PINATA_JWT]
+ * @property {string} [NEXT_PUBLIC_GATEWAY_URL]
+ * @property {string} [NEXT_PUBLIC_MATERIAL_REGISTRY_CONTRACT_ID]
+ * @property {string} [NEXT_PUBLIC_PURCHASE_MANAGER_CONTRACT_ID]
+ * @property {string} [NEXT_PUBLIC_SOROBAN_CONTRACT_ID]
+ * @property {string} [NEXT_PUBLIC_STELLAR_RPC_URL]
+ * @property {string} [NEXT_PUBLIC_HORIZON_URL]
+ * @property {string} [STELLAR_WEBHOOK_SECRET]
+ * @property {string} [CRON_SECRET]
+ * @property {string} [WEBHOOK_URL]
+ */
+
+/**
+ * Validates the runtime environment against our typed schema rules.
+ * @returns {string[]} Array of actionable error messages.
+ */
 export function validateRuntimeEnv() {
   const errors = [];
   const production = process.env.NODE_ENV === "production";
@@ -98,9 +110,6 @@ export function validateRuntimeEnv() {
   const sorobanContract = process.env.NEXT_PUBLIC_SOROBAN_CONTRACT_ID;
   const hasContract = Boolean(materialContract || purchaseContract || sorobanContract);
 
-  // Any configured contract ID must be well-formed. This runs before the
-  // "required when enabled" checks below so a broken ID is reported as a
-  // format problem, not silently treated as "set".
   validContractId("NEXT_PUBLIC_MATERIAL_REGISTRY_CONTRACT_ID", materialContract, errors);
   validContractId("NEXT_PUBLIC_PURCHASE_MANAGER_CONTRACT_ID", purchaseContract, errors);
   validContractId("NEXT_PUBLIC_SOROBAN_CONTRACT_ID", sorobanContract, errors);
@@ -135,18 +144,13 @@ export function validateRuntimeEnv() {
     { productionOnly: production }
   );
 
-  // Webhook integrity secrets (#678). The Stellar indexer and scheduled jobs
-  // authenticate via these; a placeholder or missing secret means anyone can
-  // forge a webhook delivery. In production the secret must be present and
-  // strong; in local development a value is only enforced when the secret is
-  // actually relied on (webhooks or cron are configured).
-  const webhookSecret =
-    process.env.STELLAR_WEBHOOK_SECRET || process.env.CRON_SECRET;
+  const webhookSecret = process.env.STELLAR_WEBHOOK_SECRET || process.env.CRON_SECRET;
   const webhooksEnabled = Boolean(
     process.env.WEBHOOK_URL ||
-      process.env.STELLAR_WEBHOOK_SECRET ||
-      process.env.CRON_SECRET
+    process.env.STELLAR_WEBHOOK_SECRET ||
+    process.env.CRON_SECRET
   );
+
   optionalWhenEnabled(
     "STELLAR_WEBHOOK_SECRET (or CRON_SECRET)",
     webhookSecret,
@@ -157,9 +161,7 @@ export function validateRuntimeEnv() {
 
   if (production) {
     if (webhooksEnabled && isPlaceholder(webhookSecret)) {
-      errors.push(
-        "STELLAR_WEBHOOK_SECRET (or CRON_SECRET) is required in production when webhooks are enabled."
-      );
+      errors.push("STELLAR_WEBHOOK_SECRET (or CRON_SECRET) is required in production when webhooks are enabled.");
     }
 
     if (webhookSecret && webhookSecret.length < 32) {
@@ -173,20 +175,22 @@ export function validateRuntimeEnv() {
     if (process.env.MONGODB_URI && process.env.MONGODB_URI.includes("localhost")) {
       errors.push("MONGODB_URI must point at a production database in production deployments.");
     }
+  } else {
+    // Fails fast when accidentally using production-like secrets in local mode
+    if (process.env.MONGODB_URI && process.env.MONGODB_URI.includes("mongodb+srv://")) {
+      errors.push("Local mode should not use a production MongoDB URI (mongodb+srv://).");
+    }
+
+    if (process.env.PINATA_JWT && process.env.PINATA_JWT.startsWith("eyJ")) {
+      errors.push("Local mode is using a real Pinata JWT. Please use a local mock or a dedicated test token.");
+    }
   }
 
   return errors;
 }
 
-/**
- * Throws with every environment error when the process must not start.
- *
- * The check is skipped under CI so automated jobs that exercise build steps
- * (and therefore this module) can run without a full production .env — the
- * strictness belongs to deployments, not to CI scaffolding.
- */
 export function assertRuntimeEnv() {
-  if (process.env.CI === "true") {
+  if (process.env.CI === "true" || process.env.NODE_ENV === "test") {
     return;
   }
 

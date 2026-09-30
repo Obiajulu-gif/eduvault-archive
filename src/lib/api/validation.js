@@ -189,6 +189,24 @@ export function validateMaterialPayload(body) {
     level = normalized.id;
   }
 
+  // #888: a derived record names the source it descends from. Accepts either a
+  // bare material id string or `{ materialId, externalId, relation }`.
+  let derivedFrom = null;
+  if (body?.derivedFrom) {
+    const raw = typeof body.derivedFrom === "string" ? { materialId: body.derivedFrom } : body.derivedFrom;
+    const materialId = sanitizeString(raw?.materialId, { maxLength: 64 });
+    const externalId = sanitizeString(raw?.externalId, { maxLength: 128 });
+    const relation = sanitizeString(raw?.relation, { maxLength: 60 });
+    if (!materialId && !externalId) {
+      throw new ValidationError("derivedFrom requires a materialId or externalId", { field: "derivedFrom" });
+    }
+    derivedFrom = {
+      materialId: materialId || null,
+      externalId: externalId || null,
+      relation: relation || null,
+    };
+  }
+
   return {
     title,
     description: sanitizeString(body?.description, { maxLength: 5000 }),
@@ -219,6 +237,7 @@ export function validateMaterialPayload(body) {
       maxItems: 5,
       maxLength: 2048,
     }),
+    derivedFrom,
     storageKey,
     fileUrl: storageKey,
   };
@@ -311,6 +330,15 @@ export function validateMaterialUpdatePayload(body) {
 export function validateChangeReason(reason) {
   if (!reason) return null;
   return sanitizeString(reason, { maxLength: 500 });
+}
+
+export function validateExpectedVersion(version) {
+  if (version === undefined || version === null || version === "") return null;
+  const num = Number(version);
+  if (!Number.isInteger(num) || num < 1) {
+    throw new ValidationError("Invalid expectedVersion: must be a positive integer", { field: "version" });
+  }
+  return num;
 }
 
 export function validateDateRangeQuery(searchParams, { maxRangeDays = 366, defaultRangeDays = 30 } = {}) {

@@ -349,6 +349,119 @@ components:
           type: string
           format: date-time
 
+    IncidentInput:
+      type: object
+      description: Inputs for the incident impact calculator.
+      required: [incidentId, window]
+      properties:
+        incidentId:
+          type: string
+          description: Stable identifier for the incident being assessed.
+        window:
+          type: object
+          required: [start, end]
+          properties:
+            start:
+              type: string
+              format: date-time
+            end:
+              type: string
+              format: date-time
+        affectedUsers:
+          type: array
+          description: Wallet addresses of users believed to be affected.
+          items:
+            type: string
+        affectedRecords:
+          type: array
+          description: Material ids believed to be affected.
+          items:
+            type: string
+        affectedOperations:
+          type: array
+          description: Operation types that were disrupted.
+          items:
+            type: string
+            enum: [purchase, import, download, entitlement]
+        severity:
+          type: string
+          enum: [low, medium, high, critical]
+        redact:
+          type: boolean
+          default: true
+          description: When true, return the shareable view with sensitive details redacted.
+
+    IncidentImpactSummary:
+      type: object
+      required: [users, records, operations, severity]
+      properties:
+        users:
+          type: integer
+        records:
+          type: integer
+        operations:
+          type: integer
+        severity:
+          type: string
+          enum: [low, medium, high, critical]
+
+    IncidentImpactResult:
+      type: object
+      required: [incidentId, window, summary, internal, shareable]
+      properties:
+        incidentId:
+          type: string
+        window:
+          type: object
+          required: [start, end]
+          properties:
+            start:
+              type: string
+              format: date-time
+            end:
+              type: string
+              format: date-time
+        summary:
+          $ref: "#/components/schemas/IncidentImpactSummary"
+        internal:
+          type: object
+          description: Full detail for maintainers. Only included when redact is false.
+          properties:
+            affectedUsers:
+              type: array
+              items:
+                type: string
+            affectedRecords:
+              type: array
+              items:
+                type: string
+            affectedOperations:
+              type: array
+              items:
+                type: string
+        shareable:
+          type: object
+          description: Redacted view safe for external communication.
+          required: [incidentId, window, summary]
+          properties:
+            incidentId:
+              type: string
+            window:
+              type: object
+              required: [start, end]
+              properties:
+                start:
+                  type: string
+                  format: date-time
+                end:
+                  type: string
+                  format: date-time
+            summary:
+              $ref: "#/components/schemas/IncidentImpactSummary"
+            note:
+              type: string
+              description: Human-readable explanation of the redaction.
+
   responses:
     Unauthorized:
       description: Not authenticated
@@ -363,7 +476,7 @@ components:
           schema:
             $ref: "#/components/schemas/Error"
     RateLimited:
-      description: Too many requests
+      description: Toot many requests
       content:
         application/json:
           schema:
@@ -375,7 +488,7 @@ security:
 paths:
   # ---------------------------------------------------------------------------
   # Materials
-  # ---------------------------------------------------------------------------
+  # --------------------------------------------------------------------------
   /api/materials:
     get:
       summary: List the authenticated user's materials
@@ -475,347 +588,28 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/MaterialImportCommitResponse"
-        "400":
-          description: Invalid or duplicate rows (plan included, nothing written), or a malformed payload
+
+  /api/incidents/impact:
+    post:
+      summary: Calculate incident impact across users, records, operations, and time windows
+      operationId: calculateIncidentImpact
+      tags: [Incidents]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/IncidentInput"
+      responses:
+        "200":
+          description: Deterministic impact report with internal and shareable fields.
           content:
             application/json:
               schema:
-                oneOf:
-                  - $ref: "#/components/schemas/MaterialImportResponse"
-                  - $ref: "#/components/schemas/Error"
+                $ref: "#/components/schemas/IncidentImpactResult"
+        "400":
+          $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "429":
           $ref: "#/components/responses/RateLimited"
-
-  # ---------------------------------------------------------------------------
-  # Notifications
-  # ---------------------------------------------------------------------------
-  /api/notifications:
-    get:
-      summary: List the caller's notifications, newest first
-      operationId: listNotifications
-      tags: [Notifications]
-      security:
-        - cookieAuth: []
-      parameters:
-        - name: unread
-          in: query
-          schema:
-            type: boolean
-        - name: limit
-          in: query
-          schema:
-            type: integer
-            minimum: 1
-            maximum: 50
-            default: 20
-      responses:
-        "200":
-          description: Notifications and unread count
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/NotificationList"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-        "429":
-          $ref: "#/components/responses/RateLimited"
-    patch:
-      summary: Mark the caller's notifications read
-      operationId: markNotificationsRead
-      tags: [Notifications]
-      security:
-        - cookieAuth: []
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                ids:
-                  type: array
-                  maxItems: 100
-                  items:
-                    type: string
-                all:
-                  type: boolean
-      responses:
-        "200":
-          description: Number of notifications changed to read
-          content:
-            application/json:
-              schema:
-                type: object
-                required: [updated]
-                properties:
-                  updated:
-                    type: integer
-        "400":
-          $ref: "#/components/responses/BadRequest"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-
-  # ---------------------------------------------------------------------------
-  # Market materials (public browse)
-  # ---------------------------------------------------------------------------
-  /api/market-materials:
-    get:
-      summary: Browse publicly listed materials
-      operationId: browseMarketMaterials
-      tags: [Market]
-      security: []
-      parameters:
-        - name: category
-          in: query
-          schema:
-            type: string
-        - name: cursor
-          in: query
-          description: Pagination cursor (MongoDB ObjectId of the last seen item)
-          schema:
-            type: string
-        - name: limit
-          in: query
-          schema:
-            type: integer
-            default: 20
-            minimum: 1
-            maximum: 100
-      responses:
-        "200":
-          description: Paginated list of materials
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  items:
-                    type: array
-                    items:
-                      $ref: "#/components/schemas/Material"
-                  nextCursor:
-                    type: string
-                    nullable: true
-
-  # ---------------------------------------------------------------------------
-  # Upload
-  # ---------------------------------------------------------------------------
-  /api/upload:
-    post:
-      summary: Upload a material file to Pinata / IPFS
-      operationId: uploadMaterialFile
-      tags: [Upload]
-      requestBody:
-        required: true
-        content:
-          multipart/form-data:
-            schema:
-              type: object
-              properties:
-                file:
-                  type: string
-                  format: binary
-              required: [file]
-      responses:
-        "200":
-          description: Upload successful — returns the IPFS / gateway URL
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  url:
-                    type: string
-                    format: uri
-                  cid:
-                    type: string
-        "400":
-          $ref: "#/components/responses/BadRequest"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-
-  # ---------------------------------------------------------------------------
-  # Purchase
-  # ---------------------------------------------------------------------------
-  /api/purchase:
-    get:
-      summary: List the authenticated user's purchases
-      operationId: listPurchases
-      tags: [Purchase]
-      responses:
-        "200":
-          description: Purchase history
-          content:
-            application/json:
-              schema:
-                type: array
-                items:
-                  $ref: "#/components/schemas/Purchase"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-
-    post:
-      summary: Record a material purchase after on-chain payment
-      operationId: recordPurchase
-      tags: [Purchase]
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                materialId:
-                  type: string
-                signedXdr:
-                  type: string
-                email:
-                  type: string
-              required: [materialId]
-      responses:
-        "201":
-          description: Purchase recorded
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Purchase"
-        "200":
-          description: Existing purchase returned when the buyer already owns the material
-          content:
-            application/json:
-              schema:
-                type: object
-        "400":
-          $ref: "#/components/responses/BadRequest"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-
-  /api/transactions/history:
-    get:
-      summary: Aggregate account purchase and Stellar transaction history
-      operationId: listTransactionHistory
-      tags: [Purchase]
-      parameters:
-        - name: page
-          in: query
-          schema:
-            type: integer
-            default: 1
-            minimum: 1
-        - name: limit
-          in: query
-          schema:
-            type: integer
-            default: 20
-            minimum: 1
-            maximum: 100
-      responses:
-        "200":
-          description: Paginated merged history from MongoDB and Horizon
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  page:
-                    type: integer
-                  limit:
-                    type: integer
-                  hasMore:
-                    type: boolean
-                  totals:
-                    type: object
-                    properties:
-                      purchases:
-                        type: integer
-                  records:
-                    type: array
-                    items:
-                      type: object
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-
-  # ---------------------------------------------------------------------------
-  # Entitlements
-  # ---------------------------------------------------------------------------
-  /api/entitlements:
-    get:
-      summary: List materials the authenticated user is entitled to download
-      operationId: listEntitlements
-      tags: [Entitlements]
-      responses:
-        "200":
-          description: List of entitlements
-          content:
-            application/json:
-              schema:
-                type: array
-                items:
-                  $ref: "#/components/schemas/Entitlement"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-
-  # ---------------------------------------------------------------------------
-  # User profile
-  # ---------------------------------------------------------------------------
-  /api/profile:
-    get:
-      summary: Get the authenticated user's profile
-      operationId: getProfile
-      tags: [Profile]
-      responses:
-        "200":
-          description: User profile
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/UserProfile"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-
-    patch:
-      summary: Update the authenticated user's profile
-      operationId: updateProfile
-      tags: [Profile]
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                displayName:
-                  type: string
-                  maxLength: 80
-                bio:
-                  type: string
-                  maxLength: 500
-                institution:
-                  type: string
-                country:
-                  type: string
-                twitterUrl:
-                  type: string
-                githubUrl:
-                  type: string
-                websiteUrl:
-                  type: string
-                payoutWalletAddress:
-                  type: string
-                preferredPayoutCurrency:
-                  type: string
-                payoutNotes:
-                  type: string
-      responses:
-        "200":
-          description: Updated profile
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/UserProfile"
-        "400":
-          $ref: "#/components/responses/BadRequest"
-        "401":
-          $ref: "#/components/responses/Unauthorized"

@@ -1,4 +1,4 @@
-// Admin API for storage health and maintenance jobs (#738, #739, #741)
+// Admin API for storage health and maintenance jobs (#738, #739, #741, #742)
 import { NextResponse } from 'next/server'
 import { auditLog } from '@/lib/api/audit'
 import { withApiHardening } from '@/lib/api/hardening'
@@ -7,6 +7,7 @@ import { getDb } from '@/lib/mongodb'
 import { runPinVerificationWorker, runRepairActions } from '@/lib/workers/pinVerificationWorker'
 import { runGarbageCollectionWorker, getGarbageCollectionStatus, estimateStorageRecovery } from '@/lib/workers/garbageCollectionWorker'
 import { runIntegrityVerificationWorker, getIntegrityHealthReport } from '@/lib/workers/integrityVerificationWorker'
+import { runStaleCacheRepairWorker, DERIVED_REGISTRY } from '@/lib/workers/staleCacheRepairWorker'
 
 export const dynamic = 'force-dynamic'
 
@@ -59,7 +60,7 @@ export async function POST(request) {
           const db = await getDb()
           const result = await runRepairActions(db, options.maxRepairs || 10)
 
-          auditLog({
+          auditLog( {
             event: 'storage_job_completed',
             route: 'admin/storage-jobs',
             method: 'POST',
@@ -71,7 +72,7 @@ export async function POST(request) {
         }
 
         if (action === 'garbage-collection') {
-          auditLog({
+          auditLog( {
             event: 'storage_job_started',
             route: 'admin/storage-jobs',
             method: 'POST',
@@ -97,7 +98,7 @@ export async function POST(request) {
         }
 
         if (action === 'verify-integrity') {
-          auditLog({
+          auditLog( {
             event: 'storage_job_started',
             route: 'admin/storage-jobs',
             method: 'POST',
@@ -122,12 +123,37 @@ export async function POST(request) {
           return NextResponse.json({ success: true, job: 'verify_integrity', ...result })
         }
 
+        if (action === 'repair-stale-cache') {
+          auditLog({
+            event: 'storage_job_started',
+            route: 'admin/storage-jobs',
+            method: 'POST',
+            job: 'repair_stale_cache',
+          })
+
+          const result = await runStaleCacheRepairWorker({
+            dryRun: options.dryRun !== false,
+            limit: options.limit || 200,
+            configNames: options.configNames,
+          })
+
+          auditLog({
+            event: 'storage_job_completed',
+            route: 'admin/storage-jobs',
+            method: 'POST',
+            job: 'repair_stale_cache',
+            result: result.success,
+          })
+
+          return NextResponse.json({ success: true, job: 'repair_stale_cache', ...result })
+        }
+
         return NextResponse.json(
           { error: 'Unknown action' },
           { status: 400 }
         )
       } catch (error) {
-        auditLog({
+        auditLog( {
           event: 'storage_job_error',
           route: 'admin/storage-jobs',
           method: 'POST',
@@ -179,6 +205,14 @@ export async function GET(request) {
           return NextResponse.json({ success: true, status: 'integrity', ...result })
         }
 
+        if (query === 'stale-cache-configs') {
+          return NextResponse.json({
+            success: true,
+            status: 'stale_cache_configs',
+            configs: Object.keys(DERIVED_REGISTRY),
+          })
+        }
+
         return NextResponse.json({
           success: true,
           status: 'all',
@@ -187,6 +221,7 @@ export async function GET(request) {
             'gc-status',
             'gc-estimate',
             'integrity-health',
+            'stale-cache-configs',
           ],
           message: 'Append ?status=<query> to get specific status',
         })

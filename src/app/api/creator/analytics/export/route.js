@@ -42,48 +42,51 @@ export async function GET(request) {
       .sort({ createdAt: -1 })
       .toArray();
 
-    // 4. Combine and format records
-    const records = [];
+    // 4. Aggregate creator-owned financial records by safe dimensions. Do not
+    // export buyer identifiers or a per-learner transaction trail.
+    const buckets = new Map();
+    const addToBucket = (record) => {
+      const key = [record.date, record.itemId, record.paidAsset, record.status].join("\u0000");
+      const current = buckets.get(key) || { ...record, transactionCount: 0, totalAmount: 0 };
+      current.transactionCount += 1;
+      current.totalAmount += Number(record.amount) || 0;
+      buckets.set(key, current);
+    };
 
-    // Map purchases
     for (const p of purchases) {
-      const date = new Date(p.purchasedAt || p.createdAt || p.updatedAt || 0).toISOString();
-      records.push({
-        date,
+      addToBucket({
+        date: new Date(p.purchasedAt || p.createdAt || p.updatedAt || 0).toISOString().slice(0, 10),
         itemId: String(p.materialId || "Unknown"),
-        buyerWallet: String(p.buyerAddress || "Unknown"),
-        price: p.amount || 0,
+        amount: p.amount,
         paidAsset: p.currency || "XLM",
-        status: p.status || "completed"
+        status: p.status || "completed",
       });
     }
 
-    // Map payouts
     for (const p of payouts) {
-      const date = new Date(p.createdAt || p.updatedAt || 0).toISOString();
-      records.push({
-        date,
+      addToBucket({
+        date: new Date(p.createdAt || p.updatedAt || 0).toISOString().slice(0, 10),
         itemId: "Payout",
-        buyerWallet: "EduVault",
-        price: `-${p.amount || 0}`,
+        amount: -(Number(p.amount) || 0),
         paidAsset: p.currency || "XLM",
-        status: p.status || "completed"
+        status: p.status || "completed",
       });
     }
+    const records = [...buckets.values()];
 
     // Sort combined records by date descending
     records.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
 
     // 5. Generate CSV
-    const headers = ["Date", "Item ID", "Buyer Wallet", "Price", "Paid Asset", "Status"];
+    const headers = ["Date", "Item ID", "Transaction Count", "Total Amount", "Paid Asset", "Status"];
     const csvRows = [headers.join(",")];
 
     for (const r of records) {
       const row = [
         r.date,
         `"${r.itemId}"`,
-        `"${r.buyerWallet}"`,
-        r.price,
+        r.transactionCount,
+        r.totalAmount,
         r.paidAsset,
         r.status
       ];

@@ -11,6 +11,7 @@ import { sanitizeRichText, isSafeUrl } from '@/lib/api/contentSanitizer'
 import { guardZipArchiveUpload } from '@/lib/backend/archiveUploadGuard'
 import { validateUploadedFile, detectExecutableExtension } from '@/lib/ipfs/uploadValidator'
 import { createQuarantineRecord } from '@/lib/publishing/quarantine'
+import { consumeActorQuota } from '@/lib/quotaManager'
 import { enqueueSideEffect } from '@/lib/backend/outbox'
 import { getDb } from '@/lib/mongodb'
 import { processThumbnail, ThumbnailProcessingError } from '@/lib/upload/processThumbnail'
@@ -189,11 +190,21 @@ export async function POST(request) {
 
         const results = {}
         const db = await getDb()
+        const uploaderAddress = request.headers.get('x-wallet-address') || 'anonymous'
+        const totalSize = file.size + (image?.size || 0)
+        
         try {
-          await assertStorageCapacity(db, file.size + (image?.size || 0))
+          await assertStorageCapacity(db, totalSize)
         } catch (quotaError) {
           auditLog({ event: 'upload_paused', route: 'upload', method: 'POST', status: 503, reason: 'storage_quota_exhausted' })
           return NextResponse.json({ error: quotaError.message, retryable: true }, { status: 503 })
+        }
+        
+        try {
+          await consumeActorQuota(db, uploaderAddress, 'storage', totalSize)
+        } catch (quotaError) {
+          auditLog({ event: 'upload_failed', route: 'upload', method: 'POST', status: 429, reason: 'user_storage_quota_exceeded' })
+          return NextResponse.json({ error: quotaError.message }, { status: 429 })
         }
         const pinningProviders = getPinningProviders()
 
@@ -224,7 +235,6 @@ export async function POST(request) {
           // unavailable the record stays pending (fail-closed) and the material
           // remains hidden rather than being published unsafely.
           try {
-            const uploaderAddress = request.headers.get('x-wallet-address') || 'anonymous'
             const quarantine = await createQuarantineRecord({
               db,
               contentHash: uploadedFile.cid,

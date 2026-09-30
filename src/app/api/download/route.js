@@ -226,6 +226,7 @@ export async function GET(request) {
       headers: { accept: request.headers.get('accept') || '' },
       dwellMs: 1000,
       interactionCount: 1,
+      source: 'server-confirmed',
     }),
   });
 
