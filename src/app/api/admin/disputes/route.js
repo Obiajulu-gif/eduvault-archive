@@ -4,6 +4,7 @@ export const runtime = "nodejs";
 import { NextResponse } from "next/server";
 import { getDb } from "@/lib/mongodb";
 import { verifyDashboardToken } from "@/lib/auth/session";
+import { canonicalize } from "@/lib/canonical";
 
 async function getAdminUser(request) {
   const cookieHeader = request.headers.get("cookie") || "";
@@ -14,6 +15,21 @@ async function getAdminUser(request) {
   if (!verification.valid) return null;
   // Extend this check once a role field is added to the users collection
   return verification.payload;
+}
+
+function normalizeDispute(dispute) {
+  if (!dispute || typeof dispute !== "object") return dispute;
+  const normalized = { ...dispute };
+  if (typeof normalized.status === "string") {
+    normalized.status = normalized.status.trim().toLowerCase();
+  }
+  if (typeof normalized.resolution === "string") {
+    normalized.resolution = normalized.resolution.trim();
+  }
+  if (normalized._id != null && typeof normalized._id !== "string") {
+    normalized._id = String(normalized._id);
+  }
+  return normalized;
 }
 
 export async function GET(request) {
@@ -31,7 +47,10 @@ export async function GET(request) {
       .limit(50)
       .toArray();
 
-    return NextResponse.json({ disputes });
+    const normalizedDisputes = disputes.map(normalizeDispute);
+    const canonicalDisputes = normalizedDisputes.map((dispute) => canonicalize(dispute));
+
+    return NextResponse.json({ disputes: canonicalDisputes });
   } catch (error) {
     console.error("[admin/disputes] GET error:", error);
     return NextResponse.json({ error: "Internal Server Error" }, { status: 500 });
@@ -45,18 +64,23 @@ export async function PATCH(request) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    const { disputeId, status, resolution } = await request.json();
+    const body = await request.json();
+    const { disputeId, status, resolution } = body;
     if (!disputeId || !status) {
       return NextResponse.json({ error: "disputeId and status are required" }, { status: 400 });
     }
+
+    const normalizedStatus = String(status).trim().toLowerCase();
+    const normalizedResolution =
+      resolution == null ? null : String(resolution).trim();
 
     const db = await getDb();
     const result = await db.collection("disputes").updateOne(
       { _id: disputeId },
       {
         $set: {
-          status,
-          resolution: resolution ?? null,
+          status: normalizedStatus,
+          resolution: normalizedResolution,
           resolvedBy: user.sub,
           resolvedAt: new Date(),
           updatedAt: new Date(),
