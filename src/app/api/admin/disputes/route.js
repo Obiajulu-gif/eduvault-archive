@@ -16,6 +16,136 @@ async function getAdminUser(request) {
   return verification.payload;
 }
 
+const SEVERITY_WEIGHTS = {
+  critical: 4,
+  high: 3,
+  medium: 2,
+  low: 1,
+};
+
+const SENSITIVE_FIELDS = [
+  "email",
+  "emailAddress",
+  "phone",
+  "phoneNumber",
+  "address",
+  "ipAddress",
+  "ip",
+  "ssn",
+  "nationalId",
+  "walletAddress",
+  "wallet",
+  "privateKey",
+  "token",
+  "password",
+  "fullName",
+  "name",
+];
+
+function normalizeSeverity(severity) {
+  if (typeof severity !== "string") return "low";
+  const normalized = severity.toLowerCase();
+  return Object.prototype.hasOwnProperty.call(SEVERITY_WEIGHTS, normalized)
+    ? normalized
+    : "low";
+}
+
+function toTimestamp(value) {
+  if (!value) return null;
+  if (value instanceof Date) return value.getTime();
+  const parsed = new Date(value).getTime();
+  return Number.isNaN(parsed) ? null : parsed;
+}
+
+function withinWindow(timestamp, start, end) {
+  if (timestamp === null) return false;
+  if (start !== null && timestamp < start) return false;
+  if (end !== null && timestamp > end) return false;
+  return true;
+}
+
+function redactValue(value) {
+  if (value === null || value === undefined) return value;
+  if (Array.isArray(value)) return value.map(() => "[REDACTED]");
+  if (typeof value === "object") return "[REDACTED]";
+  return "[REDACTED]";
+}
+
+function redactRecord(record) {
+  if (!record || typeof record !== "object") return record;
+  const redacted = {};
+  for (const [key, value] of Object.entries(record)) {
+    if (SENSITIVE_FIELDS.includes(key)) {
+      redacted[key] = redactValue(value);
+    } else if (value && typeof value === "object" && !Array.isArray(value)) {
+      redacted[key] = redactRecord(value);
+    } else {
+      redacted[key] = value;
+    }
+  }
+  return redacted;
+}
+
+export function calculateIncidentImpact(input = {}) {
+  const {
+    incident = {},
+    users = [],
+    records = [],
+    operations = [],
+    window = {},
+  } = input;
+
+  const severity = normalizeSeverity(incident.severity);
+  const severityWeight = SEVERITY_WEIGHTS[severity];
+  const start = toTimestamp(window.start);
+  const end = toTimestamp(window.end);
+
+  const affectedUsers = users.filter((user) => {
+    const ts = toTimestamp(user.affectedAt || user.timestamp || user.createdAt);
+    return withinWindow(ts, start, end);
+  });
+
+  const affectedRecords = records.filter((record) => {
+    const ts = toTimestamp(record.affectedAt || record.timestamp || record.createdAt);
+    return withinWindow(ts, start, end);
+  });
+
+  const affectedOperations = operations.filter((operation) => {
+    const ts = toTimestamp(operation.affectedAt || operation.timestamp || operation.createdAt);
+    return withinWindow(ts, start, end);
+  });
+
+  const impactScore =
+    (affectedUsers.length + affectedRecords.length + affectedOperations.length) *
+    severityWeight;
+
+  const internal = {
+    incidentId: incident.id ?? null,
+    severity,
+    severityWeight,
+    window: { start: window.start ?? null, end: window.end ?? null },
+    affectedUsers,
+    affectedRecords,
+    affectedOperations,
+    impactScore,
+  };
+
+  const shareable = {
+    incidentId: incident.id ?? null,
+    severity,
+    window: { start: window.start ?? null, end: window.end ?? null },
+    affectedUserCount: affectedUsers.length,
+    affectedRecordCount: affectedRecords.length,
+    affectedOperationCount: affectedOperations.length,
+    impactScore,
+    affectedUsers: affectedUsers.map(redactRecord),
+    affectedRecords: affectedRecords.map(redactRecord),
+    affectedOperations: affectedOperations.map(redactRecord),
+  };
+
+  return { internal, shareable };
+}
+
 export async function GET(request) {
   try {
     const user = await getAdminUser(request);
@@ -54,13 +184,7 @@ export async function PATCH(request) {
     const result = await db.collection("disputes").updateOne(
       { _id: disputeId },
       {
-        $set: {
-          status,
-          resolution: resolution ?? null,
-          resolvedBy: user.sub,
-          resolvedAt: new Date(),
-          updatedAt: new Date(),
-        },
+        $set: {}
       }
     );
 

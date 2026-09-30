@@ -8,6 +8,13 @@ import { requireAdmin } from '@/lib/api/auth';
 import { proposeSanction, approveSanction, fileAppeal, resolveAppeal } from '@/lib/moderation/cases';
 import { auditLog } from '@/lib/api/audit';
 import { appendAuditRecord } from '@/lib/backend/auditLedger';
+import { APPROVAL_SCOPES, validateApproval } from '@/lib/admin/approval';
+
+const PROTECTED_MODERATION_ACTIONS = {
+  propose: APPROVAL_SCOPES.MODERATION_PROPOSE,
+  approve: APPROVAL_SCOPES.MODERATION_APPROVE,
+  resolve_appeal: APPROVAL_SCOPES.MODERATION_RESOLVE_APPEAL,
+};
 
 export async function GET(request) {
   return withApiHardening(
@@ -46,15 +53,23 @@ export async function POST(request) {
       let db;
       let actorId;
       let operationId;
-      let action;
+      let action
       let caseId;
       try {
         const data = await request.json();
         ({ action, caseId } = data);
-        const { sanction, decision, reason } = data;
+        const { sanction, decision, reason, approval } = data;
         actorId = admin.walletAddress || admin.sub || data.actorId;
         operationId = request.headers.get('x-idempotency-key') || `${action}:${caseId}:${actorId}`;
         db = await getDb();
+
+        const requiredScope = PROTECTED_MODERATION_ACTIONS[action];
+        if (requiredScope) {
+          const validation = validateApproval({ approval, requiredScope, actor: actorId });
+          if (!validation.valid) {
+            return NextResponse.json({ error: validation.code }, { status: 403 });
+          }
+        }
 
         let result;
         switch (action) {
@@ -87,6 +102,7 @@ export async function POST(request) {
           intent: { action, sanction, decision, reason },
           result: { success: true },
           reason,
+          approval: requiredScope ? validation.approval : null,
         });
 
         return NextResponse.json(result);

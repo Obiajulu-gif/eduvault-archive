@@ -53,7 +53,83 @@ Maintainer summaries and sample exception records automatically redact sensitive
 - Stellar private keys (`S` 56-char keys`) -> `[REDACTED_STELLAR_SECRET_KEY]`
 - EVM private keys (`0x` 32-byte keys`) -> `[REDACTED_EVM_PRIVATE_KEY]`
 - Auth headers, JWT secrets, passwords -> `[REDACTED]`
-- Email addresses -> `jXxx@domain.com`
+- Email addresses -> j***@domain.com
+
+## Role-Scoped Maintainer Action Approval
+
+High-impact maintainer actions require a valid, scoped approval record before they are allowed to execute. Approvals are stored in the `approvals` collection and are checked by the `assertApproval` helper in `services/approvals.js`.
+
+### Protected Actions
+
+| Action ID | Description | Required Scope |
+| --- | --- | --- |
+| `refund.execute` | Execute a marketplace refund transaction | `refunds` |
+| `quarantine.release` | Release a file from quarantine | `quarantine` |
+| `user.suspend` | Suspend a creator account | `users` |
+| `outbox.replay` | Replay a failed outbox message | `outbox` |
+| `indexer.replay` | Replay an indexer deadletter | `indexer` |
+
+### Approval Record Shape
+
+Each approval document in the `approvals` collection must include:
+
+| Field | Type | Required | Description |
+| --- | --- | --- | --- |
+| `action` | string | yes | Protected action identifier (e.g. `refund.execute`) |
+| `scope` | string | yes | Resource scope the approval applies to (e.g. `refunds`) |
+| `actor` | string | yes | Maintainer identity that granted the approval |
+| `reason` | string | yes | Human-readable justification for the approval |
+| `expiresAt` | Date | yes | Instant after which the approval is invalid |
+| `createdAt` | Date | yes | Instant the approval was created |
+
+### Validation Rules
+
+An approval is considered valid only when all of the following hold:
+
+1. An approval document exists for the requested `action`.
+2. The approval `scope` exactly matches the scope required by the action.
+3. The approval `actor` matches the calling maintainer.
+4. The approval `expiresAt` is in the future.
+5. The approval `reason` is non-empty.
+
+Attempts to execute a protected action without a valid approval are rejected with an `unscopedApproval` or `missingApproval` error and recorded in the audit log.
+
+### Audit Records
+
+Every protected action attempt (accepted or rejected) writes an audit record to the `audit_logs` collection with:
+
+- `action`: the protected action identifier.
+- `scope`: the resource scope the action targeted.
+- `actor`: the maintainer identity that attempted the action.
+
+- `approvalId`: the `_id` of the approval document used, or `null` when none was found.
+- `reason`: the approval reason, or `null` when no approval was found.
+- `outcome`: `accepted` or `rejected`.
+- `rejectionReason`: `missingApproval`, `expiredApproval`, `wrongScope`, `wrongActor`, or `missingReason`.
+- `timestamp`: the instant the attempt was made.
+
+### Approval Administration
+
+Approvals are created and inspected through the admin API:
+
+```http
+POST /api/admin/approvals
+Content-Type: application/json
+Cookie: auth_token=<admin-jwt>
+
+{
+  "action": "refund.execute",
+  "scope": "refunds",
+  "actor": "maintainer@admin",
+  "reason": "Customer reported duplicate charge on order 42.",
+  "expiresAt": "2025-01-01T00:00:00Z"
+}
+```
+
+```http
+GET /api/admin/approvals?action=refund.execute&scope=refunds
+Cookie: auth_token=<admin-jwt>
+```
 
 ## Accessing the Health Dashboard
 
@@ -69,6 +145,22 @@ Headers:
 ### 2. CLI Report Tool
 ```bash
 MONGODB_URI="mongodb://localhost:27017/eduvault" node scripts/maintainer-health-report.mjs
+
+```
+
+## Testing
+
+The approval flow is covered by `tests/approvals.test.js`, which exercises the four required cases:
+
+- Valid approval -> action allowed.
+- Missing approval -> `approvalRequired` error.
+- Expired approval -> `approvalExpired` error.
+- Wrong-scope approval -> `wrongScope` error.
+
+Run the tests with:
+
+```bash
+node --test tests/approvals.test.js
 ```
 
 ### 3. Validation Command
