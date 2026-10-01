@@ -40,6 +40,8 @@ export const COLLECTIONS = {
   storageQuotaHistory: "storage_quota_history",
   notifications: "notifications",
   backgroundJobs: "background_jobs",
+  // Recovery workflow for stuck pending actions (#828).
+  pendingActions: "pending_actions",
 };
 
 export const REQUIRED_INDEXES = {
