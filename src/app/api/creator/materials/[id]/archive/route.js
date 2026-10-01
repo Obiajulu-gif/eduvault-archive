@@ -3,12 +3,15 @@ export const runtime = "nodejs";
 
 import { NextResponse } from "next/server";
 import { ObjectId } from "mongodb";
-import { getUserFromCookie } from "@/lib/api/auth";
+import { requirePermission } from "@/lib/api/auth";
 import { withApiHardening } from "@/lib/api/hardening";
 import { getDb } from "@/lib/mongodb";
 import { auditLog } from "@/lib/api/audit";
 import { errorResponse } from "@/lib/utils/errorResponse";
-import { enqueueMaterialSearchProjection } from "@/lib/backend/materialSearchProjection";
+import {
+  enqueueMaterialSearchProjection,
+  enqueueMaterialSearchDeletion,
+} from "@/lib/backend/materialSearchProjection";
 
 function normalizeAddress(addr) {
   return String(addr || "").trim().toLowerCase();
@@ -19,15 +22,16 @@ export async function POST(request, context) {
     request,
     { route: "creator-material-archive" },
     async () => {
-      const user = await getUserFromCookie(request);
-      if (!user) {
-        auditLog({ event: "auth_failed", route: "creator/materials/[id]/archive", method: "POST", status: 401 });
+      const authorization = await requirePermission(request, "creator:manage");
+      if (!authorization.ok) {
+        auditLog({ event: "auth_failed", route: "creator/materials/[id]/archive", method: "POST", status: authorization.status });
         return errorResponse({
-          status: 401,
-          detail: "Authentication required.",
+          status: authorization.status,
+          detail: authorization.status === 401 ? "Authentication required." : "Creator access required.",
           instance: "/api/creator/materials/[id]/archive",
         });
       }
+      const user = authorization.user;
 
       const { params } = context || {};
       const resolvedParams = params ? await params : {};
@@ -88,16 +92,30 @@ export async function POST(request, context) {
           updatedAt: now,
           updatedBy: userAddress,
           searchVersion: nextSearchVersion,
+          // Archived materials are not searchable; restored materials are indexable again.
+          searchVisibility: archived ? "hidden" : "public",
         };
 
         await db.collection("materials").updateOne(query, { $set: updateDoc });
         const updatedMaterial = { ...material, ...updateDoc };
-        await enqueueMaterialSearchProjection({
-          db,
-          material: updatedMaterial,
-          reason: archived ? "material_archived" : "material_restored",
-          now,
-        });
+
+        if (archived) {
+          // Remove the material from all search indexes so restricted records cannot
+          // leak through unauthorized queries.
+          await enqueueMaterialSearchDeletion({
+            db,
+            material: updatedMaterial,
+            reason: "material_archived",
+            now,
+          });
+        } else {
+          await enqueueMaterialSearchProjection({
+            db,
+            material: updatedMaterial,
+            reason: "material_restored",
+            now,
+          });
+        }
 
         auditLog({
           event: archived ? "material_archived" : "material_restored",

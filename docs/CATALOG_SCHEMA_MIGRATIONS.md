@@ -15,6 +15,11 @@ To achieve **zero-downtime**:
 5. **Documented Rollback Plan**:
    - Every migration defines a reversible `down(doc)` transformation.
 
+> These catalog migrations are also the `materials` entry in the general
+> [versioned record & API compatibility layer](SCHEMA_COMPATIBILITY.md), which
+> adds read/write transforms, `X-Schema-Version` negotiation, and explicit
+> unsupported-version handling on top of them.
+
 ---
 
 ## 2. Concrete Migration: v2 Soroban Entitlements & Pricing Tiers

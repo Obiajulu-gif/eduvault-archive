@@ -39,6 +39,7 @@ export const COLLECTIONS = {
   checkoutQuotes: "checkout_quotes",
   storageQuotaHistory: "storage_quota_history",
   notifications: "notifications",
+  backgroundJobs: "background_jobs",
 };
 
 export const REQUIRED_INDEXES = {
@@ -55,6 +56,12 @@ export const REQUIRED_INDEXES = {
       options: { unique: true, partialFilterExpression: { externalId: { $type: "string" } }, name: "materials_import_external_id_idx" },
     },
     { keys: { importBatchId: 1 }, options: { sparse: true, name: "materials_import_batch_idx" } },
+    // #888: provenance lookups from the maintainer export endpoint and by
+    // batch/actor/source. Sparse so records predating provenance stay out.
+    { keys: { "provenance.kind": 1 }, options: { name: "materials_provenance_kind_idx", background: true } },
+    { keys: { "provenance.origin.importBatchId": 1 }, options: { sparse: true, name: "materials_provenance_import_batch_idx", background: true } },
+    { keys: { "provenance.origin.materialId": 1 }, options: { sparse: true, name: "materials_provenance_source_idx", background: true } },
+    { keys: { "provenance.actor.walletAddress": 1 }, options: { sparse: true, name: "materials_provenance_actor_idx", background: true } },
     { keys: { visibility: 1, createdAt: -1 } },
     { keys: { materialId: 1 }, options: { sparse: true } },
     { keys: { tokenId: 1 }, options: { unique: true, sparse: true } },
@@ -106,6 +113,15 @@ export const REQUIRED_INDEXES = {
   storage_quota_history: [
     { keys: { provider: 1, checkedAt: -1 } },
     { keys: { checkedAt: 1 }, options: { expireAfterSeconds: 31536000 } },
+  ],
+  // Privacy-preserving analytics: aggregate counters are queryable by a
+  // creator's materials; opaque dedupe keys expire after one short window.
+  material_analytics_aggregates: [
+    { keys: { materialId: 1, day: 1, eventType: 1, source: 1, classification: 1, filterReason: 1 }, options: { unique: true, name: "analytics_daily_bucket_unique" } },
+    { keys: { day: -1, materialId: 1 }, options: { name: "analytics_daily_material_idx" } },
+  ],
+  material_analytics_dedupe: [
+    { keys: { expiresAt: 1 }, options: { expireAfterSeconds: 0, name: "analytics_dedupe_expiry" } },
   ],
   payouts: [
     // #293: monthly-statements.mjs scans all payouts in a date window across
@@ -227,6 +243,14 @@ export const REQUIRED_INDEXES = {
   notifications: [
     { keys: { recipient: 1, dedupeKey: 1 }, options: { unique: true, name: "notifications_dedupe_idx" } },
     { keys: { recipient: 1, read: 1, createdAt: -1 }, options: { name: "notifications_inbox_idx" } },
+  ],
+  // #789: Background worker framework jobs queue indexes
+  background_jobs: [
+    { keys: { jobId: 1 }, options: { unique: true, name: "background_jobs_id_idx" } },
+    { keys: { idempotencyKey: 1 }, options: { unique: true, sparse: true, name: "background_jobs_idempotency_idx" } },
+    { keys: { status: 1, scheduledFor: 1, lockedUntil: 1 }, options: { name: "background_jobs_lease_idx", background: true } },
+    { keys: { name: 1, status: 1 }, options: { name: "background_jobs_name_status_idx", background: true } },
+    { keys: { createdAt: -1 }, options: { name: "background_jobs_created_idx", background: true } },
   ],
 };
 

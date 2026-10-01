@@ -156,6 +156,10 @@ npm run lint
 npm test
 npm run test:contracts
 npm run test:backend
+npm run worker:background
+npm run worker:background:once
+npm run worker:background:status
+npm run worker:background:reprocess
 npm run audit:deps
 npm run scan:secrets
 ```
@@ -188,6 +192,7 @@ npm run test:contracts
 - [Environment Setup](docs/environment-setup.md)
 - [Contribution Guide](docs/contributing.md)
 - [Backend Contracts](docs/backend-contracts.md)
+- [Record Provenance](docs/provenance.md)
 - [Stellar Purchase Flow](docs/stellar-purchase-flow.md)
 - [Stellar Wallet Setup](docs/stellar-wallet-setup.md)
 - [Creator Publishing Guide](docs/creator-publishing-guide.md)

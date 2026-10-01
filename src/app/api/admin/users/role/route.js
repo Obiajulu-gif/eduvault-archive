@@ -6,6 +6,7 @@ import { ObjectId } from 'mongodb'
 import { getDb } from '@/lib/mongodb'
 import { requireAdmin } from '@/lib/api/auth'
 import { appendAuditRecord } from '@/lib/backend/auditLedger'
+import { APPROVAL_SCOPES, validateApproval } from '@/lib/admin/approval'
 import {
   computePermissionDiff,
   assertConfirmation,
@@ -18,9 +19,19 @@ export async function POST(request) {
   if (!admin) return NextResponse.json({ error: 'Unauthorized. Admin access required.' }, { status: 403 })
 
   try {
-    const { userId, role, reason = null, confirm = false } = await request.json()
+const { userId, role, reason = null, confirm = false, approval } = await request.json()
     if (!userId || !ObjectId.isValid(userId) || !ALLOWED_ROLES.has(role)) {
       return NextResponse.json({ error: 'userId and a valid role are required.' }, { status: 400 })
+    }
+
+    const actor = admin.walletAddress || admin.sub
+    const validation = validateApproval({
+      approval,
+      requiredScope: APPROVAL_SCOPES.USER_ROLE_CHANGE,
+      actor,
+    })
+    if (!validation.valid) {
+      return NextResponse.json({ error: validation.code }, { status: 403 })
     }
 
     const db = await getDb()
@@ -29,7 +40,7 @@ export async function POST(request) {
     if (!target) return NextResponse.json({ error: 'User not found.' }, { status: 404 })
     if (target.role === role) return NextResponse.json({ error: 'User already has this role.' }, { status: 409 })
 
-    const diff = computePermissionDiff({
+const diff = computePermissionDiff({
       actor: target.walletAddress || target.email || userId,
       fromRole: target.role,
       toRole: role,
@@ -58,12 +69,13 @@ export async function POST(request) {
     await appendAuditRecord({
       db,
       operationId: request.headers.get('x-idempotency-key') || `role:${userId}:${target.role}:${role}:${actor}`,
-      actor,
+      actor: actor,
       action: 'user.role_changed',
       target: { type: 'user', id: userId },
       intent: { previousRole: target.role, newRole: role, diff },
       result: { previousRole: target.role, newRole, role },
       reason,
+      approval: validation.approval,
     })
 
     return NextResponse.json({ success: true, previousRole: target.role, role, diff })

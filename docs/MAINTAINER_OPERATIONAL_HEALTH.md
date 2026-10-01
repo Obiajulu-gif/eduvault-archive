@@ -23,12 +23,37 @@ The Maintainer Operational Health system aggregates indicators across storage wo
    - **Access Denial Spikes**: Download denials due to entitlement check failures in the last 24 hours.
    - **Suspended Users**: Moderated or suspended creator accounts with listings hidden from discovery.
 
+## Severity Levels
+
+Each category reports a count and a severity derived from the count and age of the unresolved records:
+
+| Severity | Trigger | Meaning |
+| --- | --- | --- |
+| `critical` | Unresolved count > 0 and oldest unresolved record is older than 24 hours, or any user-impacting incident is present | Customer-facing breakage or data loss risk; page on-call |
+| `warning` | Unresolved count > 0 and oldest record is between 1 and 24 hours old | Retry budget exhausted or slowing; triage today |
+| `info` | Unresolved count > 0 and all records are less than 1 hour old | Newly observed failure; monitor for escalation |
+| `okay` | Unresolved count is 0 | No action needed |
+
+Age is measured from the record's failure timestamp (`failedAt`, `errorAt`, `lastAttemptAt`, or equivalent) to the report generation time. The report also includes a seven-day failure trend per category so maintainers can distinguish a one-off incident from a regression.
+
+## Report Shape
+
+The report is a single JSON object with a `totals` summary, a `categories` array, and a `trends` array. Each category entry includes:
+
+- **`id`**: Stable machine readable identifier (for example `failed_outbox`).
+- **`collection`**: Source collection or query scope.
+- **`count***: Number of unresolved records.
+- **oldestAgeHours**: Age of the oldest unresolved record in hours.
+- **`severity`**: One of `critical`, `warning`, `info`, `okay`.
+- **`sampleIds`**: Up to five record identifiers (redacted) for investigation.
+- **`investigationUrl`**: Deep link into the admin UI for the collection and filter.
+
 ## Sensitive Data Redaction
 Maintainer summaries and sample exception records automatically redact sensitive information before presentation:
-- Stellar private keys (`S...` 56-char keys) -> `[REDACTED_STELLAR_SECRET_KEY]`
-- EVM private keys (`0x...` 32-byte keys) -> `[REDACTED_EVM_PRIVATE_KEY]`
+- Stellar private keys (`S` 56-char keys`) -> `[REDACTED_STELLAR_SECRET_KEY]`
+- EVM private keys (`0x` 32-byte keys`) -> `[REDACTED_EVM_PRIVATE_KEY]`
 - Auth headers, JWT secrets, passwords -> `[REDACTED]`
-- Email addresses -> `j***@domain.com`
+- Email addresses -> `jXxx@domain.com`
 
 ## Accessing the Health Dashboard
 
@@ -43,5 +68,52 @@ Headers:
 
 ### 2. CLI Report Tool
 ```bash
-MONGODB_URI="mongodb://localhost:27017/eduvault" node scripts/maintainer-health-report.mjs
+MONGODB_URI="mongodb://localhost:27017/eduvault" node scripts/maintainer-health-report.mjy
 ```
+
+## Historical Trend Aggregation
+
+Maintainers can request historical trend data for a creator across usage, failures, recovery actions, and important domain activity. The aggregation is deterministic for a given date range and window, so fixture data produces stable output suitable for regression testing.
+
+### Metrics
+
+| Metric | Description |
+| --- | --- |
+| `usage` | Material views/downloads and completed purchases attributed to the bucket. |
+| `failures` | Failed purchases, outbox messages, indexer deadletters, and failed refunds. |
+| `recoveryActions` | Retried/recovered outbox messages, recovered refunds, and recovery-status purchases. |
+| `domainActivity` | Reviews and saves attributed to material creation date. |
+
+### Aggregation Windows
+
+- `day` (default): UTC day buckets (`YYYY-MM-DD`).
+- `week`: UTC week buckets aligned to Monday.
+-x `month`: UTC month buckets (`YYYY-MM`).
+
+### API Endpoint
+
+```http
+GET /api/creator/analytics/trends?from=2024-06-01&to=2024-06-30&window=day
+Headers:
+  Cookie: auth_token=<creator-jwt>
+```
+
+Optional query parameters:
+
+- `from`, `to`: ISO dates. Defaults to the last 30 days.
+- `window`: `one of `day`, `week`, `month`.
+- `format=csv`: Returns a CSV export instead of JSON.
+
+The JSON response includes a `schemaVersion` field (currently `eduvault.trends.v1`) along with `buckets`, `totals`, and a `redaction` block describing the privacy policy applied to the response.
+
+### Privacy & Redaction
+
+Private materials contribute only to aggregate totals. The response never includes per-material identifiers for private materials, only a `privateMaterialCount` summary in `totals`. The `redaction` block is always present with `applied: true` and the current policy name.
+
+### Testing
+
+```bash
+node --test tests/analytics/trends.test.mjs
+```
+
+The test suite covers date range resolution, bucket enumeration for day/week/month windows, empty data, large result sets, and CSV export shape.

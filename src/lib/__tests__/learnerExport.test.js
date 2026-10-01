@@ -491,6 +491,42 @@ describe('buildLearnerExport', () => {
     });
   });
 
+  describe('retention metadata (#790)', () => {
+    it('includes a retention block on every export', () => {
+      const doc = buildLearnerExport({
+        user: makeUser(), purchases: [], entitlements: [], refunds: [], materials: [],
+      });
+      expect(doc.retention).toBeDefined();
+      expect(doc.retention.artifactLifetime).toBe('ephemeral');
+      expect(doc.retention.expiresAt).toBeNull();
+      expect(typeof doc.retention.policy).toBe('string');
+      expect(doc.retention.policy.length).toBeGreaterThan(0);
+      expect(() => new Date(doc.retention.generatedAt).toISOString()).not.toThrow();
+    });
+
+    it('validateExport rejects a missing or malformed retention block', () => {
+      const doc = buildLearnerExport({
+        user: makeUser(), purchases: [], entitlements: [], refunds: [], materials: [],
+      });
+
+      const missing = { ...doc };
+      delete missing.retention;
+      expect(validateExport(missing)).toEqual(
+        expect.arrayContaining([expect.stringContaining('retention')]),
+      );
+
+      const wrongLifetime = { ...doc, retention: { ...doc.retention, artifactLifetime: 'persistent' } };
+      expect(validateExport(wrongLifetime)).toEqual(
+        expect.arrayContaining([expect.stringContaining('artifactLifetime')]),
+      );
+
+      const withExpiry = { ...doc, retention: { ...doc.retention, expiresAt: '2027-01-01' } };
+      expect(validateExport(withExpiry)).toEqual(
+        expect.arrayContaining([expect.stringContaining('expiresAt')]),
+      );
+    });
+  });
+
   describe('receiptHash determinism', () => {
     it('same purchase produces the same receiptHash on multiple calls', () => {
       const purchase = makePurchase();

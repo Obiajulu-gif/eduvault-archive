@@ -1,6 +1,7 @@
 import { Horizon } from '@stellar/stellar-sdk';
 import { HORIZON_URL, isMainnet } from '@/lib/config/chain';
 import logger from '@/lib/logger';
+import { getSandboxTransactionStatus, getSandboxTrustline, isSandboxMode } from '@/lib/sandbox/adapters';
 
 // Primary URL from config; fallback list ordered by preference.
 const PRIMARY_URL = HORIZON_URL;
@@ -139,6 +140,7 @@ export async function fetchFeeStats() {
  *   - 'not_found'  no hash supplied
  */
 export async function getTransactionStatus(hash) {
+  if (isSandboxMode()) return getSandboxTransactionStatus(hash);
   if (!hash) return 'not_found';
 
   try {
@@ -340,6 +342,7 @@ export function buildTrustlineInstructions(assetCode, issuer) {
  * @returns {Promise<{ hasTrustline: boolean, balance?: string, issuer?: string }>}
  */
 export async function checkBuyerTrustline(publicKey, assetCode, issuerAddress) {
+  if (isSandboxMode()) return getSandboxTrustline(assetCode, issuerAddress);
   if (assetCode === 'XLM') {
     const account = await loadAccount(publicKey);
     const nativeBalance = account.balances.find((b) => b.asset_type === 'native');

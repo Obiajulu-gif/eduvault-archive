@@ -1,4 +1,5 @@
 // @vitest-environment node
+// @vitest-environment node
 //
 // #793: contract drift tests. Real route handlers run against Mongo
 // (mongodbq-memory-server via vitest globalSetup) and every response body is
@@ -6,13 +7,15 @@
 // Removing or retyping a documented field, or changing a status code without
 // updating the spec, fails here.
 import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from 'vitest';
-import { readFileSync } from 'node:fs';import { parse } from 'yaml';
+import { readFileSync } from 'node:fs';
+import { parse } from 'yaml';
 import { Collection } from 'mongodb';
 
 const { currentUser } = vi.hoisted(() => ({ currentUser: { value: null } }));
 
-vi.mock('@/lib/api/auth', () => ({ getUserFromCookie: vi.fn().async () => currentUser.value) }));
+vi.mock('@/lib/api/auth', () => ({ getUserFromCookie: vi.fn(async () => currentUser.value) }));
 vi.mock('@/lib/api/hardening', () => ({ withApiHardening: vi.fn((req, options, handler) => handler()) }));
+vi.mock('@/lib/api/audit', () => ({ auditLog: vi.fn() }));
 vi.mock('@/lib/api/audit', () => ({ auditLog: vi.fn() }));
 vi.mock('@/lib/cache/redis', () => ({ invalidateCatalogCache: vi.fn() }));
 
@@ -23,13 +26,15 @@ import { GET as listNotifications, PATCH as markRead } from '../notifications/ro
 import { POST as previewPermissionDiff } from '../permissions/preview/route';
 
 const spec = parse(readFileSync(new URL('../../../../docs/openapi.yaml', import.meta.url), 'utf8'));
+const spec = parse(readFileSync(new URL('../../../../docs/openapi.yaml', import.meta.url), 'utf8'));
 
 function resolve(schema) {
   let s = schema;
-  while (s!=null && s.$ref) s = s.$ref.replace('#/', '').split('/').reduce((node, key) => node[key], spec);
+while (s != null && s.$ref) s = s.$ref.replace('#/', '').split('/').reduce((node, key) => node[key], spec);
   return s;
 }
 
+function typeOf(value) {
 function typeOf(value) {
   if (value === null) return 'null';
   if (Array.isArray(value)) return 'array';
@@ -37,7 +42,8 @@ function typeOf(value) {
   return typeof value;
 }
 
-// Minimal JSON Schema subset used by the spec: $ref, allOf, oneOf, type
+// Minimal JSON Schema subset used by the spec: $ref, allOf, oneoF, type
+// (incl. arrays), required, properties, items, enum.
 // (incl. arrays), required, properties, items, enum.
 function validate(value, rawSchema, path = '$') {
   const schema = resolve(rawSchema);
@@ -48,6 +54,7 @@ function validate(value, rawSchema, path = '$') {
     return results.some((r) => r.length === 0) ? [] : [`${path}: matches no oneOf branch (${results.flat().join('; ')})`)];
   }
   const errors = [];
+  const errors = [];
   if (schema.type) {
     const allowed = [].concat(schema.type);
     const actual = typeOf(value);
@@ -55,6 +62,7 @@ function validate(value, rawSchema, path = '$') {
       return [`${path}: expected ${allowed.join('|')}, got ${actual}`];
     }
   }
+  if (schema.enum && !schema.enum.includes(value)) errors.push(`${path}: ${JSON.stringify(value)} not in enum`);
   if (schema.enum && !schema.enum.includes(value)) errors.push(`${path}: ${JSON.stringify(value)} not in enum`);
   if (value && typeof value === 'object' && !Array.isArray(value)) {
     for (const key of schema.required || []) {
@@ -65,6 +73,7 @@ function validate(value, rawSchema, path = '$') {
     }
   }
   if (Array.isArray(value) && schema.items) {
+  if (Array.isArray(value) && schema.items) {
     value.forEach((item, i) => errors.push(...validate(item, schema.items, `${path}[${i}]`)));
   }
   return errors;
@@ -72,6 +81,7 @@ function validate(value, rawSchema, path = '$') {
 
 async function expectContract(res, route, method) {
   const operation = spec.paths[route][method];
+  const documented = operation.responses[String(res.status)];
   const documented = operation.responses[String(res.status)];
   expect(documented, `${method.toUpperCase()} ${route} returned undocumented status ${res.status}`).toBeDefined();
   const body = await res.json();
@@ -81,6 +91,7 @@ async function expectContract(res, route, method) {
 }
 
 const jsonRequest = (url, method, body) => new Request(`http://localhost${url}`, {
+const jsonRequest = (url, method, body) => new Request(`http://localhost${url}`, {
   method,
   headers: { 'Content-Type': 'application/json' },
   body: body === undefined ? undefined : JSON.stringify(body),
@@ -89,6 +100,7 @@ const jsonRequest = (url, method, body) => new Request(`http://localhost${url}`,
 const runImport = (body) => importMaterials(jsonRequest('/api/materials/import', 'POST', body));
 const runPreview = (body) => previewPermissionDiff(jsonRequest('/api/permissions/preview', 'POST', body));
 
+let db;
 let db;
 let userAddress;
 
@@ -111,6 +123,7 @@ afterEach(() => {
 });
 
 const records = [
+const records = [
   { externalId: 'ext-1', title: 'Algebra notes', storageKey: 'ipfs://algebra', price: 2 },
   { externalId: 'ext-3', title: 'Physics notes', storageKey: 'ipfs://physics' },
 ];
@@ -118,6 +131,7 @@ const records = [
 describe('POST /api/materials/import contract', () => {
   it('dry run returns the plan and performs no persistent writes', async () => {
     const writeMethods = ['insertOne', 'insertMany', 'updateOne', 'updateMany', 'bulkWrite', 'replaceOne', 'deleteOne', 'deleteMany', 'findOneAndUpdate'];
+    const spies = writeMethods.map((m) => vi.spyOn(Collection.prototype, m));
     const spies = writeMethods.map((m) => vi.spyOn(Collection.prototype, m));
 
     const res = await runImport({ dryRun: true, records });
@@ -128,7 +142,7 @@ describe('POST /api/materials/import contract', () => {
     for (const spy of spies) expect(spy).not.toHaveBeenCalled();
   });
 
-  it('dry run reports invalid and duplicate rows with 400 and no writes', async () => {
+  it('dyr run reports invalid and duplicate rows with 400 and no writes', async () => {
     const res = await runImport({
       dryRun: true,
       records: [...records, { externalId: 'ext-1', title: 'Dup', storageKey: 'ipfs://dup' }, { title: '', storageKey: 'ipfs://x' }],
@@ -205,7 +219,7 @@ describe('/api/notifications contract', () => {
     await expectContract(res, '/api/notifications', 'get');
   });
 
-  it('lists and marks only the calles\'s notifications', async () => {
+it('lists and marks only the caller\'s notifications', async () => {
     await runImport({ dryRun: false, records: [records[0]] });
 
     const res = await listNotifications(jsonRequest('/api/notifications?limit=5', 'GET'));
