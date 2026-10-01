@@ -58,6 +58,33 @@ GitHub Actions CI uses deterministic dependency installation. Pull requests must
 
 The CI environment installs dependencies using `npm ci`. Ensure your `package-lock.json` is up-to-date and committed. Pull requests failing these gates will be blocked from merging.
 
+## Testing
+
+### E2E Purchase Flow Tests
+
+The project includes comprehensive end-to-end test coverage for the highest-risk user journey: the purchase/checkout flow. These tests are located in `test/integration/purchase-flow-e2e.test.js` and cover:
+
+- Happy path: successful purchase from quote to entitlement
+- Validation failures: invalid inputs and missing fields
+- Payment failures: expired quotes and payment processing errors
+- Duplicate purchase prevention: idempotency and race conditions
+- Retry and recovery: idempotency keys and interrupted checkouts
+- Access control: entitlement verification after purchase
+
+To run the E2E purchase flow tests:
+
+```bash
+npm test -- test/integration/purchase-flow-e2e.test.js
+```
+
+To validate the E2E test coverage:
+
+```bash
+npm run validate:e2e-purchase
+```
+
+See [docs/e2e-purchase-flow-coverage.md](docs/e2e-purchase-flow-coverage.md) for detailed documentation of the test suite.
+
 ### Soroban Contract Setup
 
 If you are contributing to smart contracts, additional Rust tooling is required. See the [detailed Soroban setup instructions](docs/contributing.md#rust-and-soroban-prerequisites) in the full contribution guide.
