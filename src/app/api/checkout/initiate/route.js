@@ -12,6 +12,7 @@ import {
   findIntentByIdempotencyKey,
   insertCheckoutIntent,
 } from '@/lib/checkout/checkoutIntentStore';
+import { withTelemetryRoute, ACTOR_TYPES } from '@/lib/monitoring/telemetry';
 
 /**
  * POST /api/checkout/initiate
@@ -21,7 +22,7 @@ import {
  * header). When present, a concurrent or retried request with the same key
  * returns the existing intent instead of creating a duplicate record.
  */
-export async function POST(req) {
+async function handlePost(req) {
   try {
     const user = await getUserFromCookie(req);
     if (!user) {
@@ -168,6 +169,8 @@ export async function POST(req) {
     return NextResponse.json({ error: 'Server error' }, { status: 500 });
   }
 }
+
+export const POST = withTelemetryRoute('checkout.initiate', ACTOR_TYPES.USER, handlePost);
 
 /**
  * GET /api/checkout/initiate
