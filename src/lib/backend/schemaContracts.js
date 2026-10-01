@@ -40,6 +40,7 @@ export const COLLECTIONS = {
   storageQuotaHistory: "storage_quota_history",
   notifications: "notifications",
   backgroundJobs: "background_jobs",
+  sensitiveAccessLog: "sensitive_access_log",
 };
 
 export const REQUIRED_INDEXES = {
@@ -254,6 +255,14 @@ export const REQUIRED_INDEXES = {
     { keys: { status: 1, scheduledFor: 1, lockedUntil: 1 }, options: { name: "background_jobs_lease_idx", background: true } },
     { keys: { name: 1, status: 1 }, options: { name: "background_jobs_name_status_idx", background: true } },
     { keys: { createdAt: -1 }, options: { name: "background_jobs_created_idx", background: true } },
+  ],
+  // #889: sensitive field access events are looked up by correlation, by actor
+  // window, and by resource, and denials are reviewed by decision/time.
+  sensitive_access_log: [
+    { keys: { correlationId: 1 }, options: { unique: true, name: "sensitive_access_correlation_idx" } },
+    { keys: { actorId: 1, at: -1 }, options: { name: "sensitive_access_actor_idx", background: true } },
+    { keys: { resourceType: 1, resourceId: 1, at: -1 }, options: { name: "sensitive_access_resource_idx", background: true } },
+    { keys: { decision: 1, at: -1 }, options: { name: "sensitive_access_decision_idx", background: true } },
   ],
 };
 
