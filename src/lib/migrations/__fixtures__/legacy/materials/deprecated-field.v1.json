@@ -1,0 +1,13 @@
+{
+  "_id": "legacy-mat-deprecated-0003",
+  "title": "Stellar Anchors and Bridges",
+  "description": "Legacy listing whose Soroban contract id is stored under the deprecated alias.",
+  "category": "Finance",
+  "subject": "Payments",
+  "level": "intermediate",
+  "price": 12,
+  "asset": "USDC",
+  "userAddress": "GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5",
+  "stellarContractId": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABSC4",
+  "createdAt": "2025-12-20T08:00:00.000Z"
+}
