@@ -7,7 +7,8 @@ import { requirePermission } from "@/lib/api/auth";
 import { withApiHardening } from "@/lib/api/hardening";
 import { getDb } from "@/lib/mongodb";
 import { auditLog } from "@/lib/api/audit";
-import { errorResponse } from "@/lib/utils/errorResponse";
+import { appendCriticalMutation } from "@/lib/backend/auditLedger";
+import { AppError, renderErrorResponse } from "@/lib/errors";
 import {
   enqueueMaterialSearchProjection,
   enqueueMaterialSearchDeletion,
@@ -25,11 +26,8 @@ export async function POST(request, context) {
       const authorization = await requirePermission(request, "creator:manage");
       if (!authorization.ok) {
         auditLog({ event: "auth_failed", route: "creator/materials/[id]/archive", method: "POST", status: authorization.status });
-        return errorResponse({
-          status: authorization.status,
-          detail: authorization.status === 401 ? "Authentication required." : "Creator access required.",
-          instance: "/api/creator/materials/[id]/archive",
-        });
+        return renderErrorResponse(new AppError(authorization.status === 401 ? "AUTH_UNAUTHENTICATED" : "AUTH_FORBIDDEN", { details: { reason: authorization.status === 401 ? "Authentication required." : "Creator access required." } }), { instance: "/api/creator/materials/[id]/archive",
+         });
       }
       const user = authorization.user;
 
@@ -38,11 +36,8 @@ export async function POST(request, context) {
       const id = resolvedParams.id;
 
       if (!id) {
-        return errorResponse({
-          status: 400,
-          detail: "Missing material ID.",
-          instance: "/api/creator/materials/[id]/archive",
-        });
+        return renderErrorResponse(new AppError("VALIDATION_FAILED", { details: { reason: "Missing material ID." } }), { instance: "/api/creator/materials/[id]/archive",
+         });
       }
 
       try {
@@ -51,11 +46,7 @@ export async function POST(request, context) {
         const material = await db.collection("materials").findOne(query);
 
         if (!material) {
-          return errorResponse({
-            status: 404,
-            detail: "Material not found.",
-            instance: `/api/creator/materials/${id}/archive`,
-          });
+          return renderErrorResponse(new AppError("NOT_FOUND", { details: { reason: "Material not found." } }), { instance: `/api/creator/materials/${id}/archive`, });
         }
 
         const userAddress = user.walletAddress || user.address || user.sub || user.id;
@@ -73,11 +64,7 @@ export async function POST(request, context) {
             actor: user.sub || userAddress,
             materialId: id,
           });
-          return errorResponse({
-            status: 403,
-            detail: "Forbidden: only the material owner can archive or restore this resource.",
-            instance: `/api/creator/materials/${id}/archive`,
-          });
+          return renderErrorResponse(new AppError("AUTH_FORBIDDEN", { details: { reason: "Forbidden: only the material owner can archive or restore this resource." } }), { instance: `/api/creator/materials/${id}/archive`, });
         }
 
         const body = await request.json().catch(() => ({}));
@@ -140,11 +127,7 @@ export async function POST(request, context) {
           status: 500,
           reason: err.message,
         });
-        return errorResponse({
-          status: 500,
-          detail: "Failed to update material archive state.",
-          instance: `/api/creator/materials/${id}/archive`,
-        });
+        return renderErrorResponse(new AppError("INTERNAL", { details: { reason: "Failed to update material archive state." } }), { instance: `/api/creator/materials/${id}/archive`, });
       }
     }
   );

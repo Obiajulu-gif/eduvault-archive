@@ -7,7 +7,7 @@ import { getDb } from "@/lib/mongodb";
 import { requirePermission } from "@/lib/api/auth";
 import { withApiHardening } from "@/lib/api/hardening";
 import { auditLog } from "@/lib/api/audit";
-import { errorResponse } from "@/lib/utils/errorResponse";
+import { AppError, renderErrorResponse } from "@/lib/errors";
 
 /**
  * Completed purchase statuses that represent a successful download entitlement.
@@ -71,13 +71,13 @@ export async function GET(request) {
       try {
         const authorization = await requirePermission(request, "creator:analytics:read");
         if (!authorization.ok) {
-          return errorResponse({ status: authorization.status, detail: "Forbidden", instance: "/api/creator/download-logs" });
+          return renderErrorResponse(new AppError(authorization.status === 401 ? "AUTH_UNAUTHENTICATED" : "AUTH_FORBIDDEN", { details: { reason: "Forbidden" } }), { instance: "/api/creator/download-logs"  });
         }
         const user = authorization.user;
 
         const creatorAddress = user.walletAddress || user.address || user.id;
         if (!creatorAddress) {
-          return errorResponse({ status: 400, detail: "No wallet address on account", instance: "/api/creator/download-logs" });
+          return renderErrorResponse(new AppError("VALIDATION_FAILED", { details: { reason: "No wallet address on account" } }), { instance: "/api/creator/download-logs"  });
         }
 
         const { searchParams } = new URL(request.url);
@@ -235,7 +235,7 @@ export async function GET(request) {
           status: 500,
           reason: error.message,
         });
-        return errorResponse({ status: 500, detail: "Server error", instance: "/api/creator/download-logs" });
+        return renderErrorResponse(new AppError("INTERNAL", { details: { reason: "Server error" } }), { instance: "/api/creator/download-logs"  });
       }
     }
   );

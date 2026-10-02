@@ -5,7 +5,7 @@ import { NextResponse } from 'next/server'
 import { ObjectId } from 'mongodb'
 import { getDb } from '@/lib/mongodb'
 import { requireAdmin } from '@/lib/api/auth'
-import { appendAuditRecord } from '@/lib/backend/auditLedger'
+import { appendCriticalMutation } from '@/lib/backend/auditLedger'
 import { APPROVAL_SCOPES, validateApproval } from '@/lib/admin/approval'
 import {
   computePermissionDiff,
@@ -66,15 +66,16 @@ const diff = computePermissionDiff({
       { _id: new ObjectId(userId), role: target.role },
       { $set: { role, updatedAt: new Date() } },
     )
-    await appendAuditRecord({
+    await appendCriticalMutation({
       db,
-      operationId: request.headers.get('x-idempotency-key') || `role:${userId}:${target.role}:${role}:${actor}`,
+      operationId: request.headers.get("x-idempotency-key") || `role:${userId}:${target.role}:${role}:${actor}`,
       actor: actor,
-      action: 'user.role_changed',
-      target: { type: 'user', id: userId },
-      intent: { previousRole: target.role, newRole: role, diff },
-      result: { previousRole: target.role, newRole, role },
-      reason,
+      action: "user.role_changed",
+      target: { type: "user", id: userId },
+      reason: reason || "Admin role change",
+      before: { role: target.role },
+      after: { role },
+      intent: { diff },
       approval: validation.approval,
     })
 

@@ -24,12 +24,40 @@ components:
   schemas:
     Error:
       type: object
+      required: [type, title, status, code, detail, retryable]
       properties:
-        error:
+        type:
           type: string
-        details:
-          type: object
-      required: [error]
+          description: URI identifying the problem type
+        title:
+          type: string
+          description: User-safe summary of the problem
+        status:
+          type: integer
+          description: HTTP status code
+        code:
+          type: string
+          description: EduVault stable reason code
+        detail:
+          type: string
+          description: Actionable recovery hint
+        retryable:
+          type: boolean
+        correlationId:
+          type: string
+          nullable: true
+        instance:
+          type: string
+          description: URI of the route that generated the error
+      example:
+        type: "https://eduvault.dev/problems/validation_failed"
+        title: "The submitted data is invalid."
+        status: 400
+        code: "VALIDATION_FAILED"
+        detail: "Check the provided fields and try again."
+        retryable: false
+        correlationId: "req-123"
+        instance: "/api/materials"
 
     Material:
       type: object
@@ -718,3 +746,108 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "429":
           $ref: "#/components/responses/RateLimited"
+
+  /api/purchase:
+    post:
+      summary: Confirm a material purchase and grant access
+      operationId: createPurchase
+      tags: [Purchases]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [materialId, buyerAddress, paymentCompleted, amount, asset]
+              properties:
+                materialId:
+                  type: string
+                buyerAddress:
+                  type: string
+                paymentCompleted:
+                  type: boolean
+                transactionHash:
+                  type: string
+                signedXdr:
+                  type: string
+                amount:
+                  type: string
+                asset:
+                  type: string
+                email:
+                  type: string
+      responses:
+        "200":
+          description: Already purchased
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [message, purchase, access]
+                properties:
+                  message:
+                    type: string
+                  purchase:
+                    type: object
+                  access:
+                    type: object
+                  transactionHash:
+                    type: string
+        "201":
+          description: Purchase successful
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [success, purchaseId, purchase, access]
+                properties:
+                  success:
+                    type: boolean
+                  purchaseId:
+                    type: string
+                  purchase:
+                    type: object
+                  access:
+                    type: object
+        "202":
+          description: Purchase accepted but payment not completed
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [success, purchaseId, purchase, access]
+                properties:
+                  success:
+                    type: boolean
+                  purchaseId:
+                    type: string
+                  purchase:
+                    type: object
+                  access:
+                    type: object
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /api/profile:
+    get:
+      summary: Get the authenticated user's profile
+      operationId: getProfile
+      tags: [Profile]
+      responses:
+        "200":
+          description: Profile object
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  profile:
+                    type: object
+        "401":
+          $ref: "#/components/responses/Unauthorized"

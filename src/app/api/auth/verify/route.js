@@ -7,7 +7,7 @@ import { withApiHardening } from "@/lib/api/hardening";
 import { getDb } from "@/lib/mongodb";
 import { auditLog } from "@/lib/api/audit";
 import { generateAccessToken, generateRefreshToken, storeRefreshToken } from "@/lib/auth/tokenService";
-import { errorResponse } from "@/lib/utils/errorResponse";
+import { AppError, renderErrorResponse } from "@/lib/errors";
 import { buildWalletLookupQuery, normalizeProfileForSession } from "@/lib/migrations/profileMigration";
 import { normalizeSignedPayload } from "@/lib/canonicalization";
 
@@ -27,11 +27,7 @@ export async function POST(request) {
         const contract = typeof body?.contract === "string" ? body.contract.trim() : undefined;
 
         if (!address || !nonce || !signedTransactionXdr) {
-          return errorResponse({
-            status: 400,
-            detail: "Missing required fields: address, nonce, signedTransactionXdr",
-            instance: "/api/auth/verify",
-          });
+          return renderErrorResponse(new AppError("VALIDATION_FAILED", { details: { reason: "Missing required fields: address, nonce, signedTransactionXdr" } }), { instance: "/api/auth/verify", });
         }
 
         // Canonicalize the signed payload before verification so equivalent
@@ -57,11 +53,8 @@ export async function POST(request) {
             reason: normalized.reason,
             address,
           });
-          return errorResponse({
-            status: 400,
-            detail: normalized.reason,
-            instance: "/api/auth/verify",
-          });
+          return renderErrorResponse(new AppError("VALIDATION_FAILED", { details: { reason: normalized.reason } }), { instance: "/api/auth/verify",
+           });
         }
 
         const canonical = normalized.canonical;
@@ -82,11 +75,8 @@ export async function POST(request) {
             reason: result.reason,
             address: canonical.address,
           });
-          return errorResponse({
-            status: 401,
-            detail: result.reason,
-            instance: "/api/auth/verify",
-          });
+          return renderErrorResponse(new AppError("AUTH_UNAUTHENTICATED", { details: { reason: result.reason } }), { instance: "/api/auth/verify",
+           });
         }
 
         cleanuqExpiredChallenges().catch(() => {});
@@ -97,7 +87,7 @@ export async function POST(request) {
         const user = rawUser ? normalizeProfileForSession(rawUser) : null;
 
         if (!process.env.JWT_SECRET) {
-          return errorResponse({ status: 500, detail: "Server configuration error", instance: "/api/auth/verify" });
+          return renderErrorResponse(new AppError("INTERNAL", { details: { reason: "Server configuration error" } }), { instance: "/api/auth/verify"  });
         }
 
         const userId = user?._id?.toString() ?? canonical.address;
@@ -155,7 +145,7 @@ export async function POST(request) {
           status: 500,
           reason: error.message,
         });
-        return errorResponse({ status: 500, detail: "An unexpected error occurred.", instance: "/api/auth/verify" });
+        return renderErrorResponse(new AppError("INTERNAL", { details: { reason: "An unexpected error occurred." } }), { instance: "/api/auth/verify"  });
       }
     }
   );

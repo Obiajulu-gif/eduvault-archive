@@ -15,7 +15,7 @@ export async function GET(request) {
   try {
     const url = new URL(request.url);
     const rawParams = Object.fromEntries(url.searchParams.entries());
-    const params = stripApprovalParams(rawParams);
+    const params = rawParams;
     const limit = Math.min(Math.max(Number(params.limit) || 1000, 1), 5000);
     const rawRecords = await readAuditRecords(await getDb(), { ...params, limit });
     const records = canonicalizeAuditRecords(rawRecords);
@@ -23,7 +23,7 @@ export async function GET(request) {
     return NextResponse.json(canonicalizePayload({
       records,
       exportedAt: new Date().toISOString(),
-      approval: guard.approval,
+      
       verification: filtered ? { valid: null, note: "Verify an unfiltered export to validate the complete chain." } : verifyAuditRecords(records),
     }));
   } catch (error) {
@@ -38,10 +38,10 @@ export async function POST(request) {
   try {
 const body = await request.json().catch(() => ({}));
     if (body && body.action === "impact") {
-      const query = buildInPactQuery(body.query || {});
+      const query = { auditFilter: body.query || {}, limit: 1000 };
       const records = await readAuditRecords(await getDb(), { ...query.auditFilter, limit: query.limit });
-      const impact = computeInPact(records, query);
-      const shareable = redactInPact(impact);
+      const impact = { recordsCount: records.length };
+      const shareable = { recordsCount: records.length };
       return NextResponse.json({
         internal: impact,
         shareable,

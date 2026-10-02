@@ -43,6 +43,7 @@
     "db:indexes": "node scripts/setup-db-indexes.js",
     "benchmark:marketplace": "node scripts/benchmark-marketplace-search.mjs",
     "seed:local": "node scripts/seed-local-fixtures.mjs",
+    "diagnostics": "node scripts/diagnostics.mjs",
     "smoke:local": "node scripts/smoke-local.mjs",
     "worker:background": "node scripts/run-background-worker.mjs",
     "worker:background:once": "node scripts/run-background-worker.mjs --once",

@@ -302,3 +302,13 @@ describe('/api/receipts contract', () => {
     expect(body.verified).toBe(false);
   });
 });
+
+describe('/api/profile contract', () => {
+  it('returns profile for authenticated user', async () => {
+    currentUser.value = { sub: 'user-1' };
+    const { GET: getProfile } = await import('../profile/route.js');
+    const res = await getProfile(new Request('http://localhost:3000/api/profile', { method: 'GET' }));
+    await expectContract(res, '/api/profile', 'get');
+    expect(res.status).toBe(200);
+  });
+});

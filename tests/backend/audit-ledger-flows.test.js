@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test, describe } from 'node:test';
-import { appendAuditRecord } from '../../src/lib/backend/auditLedger.js';
+import { appendAuditRecord, appendCriticalMutation } from '../../src/lib/backend/auditLedger.js';
 
 describe('Audit Ledger - Student Ownership, Marketplace, Storage Flows', () => {
   test('Actor attribution and event shape for marketplace purchase', async () => {
@@ -79,5 +79,36 @@ describe('Audit Ledger - Student Ownership, Marketplace, Storage Flows', () => {
     assert.equal(insertedRecord.actor, 'student-wallet');
     assert.equal(insertedRecord.action, 'user.student_verification_submitted');
     assert.equal(insertedRecord.target.id, 'student-wallet');
+  });
+
+  test('Actor attribution and before/after correctness for critical mutation', async () => {
+    let insertedRecord = null;
+    const mockDb = {
+      collection: () => ({
+        findOne: async () => null,
+        find: () => ({ sort: () => ({ limit: () => ({ toArray: async () => [] }) }) }),
+        insertOne: async (record) => {
+          insertedRecord = record;
+        }
+      })
+    };
+
+    await appendCriticalMutation({
+      db: mockDb,
+      operationId: 'role_change:999',
+      actor: 'admin-1',
+      action: 'user.role_changed',
+      target: { type: 'user', id: 'user-2' },
+      reason: 'Promoted to creator',
+      before: { role: 'user' },
+      after: { role: 'creator' }
+    });
+
+    assert.ok(insertedRecord);
+    assert.equal(insertedRecord.actor, 'admin-1');
+    assert.equal(insertedRecord.action, 'user.role_changed');
+    assert.deepEqual(insertedRecord.before, { role: 'user' });
+    assert.deepEqual(insertedRecord.after, { role: 'creator' });
+    assert.equal(insertedRecord.reason, 'Promoted to creator');
   });
 });

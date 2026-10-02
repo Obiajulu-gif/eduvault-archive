@@ -6,7 +6,7 @@ import { getDb } from "@/lib/mongodb";
 import { getUserFromCookie } from "@/lib/api/auth";
 import { withApiHardening } from "@/lib/api/hardening";
 import { sendReceiptIfEligible } from "@/lib/email";
-import { errorResponse } from "@/lib/utils/errorResponse";
+import { AppError, renderErrorResponse } from "@/lib/errors";
 import logger from "@/lib/logger";
 
 /**
@@ -28,40 +28,28 @@ export async function POST(request) {
     async () => {
       const user = await getUserFromCookie(request);
       if (!user) {
-        return errorResponse({
-          status: 401,
-          detail: "Authentication required",
-          instance: "/api/email/purchase-receipt",
-        });
+        return renderErrorResponse(new AppError("AUTH_UNAUTHENTICATED", { details: { reason: "Authentication required" } }), { instance: "/api/email/purchase-receipt",
+         });
       }
 
       let body;
       try {
         body = await request.json();
       } catch {
-        return errorResponse({
-          status: 400,
-          detail: "Invalid JSON body",
-          instance: "/api/email/purchase-receipt",
-        });
+        return renderErrorResponse(new AppError("VALIDATION_FAILED", { details: { reason: "Invalid JSON body" } }), { instance: "/api/email/purchase-receipt",
+         });
       }
 
       const { purchaseId } = body || {};
 
       if (!purchaseId || typeof purchaseId !== "string") {
-        return errorResponse({
-          status: 400,
-          detail: "Missing or invalid purchaseId",
-          instance: "/api/email/purchase-receipt",
-        });
+        return renderErrorResponse(new AppError("VALIDATION_FAILED", { details: { reason: "Missing or invalid purchaseId" } }), { instance: "/api/email/purchase-receipt",
+         });
       }
 
       if (!ObjectId.isValid(purchaseId)) {
-        return errorResponse({
-          status: 400,
-          detail: "purchaseId must be a valid 24-character hex ObjectId",
-          instance: "/api/email/purchase-receipt",
-        });
+        return renderErrorResponse(new AppError("VALIDATION_FAILED", { details: { reason: "purchaseId must be a valid 24-character hex ObjectId" } }), { instance: "/api/email/purchase-receipt",
+         });
       }
 
       const db = await getDb();
@@ -71,20 +59,13 @@ export async function POST(request) {
         .findOne({ _id: new ObjectId(purchaseId) });
 
       if (!purchase) {
-        return errorResponse({
-          status: 404,
-          detail: "Purchase not found",
-          instance: "/api/email/purchase-receipt",
-        });
+        return renderErrorResponse(new AppError("NOT_FOUND", { details: { reason: "Purchase not found" } }), { instance: "/api/email/purchase-receipt",
+         });
       }
 
       const completedStatuses = ["confirmed", "settled", "completed"];
       if (!completedStatuses.includes(purchase.status)) {
-        return errorResponse({
-          status: 400,
-          detail: `Purchase status "${purchase.status}" is not eligible for a receipt email. Must be one of: ${completedStatuses.join(", ")}`,
-          instance: "/api/email/purchase-receipt",
-        });
+        return renderErrorResponse(new AppError("VALIDATION_FAILED", { details: { reason: `Purchase status "${purchase.status}" is not eligible for a receipt email. Must be one of: ${completedStatuses.join(", ")}` } }), { instance: "/api/email/purchase-receipt", });
       }
 
       if (purchase.receiptSent) {
@@ -110,11 +91,8 @@ export async function POST(request) {
         });
       } catch (err) {
         logger.error({ err, purchaseId }, "Failed to enqueue purchase receipt email");
-        return errorResponse({
-          status: 500,
-          detail: "Failed to enqueue receipt email",
-          instance: "/api/email/purchase-receipt",
-        });
+        return renderErrorResponse(new AppError("INTERNAL", { details: { reason: "Failed to enqueue receipt email" } }), { instance: "/api/email/purchase-receipt",
+         });
       }
     }
   );

@@ -4,6 +4,7 @@ import { NextResponse } from "next/server";
 import { getDb } from "@/lib/mongodb";
 import { requirePermission } from "@/lib/api/auth";
 import { auditLog } from "@/lib/api/audit";
+import { appendCriticalMutation } from "@/lib/backend/auditLedger";
 import {
   validatePublishRequest,
   getPublishingChecklist,
