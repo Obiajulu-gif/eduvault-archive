@@ -3,7 +3,7 @@ export const dynamic = 'force-dynamic';
 import { NextResponse } from 'next/server';
 import { getDb } from '@/lib/mongodb';
 import { verifyUnsubscribeToken } from '@/lib/email/unsubscribeToken';
-import { errorResponse } from '@/lib/utils/errorResponse';
+import { AppError, renderErrorResponse } from "@/lib/errors";
 
 /**
  * POST /api/email/unsubscribe
@@ -23,20 +23,14 @@ export async function POST(request) {
     const { token } = body;
 
     if (!token || typeof token !== 'string') {
-      return errorResponse({
-        status: 400,
-        detail: 'Missing or invalid token',
-        instance: '/api/email/unsubscribe',
-      });
+      return renderErrorResponse(new AppError("VALIDATION_FAILED", { details: { reason: 'Missing or invalid token' } }), { instance: '/api/email/unsubscribe',
+       });
     }
 
     const decoded = verifyUnsubscribeToken(token);
     if (!decoded) {
-      return errorResponse({
-        status: 400,
-        detail: 'Invalid or expired unsubscribe token',
-        instance: '/api/email/unsubscribe',
-      });
+      return renderErrorResponse(new AppError("VALIDATION_FAILED", { details: { reason: 'Invalid or expired unsubscribe token' } }), { instance: '/api/email/unsubscribe',
+       });
     }
 
     const { email, preferenceKey } = decoded;
@@ -79,10 +73,7 @@ export async function POST(request) {
     });
   } catch (error) {
     console.error('Unsubscribe failed:', error);
-    return errorResponse({
-      status: 500,
-      detail: 'Server error',
-      instance: '/api/email/unsubscribe',
-    });
+    return renderErrorResponse(new AppError("INTERNAL", { details: { reason: 'Server error' } }), { instance: '/api/email/unsubscribe',
+     });
   }
 }

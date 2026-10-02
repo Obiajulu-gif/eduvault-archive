@@ -5,7 +5,7 @@ import { NextResponse } from "next/server";
 import { withApiHardening } from "@/lib/api/hardening";
 import { getDb } from "@/lib/mongodb";
 import { auditLog } from "@/lib/api/audit";
-import { errorResponse } from "@/lib/utils/errorResponse";
+import { AppError, renderErrorResponse } from "@/lib/errors";
 
 const COMPLETED_PURCHASE_STATUSES = ["confirmed", "settled", "completed"];
 const DEFAULT_LIMIT = 5;
@@ -123,11 +123,8 @@ export async function GET(request) {
         return NextResponse.json({ creators: ranked });
       } catch (err) {
         auditLog({ event: "creators_top_failed", route: "creators/top", method: "GET", status: 500, reason: err.message });
-        return errorResponse({
-          status: 500,
-          detail: "Failed to fetch top creators.",
-          instance: "/api/creators/top",
-        });
+        return renderErrorResponse(new AppError("INTERNAL", { details: { reason: "Failed to fetch top creators." } }), { instance: "/api/creators/top",
+         });
       }
     }
   );

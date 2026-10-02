@@ -6,7 +6,7 @@ import { requirePermission } from "@/lib/api/auth";
 import { withApiHardening } from "@/lib/api/hardening";
 import { getDb } from "@/lib/mongodb";
 import { auditLog } from "@/lib/api/audit";
-import { errorResponse } from "@/lib/utils/errorResponse";
+import { AppError, renderErrorResponse } from "@/lib/errors";
 import {
   indexMaterial,
   removeMaterialFromIndex,
@@ -45,11 +45,8 @@ export async function GET(request) {
       const authorization = await requirePermission(request, "creator:manage");
       if (!authorization.ok) {
         auditLog({ event: "auth_failed", route: "creator/materials", method: "GET", status: authorization.status });
-        return errorResponse({
-          status: authorization.status,
-          detail: authorization.status === 401 ? "Authentication required." : "Creator access required.",
-          instance: "/api/creator/materials",
-        });
+        return renderErrorResponse(new AppError(authorization.status === 401 ? "AUTH_UNAUTHENTICATED" : "AUTH_FORBIDDEN", { details: { reason: authorization.status === 401 ? "Authentication required." : "Creator access required." } }), { instance: "/api/creator/materials",
+         });
       }
       const user = authorization.user;
 
@@ -83,11 +80,8 @@ export async function GET(request) {
         });
       } catch (err) {
         auditLog({ event: "creator_materials_failed", route: "creator/materials", method: "GET", status: 500, reason: err.message });
-        return errorResponse({
-          status: 500,
-          detail: "Failed to fetch creator materials.",
-          instance: "/api/creator/materials",
-        });
+        return renderErrorResponse(new AppError("INTERNAL", { details: { reason: "Failed to fetch creator materials." } }), { instance: "/api/creator/materials",
+         });
       }
     }
   );
@@ -101,41 +95,29 @@ export async function PATCH(request) {
       const user = await getUserFromCookie(request);
       if (!user) {
         auditLog({ event: "auth_failed", route: "creator/materials", method: "PATCH", status: 401 });
-        return errorResponse({
-          status: 401,
-          detail: "Authentication required.",
-          instance: "/api/creator/materials",
-        });
+        return renderErrorResponse(new AppError("AUTH_UNAUTHENTICATED", { details: { reason: "Authentication required." } }), { instance: "/api/creator/materials",
+         });
       }
 
       try {
         const body = await request.json();
         const id = body?.id;
         if (!id) {
-          return errorResponse({
-            status: 400,
-            detail: "Material id is required.",
-            instance: "/api/creator/materials",
-          });
+          return renderErrorResponse(new AppError("VALIDATION_FAILED", { details: { reason: "Material id is required." } }), { instance: "/api/creator/materials",
+           });
         }
 
         const db = await getDb();
         const userAddress = user.walletAddress || user.address || user.id;
         const existing = await db.collection("materials").findOne({ _id: id });
         if (!existing) {
-          return errorResponse({
-            status: 404,
-            detail: "Material not found.",
-            instance: "/api/creator/materials",
-          });
+          return renderErrorResponse(new AppError("NOT_FOUND", { details: { reason: "Material not found." } }), { instance: "/api/creator/materials",
+           });
         }
         if (existing.userAddress !== userAddress) {
           auditLog({ event: "creator_materials_forbidden", route: "creator/materials", method: "PATCH", status: 403 });
-          return errorResponse({
-            status: 403,
-            detail: "Not authorized to modify this material.",
-            instance: "/api/creator/materials",
-          });
+          return renderErrorResponse(new AppError("AUTH_FORBIDDEN", { details: { reason: "Not authorized to modify this material." } }), { instance: "/api/creator/materials",
+           });
         }
 
         const update = { updatedAt: new Date() };
@@ -172,11 +154,8 @@ export async function PATCH(request) {
         return NextResponse.json({ material: sanitizeMaterial(updated) });
       } catch (err) {
         auditLog({ event: "creator_materials_patch_failed", route: "creator/materials", method: "PATCH", status: 500, reason: err.message });
-        return errorResponse({
-          status: 500,
-          detail: "Failed to update material.",
-          instance: "/api/creator/materials",
-        });
+        return renderErrorResponse(new AppError("INTERNAL", { details: { reason: "Failed to update material." } }), { instance: "/api/creator/materials",
+         });
       }
     }
   );
@@ -190,21 +169,15 @@ export async function DELETE(request) {
       const user = await getUserFromCookie(request);
       if (!user) {
         auditLog({ event: "auth_failed", route: "creator/materials", method: "DELETE", status: 401 });
-        return errorResponse({
-          status: 401,
-          detail: "Authentication required.",
-          instance: "/api/creator/materials",
-        });
+        return renderErrorResponse(new AppError("AUTH_UNAUTHENTICATED", { details: { reason: "Authentication required." } }), { instance: "/api/creator/materials",
+         });
       }
 
       const url = new URL(request.url);
       const id = url.searchParams.get("id");
       if (!id) {
-        return errorResponse({
-          status: 400,
-          detail: "Material id is required.",
-          instance: "/api/creator/materials",
-        });
+        return renderErrorResponse(new AppError("VALIDATION_FAILED", { details: { reason: "Material id is required." } }), { instance: "/api/creator/materials",
+         });
       }
 
       try {
@@ -212,19 +185,13 @@ export async function DELETE(request) {
         const userAddress = user.walletAddress || user.address || user.id;
         const existing = await db.collection("materials").findOne({ _id: id });
         if (!existing) {
-          return errorResponse({
-            status: 404,
-            detail: "Material not found.",
-            instance: "/api/creator/materials",
-          });
+          return renderErrorResponse(new AppError("NOT_FOUND", { details: { reason: "Material not found." } }), { instance: "/api/creator/materials",
+           });
         }
         if (existing.userAddress !== userAddress) {
           auditLog({ event: "creator_materials_forbidden", route: "creator/materials", method: "DELETE", status: 403 });
-          return errorResponse({
-            status: 403,
-            detail: "Not authorized to delete this material.",
-            instance: "/api/creator/materials",
-          });
+          return renderErrorResponse(new AppError("AUTH_FORBIDDEN", { details: { reason: "Not authorized to delete this material." } }), { instance: "/api/creator/materials",
+           });
         }
 
         await db.collection("materials").deleteOne({ _id: id });
@@ -240,11 +207,8 @@ export async function DELETE(request) {
         return NextResponse.json({ deleted: true, id });
       } catch (err) {
         auditLog({ event: "creator_materials_delete_failed", route: "creator/materials", method: "DELETE", status: 500, reason: err.message });
-        return errorResponse({
-          status: 500,
-          detail: "Failed to delete material.",
-          instance: "/api/creator/materials",
-        });
+        return renderErrorResponse(new AppError("INTERNAL", { details: { reason: "Failed to delete material." } }), { instance: "/api/creator/materials",
+         });
       }
     }
   );

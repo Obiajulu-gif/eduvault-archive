@@ -6,7 +6,7 @@ import { getDb } from "@/lib/mongodb";
 import { getUserFromCookie } from "@/lib/api/auth";
 import { withApiHardening } from "@/lib/api/hardening";
 import { auditLog } from "@/lib/api/audit";
-import { errorResponse } from "@/lib/utils/errorResponse";
+import { AppError, renderErrorResponse } from "@/lib/errors";
 
 /** Allowed preference keys — keeps the stored shape predictable. */
 const ALLOWED_KEYS = [
@@ -56,7 +56,7 @@ export async function GET(request) {
       try {
         const session = await getUserFromCookie(request);
         if (!session) {
-          return errorResponse({ status: 401, detail: "Unauthorized", instance: "/api/profile/email-subscriptions" });
+          return renderErrorResponse(new AppError("AUTH_UNAUTHENTICATED", { details: { reason: "Unauthorized" } }), { instance: "/api/profile/email-subscriptions"  });
         }
 
         const db = await getDb();
@@ -66,7 +66,7 @@ export async function GET(request) {
 
         const user = await users.findOne(query, { projection: { emailSubscriptions: 1 } });
         if (!user) {
-          return errorResponse({ status: 404, detail: "User not found", instance: "/api/profile/email-subscriptions" });
+          return renderErrorResponse(new AppError("NOT_FOUND", { details: { reason: "User not found" } }), { instance: "/api/profile/email-subscriptions"  });
         }
 
         // Return persisted prefs merged with defaults so the client always
@@ -77,7 +77,7 @@ export async function GET(request) {
         return NextResponse.json({ success: true, emailSubscriptions });
       } catch (error) {
         auditLog({ event: "email_subscriptions_get_failed", route: "email-subscriptions", method: "GET", status: 500, reason: error.message });
-        return errorResponse({ status: 500, detail: "Server error", instance: "/api/profile/email-subscriptions" });
+        return renderErrorResponse(new AppError("INTERNAL", { details: { reason: "Server error" } }), { instance: "/api/profile/email-subscriptions"  });
       }
     }
   );
@@ -92,13 +92,13 @@ export async function PATCH(request) {
       try {
         const session = await getUserFromCookie(request);
         if (!session) {
-          return errorResponse({ status: 401, detail: "Unauthorized", instance: "/api/profile/email-subscriptions" });
+          return renderErrorResponse(new AppError("AUTH_UNAUTHENTICATED", { details: { reason: "Unauthorized" } }), { instance: "/api/profile/email-subscriptions"  });
         }
 
         const body = await request.json();
         const result = parsePreferences(body?.emailSubscriptions ?? body);
         if (!result.ok) {
-          return errorResponse({ status: 400, detail: result.reason, instance: "/api/profile/email-subscriptions" });
+          return renderErrorResponse(new AppError("VALIDATION_FAILED", { details: { reason: result.reason } }), { instance: "/api/profile/email-subscriptions"  });
         }
 
         const db = await getDb();
@@ -115,7 +115,7 @@ export async function PATCH(request) {
 
         const updateResult = await users.updateOne(query, { $set: setFields });
         if (updateResult.matchedCount === 0) {
-          return errorResponse({ status: 404, detail: "User not found", instance: "/api/profile/email-subscriptions" });
+          return renderErrorResponse(new AppError("NOT_FOUND", { details: { reason: "User not found" } }), { instance: "/api/profile/email-subscriptions"  });
         }
 
         const updated = await users.findOne(query, { projection: { emailSubscriptions: 1 } });
@@ -126,7 +126,7 @@ export async function PATCH(request) {
         return NextResponse.json({ success: true, emailSubscriptions });
       } catch (error) {
         auditLog({ event: "email_subscriptions_update_failed", route: "email-subscriptions", method: "PATCH", status: 500, reason: error.message });
-        return errorResponse({ status: 500, detail: "Server error", instance: "/api/profile/email-subscriptions" });
+        return renderErrorResponse(new AppError("INTERNAL", { details: { reason: "Server error" } }), { instance: "/api/profile/email-subscriptions"  });
       }
     }
   );
