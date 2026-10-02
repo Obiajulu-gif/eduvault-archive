@@ -28,6 +28,9 @@ EduVault is an in-development educational content marketplace with a current web
 npm install
 cp .env.example .env.local
 docker compose up -d mongodb
+
+# After setup, run the diagnostics command to verify your local environment:
+npm run diagnostics
 npm run dev
 ```
 
