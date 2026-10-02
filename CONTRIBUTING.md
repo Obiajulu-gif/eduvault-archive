@@ -18,6 +18,7 @@ EduVault is an in-development educational content marketplace with a current web
 1. Read [README.md](README.md).
 2. Review [docs/overview.md](docs/overview.md) and [docs/architecture.md](docs/architecture.md).
 3. Review [docs/quota-management.md](docs/quota-management.md) for information on resource quotas and operations.
+4. Review [docs/api-versioning.md](docs/api-versioning.md) for API contract and deprecation rules.
 4. Open an issue before starting large changes so architecture and scope can be aligned early.
 
 ## Local Setup
