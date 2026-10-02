@@ -7,6 +7,7 @@ import { requirePermission } from "@/lib/api/auth";
 import { withApiHardening } from "@/lib/api/hardening";
 import { getDb } from "@/lib/mongodb";
 import { auditLog } from "@/lib/api/audit";
+import { appendCriticalMutation } from "@/lib/backend/auditLedger";
 import { AppError, renderErrorResponse } from "@/lib/errors";
 import {
   enqueueMaterialSearchProjection,

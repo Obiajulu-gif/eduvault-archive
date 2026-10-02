@@ -14,7 +14,7 @@ import {
   setCreatorSuspendedFlag,
 } from '@/lib/auth/suspension'
 import { sendSuspensionEmail, sendReactivationEmail } from '@/lib/email/suspensionNotifier'
-import { appendAuditRecord } from '@/lib/backend/auditLedger'
+import { appendCriticalMutation } from '@/lib/backend/auditLedger'
 import { enqueueMaterialSearchProjection } from '@/lib/backend/materialSearchProjection'
 import { notify } from '@/lib/notifications/notifications'
 import { computePermissionDiff, isBroadChange } from '@/lib/auth/permissionDiff'
@@ -190,15 +190,16 @@ const { userId, action, reason, confirmBroad, preview, expectedPermissionsHash, 
       },
     })
 
-    await appendAuditRecord({
+    await appendCriticalMutation({
       db,
-      operationId: request.headers.get('x-idempotency-key') || `${action}:${userId}:${targetUser.status || 'active'}:${admin.sub}`,
+      operationId: request.headers.get("x-idempotency-key") || `${action}:${userId}:${targetUser.status || "active"}:${admin.sub}`,
       actor: admin.sub,
       action: `user.${action}`,
-      target: { type: 'user', id: userId },
-      intent: { action, reason, confirmBroad: Boolean(confirmBroad), broad },
-      result: { status: newStatus, listingsUpdated: listings.modified, diff },
-      reason,
+      target: { type: "user", id: userId },
+      reason: reason || `Admin user ${action}`,
+      before: { status: targetUser.status || "active" },
+      after: { status: newStatus },
+      intent: { action, confirmBroad: Boolean(confirmBroad), broad },
       approval: validation.approval,
     })
 
