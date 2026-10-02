@@ -349,118 +349,47 @@ components:
           type: string
           format: date-time
 
-IncidentInput:
+WebhookEvent:
       type: object
-      description: Inputs for the incident impact calculator.
-      required: [incidentId, window]
+      required: [id, provider, timestamp, signature, payload]
       properties:
-        incidentId:
+        id:
           type: string
-          description: Stable identifier for the incident being assessed.
-        window:
+          description: Unique event identifier used for replay protection
+        provider:
+          type: string
+          enum: [stripe, github, internal]
+        timestamp:
+          type: integer
+          description: Unix epoch seconds when the event was emitted
+        signature:
+          type: string
+          description: HMAC signature over the canonical payload
+        payload:
           type: object
-          required: [start, end]
-          properties:
-            start:
-              type: string
-              format: date-time
-            end:
-              type: string
-              format: date-time
-        affectedUsers:
-          type: array
-          description: Wallet addresses of users believed to be affected.
-          items:
-            type: string
-        affectedRecords:
-          type: array
-          description: Material ids believed to be affected.
-          items:
-            type: string
-        affectedOperations:
-          type: array
-          description: Operation types that were disrupted.
-          items:
-            type: string
-            enum: [purchase, import, download, entitlement]
-        severity:
-          type: string
-          enum: [low, medium, high, critical]
-        redact:
-          type: boolean
-          default: true
-          description: When true, return the shareable view with sensitive details redacted.
+          additionalProperties: true
 
-    IncidentImpactSummary:
+    WebhookAccepted:
       type: object
-      required: [users, records, operations, severity]
+      required: [eventId, status]
       properties:
-        users:
-          type: integer
-        records:
-          type: integer
-        operations:
-          type: integer
-        severity:
+        eventId:
           type: string
-          enum: [low, medium, high, critical]
+        status:
+          type: string
+          enum: [processed, duplicate]
 
-    IncidentImpactResult:
+    WebhookError:
       type: object
-      required: [incidentId, window, summary, internal, shareable]
+      required: [error, code]
       properties:
-        incidentId:
+        error:
           type: string
-        window:
+        code:
+          type: string
+          enum: [invalid_signature, stale_timestamp, duplicate_event, malformed_event]
+        details:
           type: object
-          required: [start, end]
-          properties:
-            start:
-              type: string
-              format: date-time
-            end:
-              type: string
-              format: date-time
-        summary:
-          $ref: "#/components/schemas/IncidentImpactSummary"
-        internal:
-          type: object
-          description: Full detail for maintainers. Only included when redact is false.
-          properties:
-            affectedUsers:
-              type: array
-              items:
-                type: string
-            affectedRecords:
-              type: array
-              items:
-                type: string
-            affectedOperations:
-              type: array
-              items:
-                type: string
-        shareable:
-          type: object
-          description: Redacted view safe for external communication.
-          required: [incidentId, window, summary]
-          properties:
-            incidentId:
-              type: string
-            window:
-              type: object
-              required: [start, end]
-              properties:
-                start:
-                  type: string
-                  format: date-time
-                end:
-                  type: string
-                  format: date-time
-            summary:
-              $ref: "#/components/schemas/IncidentImpactSummary"
-            note:
-              type: string
-              description: Human-readable explanation of the redaction.
 
     ReceiptPayload:
       type: object
@@ -574,6 +503,30 @@ IncidentInput:
         application/json:
           schema:
             $ref: "#/components/schemas/Error"
+    InvalidSignature:
+      description: Webhook signature verification failed
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/WebhookError"
+    StaleTimestamp:
+      description: Webhook timestamp outside the allowed replay window
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/WebhookError"
+    DuplicateEvent:
+      description: Webhook event was already processed
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/WebhookError"
+    MalformedEvent:
+      description: Webhook payload could not be parsed
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/WebhookError"
 
 security:
   - cookieAuth: []
@@ -634,6 +587,46 @@ paths:
                 $ref: "#/components/schemas/Error"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  # ---------------------------------------------------------------------------
+  # Webhooks
+  # ---------------------------------------------------------------------------
+  /api/webhooks/{provider}:
+    post:
+      summary: Receive and verify an inbound webhook from a supported provider
+      operationId: receiveWebhook
+      tags: [Webhooks]
+      security: []
+      parameters:
+        - name: provider
+          in: path
+          required: true
+          schema:
+            type: string
+            enum: [stripe, github, internal]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/WebhookEvent"
+      responses:
+        "200":
+          description: Event accepted (processed or duplicate)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WebhookAccepted"
+        "400":
+          $ref: "#/components/responses/MalformedEvent"
+        "401":
+          $ref: "#/components/responses/InvalidSignature"
+        "409":
+          $ref: "#/components/responses/DuplicateEvent"
+        "422":
+          $ref: "#/components/responses/StaleTimestamp"
         "429":
           $ref: "#/components/responses/RateLimited"
 

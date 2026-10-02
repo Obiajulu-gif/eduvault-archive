@@ -109,6 +109,34 @@ Indexes:
 - unique `{ buyerAddress: 1, materialId: 1 }`.
 - `{ active: 1, updatedAt: -1 }`.
 
+### `webhook_events`
+
+Idempotency log for inbound webhook and integration callback deliveries.
+Every verified delivery is recorded before side effects run so that a
+replayed event with a valid signature is acknowledged without repeating
+those side effects.
+
+Required fields:
+
+- `_id`: stable dedupe key, `{provider}:{eventId}`.
+- `provider`: webhook provider or internal callback source key.
+- `eventId`: provider-supplied event identifier.
+- `signatureTimestamp`: Unix seconds from the signed payload header.
+- `status`: `processed` or `failed`.
+- `createdAt` / `updatedAt`: timestamps.
+
+Optional fields:
+
+- `errorCode`: stable `EVT_WEBHOOK_*` code when `status` is `failed`.
+- `attempts`: delivery attempts observed for this event id.
+
+Indexes:
+
+- unique `_id` (dedupe key).
+- `{ provider: 1, createdAt: -1 }` for provider-scoped replay auditing.
+- TTL `{ createdAt: 1 }` with `expireAfterSeconds` set to the replay window
+  (default 24h) so the log stays bounded.
+
 ### `sync_state`
 
 Durable indexer checkpoint state.
@@ -127,7 +155,64 @@ Required fields:
 - `_id`: stable event id.
 - `type`, `source`, `raw`, `createdAt`.
 
-### `search_index`
+## Inbound Webhook Verification
+
+Inbound webhooks and integration callbacks are verified before any handler
+runs. The canonical signing scheme, header names, and rotation rules live in
+[`docs/webhook-signatures.md`](webhook-signatures.md); this section defines
+the backend contract that routes must honour.
+
+Verification order (fail fast, no side effects before step 4):
+
+1. Parse the raw body and read the signature and timestamp headers. A missing
+   or malformed header is rejected with `EVT_WEBHOOK_001`.
+2. Recompute the HMAC over `{timestamp}.{rawBody}` using the provider secret
+   (current secret first, then `webhookSigningSecretPrevious` during
+   rotation). A mismatch is rejected with `EVT_WEBHOOK_002`.
+3. Reject timestamps outside the replay window (default 300s in the past,
+   60s in the future) with `EVT_WEBHOOK_003`.
+4. Insert `{ _id: "{provider}:{eventId}" }` into `webhook_events`. A
+   duplicate key means the event was already handled: respond `200` with
+   `{ "duplicate": true }` and skip side effects (`EVT_WEBHOOK_004` is
+   reserved for explicit duplicate rejections when a caller opts in).
+5. Run the handler, then mark the record `processed` (or `failed` with an
+   `errorCode`).
+
+Structured error envelope (see [Stable Error Codes](#stable-error-codes)):
+
+| Condition              | Code             | `retryable` |
+| ---------------------- | ---------------- | ----------- |
+| Missing/malformed sig  | `EVT_WEBHOOK_001`| `false`     |
+| Invalid signature      | `EVT_WEBHOOK_002`| `false`     |
+| Stale/future timestamp | `EVT_WEBHOOK_003`| `false`     |
+| Duplicate event id     | `EVT_WEBHOOK_004`| `false`     |
+| Handler failure        | `EVT_WEBHOOK_005`| `true`      |
+
+## API Contracts
+
+### `POST /api/profile`
+
+Request:
+
+- `fullName`: required string.
+- `email`: required email.
+- `walletAddress`: optional EVM or Stellar public key.
+- `institution`, `country`, `bio`: optional strings.
+
+Response:
+
+- `success`, `user`, `emailSent`.
+
+### `PATCH /api/profile`
+
+Request:
+
+- `displayName`, `bio`, `avatarUrl`, `institution`, `country`, `twitterUrl`, `githubUrl`, `websiteUrl`: optional profile fields.
+- `payoutWalletAddress`: optional wallet address for settlement routing.
+- `preferredPayoutCurrency`: optional uppercase currency code such as `XLM`, `USD`, or `USDC`.
+- `payoutNotes`: optional plain-text payout notes.
+
+Response:
 
 Permission-aware search and discovery index. One document per indexable
 record (material), keyed by the source record id and a normalized visibility
@@ -216,6 +301,57 @@ Response:
 
 - `success`, `user`, `emailSent`.
 
+- `creatorAddress`, `dateRange: { from, to }`.
+- `earnings`: `grossRevenue`, `salesCount` (all-time, completed purchases only),
+  `windowRevenue`, `windowSalesCount` (within `dateRange`), `pendingRevenue`,
+  `pendingCount`, `refundedAmount`, `refundedCount`.
+- `payouts`: `totalPaidOut`, `totalPending`, `lastPayoutAt` derived from the
+  `payouts` collection.
+- `outstandingBalance`: `max(grossRevenue - totalPaidOut, 0)`.
+- `byMaterial`: per-material `{ materialId, title, salesCount, grossRevenue }`,
+  sorted by revenue descending.
+
+### `POST /api/webhooks/{provider}`
+
+Auth: signature headers only; no session cookie is required.
+
+Request:
+
+- Raw body is the exact bytes signed by the provider.
+- `X-Webhook-Signature`: hex HMAC of `{timestamp}.{rawBody}`.
+- `X-Webhook-Timestamp`: Unix seconds.
+- `X-Webhook-Id`: provider event id used as the dedupe key.
+
+Response:
+
+- `200 { "received": true }` on first successful processing.
+- `200 { "received": true, "duplicate": true }` when the event id was
+  already processed.
+- `400` with the structured envelope and `EVT_WEBHOOK_001`–`EVT_WEBHOOK_003`
+  for malformed, invalid, or stale deliveries.
+- `500` with `EVT_WEBHOOK_005` when the handler fails; the event record is
+  left `failed` so a provider retry can reprocess it.
+
+## Schema Change Rules
+
+- Add fields as optional first, then backfill, then make route-level validation stricter.
+- Keep on-chain fields separate from off-chain metadata.
+- Treat `purchases` and `entitlement_cache` as derived from chain events.
+- Do not delete or repurpose fields without a migration note.
+
+## API Hardening Expectations
+
+- Validate and sanitize all route input before persistence or logs.
+- Apply rate limits to public and sensitive route families.
+- Emit structured audit logs for validation failures, rate-limit blocks, upload failures, auth failures, purchase sync, and indexer anomalies.
+- Add focused tests for validation, rate limiting, and indexer idempotency when changing backend behavior.
+
+## Stable Error Codes
+
+All API routes must return errors in the following envelope rather than
+returning prose strings that clients parse:
+
+```json
 {
   "error": {
     "code": "EVT_PURCHASE_007",
@@ -233,8 +369,38 @@ below summarises the namespace-to-subsystem relationship:
 | ------------------- | --------------------------------- |
 | `EVT_PURCHASE_`     | Purchase flow                     |
 | `EVT_ENTITLEMENT_`  | Entitlement / access-check        |
-| `EVT_DOWNLOAD_`      | Download capability tokens        |
-| `EVT_REFUND_`        | Refund flow                       |
-| `ST_STORAGE_`        | IPFS / Pinata storage             |
-| `EVT_INDEXER_`       | Stellar event indexer             |
-| `EVT_WEBHOOK_`       | Webhook delivery                    |
+| `EVT_DOWNLOAD_`     | Download capability tokens        |
+| `EVT_REFUND_`       | Refund flow                       |
+| `EVT_STORAGE_`      | IPFS / Pinata storage             |
+| `EVT_INDEXER_`      | Stellar event indexer             |
+| `EVT_WEBHOOK_`      | Inbound webhook verification and outbound creator webhooks |
+| `EVT_AUTH_`         | Authentication / authorisation    |
+| `EVT_CONTRACT_PM_`  | PurchaseManager on-chain errors   |
+| `EVT_CONTRACT_REG_` | MaterialRegistry on-chain errors  |
+| `EVT_INPUT_`        | Request validation / input errors |
+
+### Implementation rules
+
+- Every `catch` block in an API route handler must map the caught error to a
+  code before returning. A fallback mapping (e.g. `EVT_INPUT_001` for
+  validation, `EVT_PURCHASE_012` for registry call failures) is acceptable
+  when a precise mapping is not yet available, but must be tracked as a
+  follow-up task.
+- Contract `contracterror` discriminants must be mapped to
+  `EVT_CONTRACT_PM_*` or `EVT_CONTRACT_REG_*` codes by the API layer before
+  the response leaves the server. Raw numeric discriminants must never
+  appear in client-facing responses.
+- The `retryable` flag drives frontend retry logic. Only set `true` for
+  transient failures where the same request has a reasonable chance of
+  succeeding after a delay.
+- `supportAction` values are defined in
+  [`docs/API_REFERENCE.md#support-actions`](API_REFERENCE.md#support-actions).
+
+### Tests
+
+Add a focused test for each new error mapping when adding or changing a route.
+See `src/lib/__tests__/` for existing test patterns. Tests must assert the
+stable `code` field value, not the `message` string.
+Webhook verification tests must cover valid, invalid, stale, duplicate, and
+malformed deliveries, and assert that duplicate valid events do not repeat
+side effects.
