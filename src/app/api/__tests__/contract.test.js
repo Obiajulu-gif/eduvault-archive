@@ -47,7 +47,7 @@ function validate(value, rawSchema, path = '$') {
   if (schema.allOf) return schema.allOf.flatMap((s) => validate(value, s, path));
   if (schema.oneOf) {
     const results = schema.oneOf.map((s) => validate(value, s, path));
-    return results.some((r) => r.length === 0) ? [] : [`${path}: matches no oneOf branch (${results.flat().join('; ')})`)];
+    return results.some((r) => r.length === 0) ? [] : [`${path}: matches no oneOf branch (${results.flat().join('; ')})`];
   }
   const errors = [];
   if (schema.type) {
@@ -129,7 +129,7 @@ describe('POST /api/materials/import contract', () => {
     const body = await expectContract(res, '/api/materials/import', 'post');
 
     expect(res.status).toBe(200);
-    expect(body.summary).toEqual({ create: 2, update: 0, skip: 0, error: 0 });
+    expect(body.summary).toEqual({ create: 2, update: 0, skip: 0, duplicate: 0, error: 0 });
     for (const spy of spies) expect(spy).not.toHaveBeenCalled();
   });
 
@@ -142,7 +142,30 @@ describe('POST /api/materials/import contract', () => {
 
     expect(res.status).toBe(400);
     expect(body.invalidRows.map((r) => r.row)).toEqual([3, 4]);
+    expect(body.summary).toEqual({ create: 2, update: 0, skip: 0, duplicate: 1, error: 2 });
+    expect(body.invalidRows[0].conflict).toEqual({ type: "duplicate_in_batch", field: "externalId", firstRow: 1 });
+    expect(body.invalidRows[0]).not.toHaveProperty("record");
     expect(await db.collection('materials').countDocuments( { userAddress })).toBe(0);
+  });
+
+  it('dry run reports an existing storage-key conflict without returning stored content', async () => {
+    await db.collection('materials').insertOne({
+      userAddress,
+      externalId: 'existing-record',
+      storageKey: 'ipfs://already-owned',
+      title: 'private stored title',
+    });
+
+    const res = await runImport({
+      dryRun: true,
+      records: [{ externalId: 'new-record', title: 'New title', storageKey: 'ipfs://already-owned' }],
+    });
+    const body = await expectContract(res, '/api/materials/import', 'post');
+
+    expect(body.summary).toEqual({ create: 0, update: 0, skip: 1, duplicate: 0, error: 0 });
+    expect(body.rows[0].conflict).toEqual({ type: 'existing_storage_key', field: 'storageKey' });
+    expect(JSON.stringify(body)).not.toContain('private stored title');
+    expect(await db.collection('materials').countDocuments({ userAddress })).toBe(1);
   });
 
   it('commit with invalid rows writes nothing', async () => {
@@ -163,7 +186,7 @@ describe('POST /api/materials/import contract', () => {
     const again = await runImport({ dryRun: false, records });
     const againBody = await expectContract(again, '/api/materials/import', 'post');
     expect(again.status).toBe(200);
-    expect(againBody.summary).toEqual({ create: 0, update: 0, skip: 2, error: 0 });
+    expect(againBody.summary).toEqual({ create: 0, update: 0, skip: 2, duplicate: 0, error: 0 });
     expect(await db.collection('materials').countDocuments({ userAddress })).toBe(2);
 
     const changed = await runImport({ dryRun: false, records: [{ ...records[0], title: 'Algebra notes v2' }, records[1]] });

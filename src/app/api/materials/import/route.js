@@ -64,7 +64,7 @@ export async function POST(request) {
         // duplicates.
         const invalidRows = plan.rows
           .filter((r) => r.action === "error")
-          .map(({ row, errors }) => ({ row, errors }));
+          .map(({ row, errors, conflict }) => ({ row, errors, ...(conflict ? { conflict } : {}) }));
         const report = {
           dryRun: validation.dryRun,
           total: validation.total,

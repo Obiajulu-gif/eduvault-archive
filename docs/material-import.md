@@ -31,7 +31,7 @@
 | `coverImageUrl`, `thumbnailUrl` | `http`, `https`, or a relative path. `javascript:`, `data:` and protocol-relative (`//host`) URLs are rejected |
 | `description` | HTML is sanitized with `sanitizeRichText` (scripts and event handlers are removed) |
 
-Two rows in the same batch with the same `externalId` or `storageKey` are both flagged as errors, except for the first occurrence.
+Two rows in the same batch with the same `externalId` or `storageKey` are flagged as errors after the first occurrence. The response reports the duplicate count separately while also including those rows in the error count. Conflict details contain only the field and the first row number; they never echo imported record contents. A row whose `storageKey` is already owned by the caller is skipped with a safe `existing_storage_key` conflict detail.
 
 ## What each row does
 
@@ -53,7 +53,7 @@ Dry runs only read from the database. Nothing is written: no materials, quaranti
 ```json
 {
   "dryRun": true, "total": 4, "valid": 3, "invalid": 1,
-  "summary": { "create": 1, "update": 1, "skip": 1, "error": 1 },
+  "summary": { "create": 1, "update": 1, "skip": 1, "duplicate": 0, "error": 1 },
   "rows": [
     { "row": 1, "action": "skip", "externalId": "sis-1041", "materialId": "66f…", "reason": "No changes" },
     { "row": 2, "action": "update", "externalId": "sis-1042", "materialId": "66f…", "fields": ["title"] },

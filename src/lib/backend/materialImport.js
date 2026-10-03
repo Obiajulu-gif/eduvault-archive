@@ -219,10 +219,12 @@ export function planImport(validation, existing = []) {
     const duplicateOf = (record.externalId && seenExternalIds.get(record.externalId))
       || seenStorageKeys.get(record.storageKey);
     if (duplicateOf) {
+      const field = record.externalId ? "externalId" : "storageKey";
       rows.push({
         row: result.row,
         action: "error",
-        errors: [{ field: record.externalId ? "externalId" : "storageKey", message: `Duplicate of row ${duplicateOf} in this batch` }],
+        conflict: { type: "duplicate_in_batch", field, firstRow: duplicateOf },
+        errors: [{ field, message: `Duplicate of row ${duplicateOf} in this batch` }],
       });
       continue;
     }
@@ -240,15 +242,25 @@ export function planImport(validation, existing = []) {
 
     const sameFile = byStorageKey.get(record.storageKey);
     if (sameFile) {
-      rows.push({ row: result.row, action: "skip", externalId: record.externalId, materialId: String(sameFile._id), reason: "storageKey already imported" });
+      rows.push({
+        row: result.row,
+        action: "skip",
+        externalId: record.externalId,
+        materialId: String(sameFile._id),
+        reason: "storageKey already imported",
+        conflict: { type: "existing_storage_key", field: "storageKey" },
+      });
       continue;
     }
 
     rows.push({ row: result.row, action: "create", externalId: record.externalId, record });
   }
 
-  const summary = { create: 0, update: 0, skip: 0, error: 0 };
-  for (const r of rows) summary[r.action] += 1;
+  const summary = { create: 0, update: 0, skip: 0, duplicate: 0, error: 0 };
+  for (const r of rows) {
+    summary[r.action] += 1;
+    if (r.conflict?.type === "duplicate_in_batch") summary.duplicate += 1;
+  }
   return { summary, rows };
 }
 

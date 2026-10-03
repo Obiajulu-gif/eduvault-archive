@@ -154,6 +154,21 @@ components:
                 type: string
               message:
                 type: string
+        conflict:
+          $ref: "#/components/schemas/ImportConflict"
+
+    ImportConflict:
+      type: object
+      required: [type, field]
+      properties:
+        type:
+          type: string
+          enum: [duplicate_in_batch, existing_storage_key]
+        field:
+          type: string
+          enum: [externalId, storageKey]
+        firstRow:
+          type: integer
 
     ImportPlanRow:
       type: object
@@ -198,13 +213,15 @@ components:
             $ref: "#/components/schemas/ImportRowError"
         summary:
           type: object
-          required: [create, update, skip, error]
+          required: [create, update, skip, duplicate, error]
           properties:
             create:
               type: integer
             update:
               type: integer
             skip:
+              type: integer
+            duplicate:
               type: integer
             error:
               type: integer
