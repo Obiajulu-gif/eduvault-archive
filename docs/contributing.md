@@ -12,6 +12,8 @@ Thank you for improving EduVault. This guide explains how to prepare changes tha
 5. Run the most relevant checks before committing.
 6. Open a pull request with a concise summary, test evidence, and screenshots for visible UI changes.
 
+For changes that can affect production data, permissions, payments, storage, migrations, configuration, or availability, complete the [high-risk release readiness checklist](release-readiness.md) in the pull request. Maintainers should record any urgent exception and follow-up owner there.
+
 ## Quick Start: One-Command Bootstrap
 
 Contributors can reach a fully working local state in a single command:
