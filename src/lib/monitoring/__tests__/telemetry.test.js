@@ -16,8 +16,11 @@ import {
 } from "../telemetry.js";
 
 const STELLAR_SECRET = `S${"A".repeat(55)}`;
-const JWT =
-  "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c";
+const JWT = [
+  Buffer.from('{"alg":"HS256","typ":"JWT"}').toString("base64url"),
+  Buffer.from('{"sub":"1234567890"}').toString("base64url"),
+  "A".repeat(43),
+].join(".");
 const EMAIL = "learner@example.com";
 
 let records;
