@@ -9,6 +9,12 @@ import { describe, it, before, after, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { MongoClient, ObjectId } from "mongodb";
 import { MongoMemoryServer } from "mongodb-memory-server";
+import {
+  RETENTION_POLICIES,
+  buildPreviewReport,
+  cleanupCollection,
+  resolveHoldReason,
+} from "../../scripts/data-retention-cleanup.mjs";
 
 let mongoServer;
 let client;
@@ -291,5 +297,208 @@ describe("Data Retention Cleanup Tests", () => {
 
     assert.ok(eligible > 0, "Should identify eligible records");
     assert.ok(eligible < 10, "Should not mark all records as eligible");
+  });
+});
+
+const DAY = 24 * 60 * 60 * 1000;
+
+function daysAgo(now, days) {
+  return new Date(now.getTime() - days * DAY);
+}
+
+function idsFor(bucket, collection) {
+  return bucket
+    .filter((entry) => entry.collection === collection)
+    .map((entry) => entry.id)
+    .sort();
+}
+
+describe("Deterministic retention cleanup preview (#892)", () => {
+  it("categorises an eligible, expired record", async () => {
+    const now = new Date();
+    const expired = {
+      _id: new ObjectId(),
+      eventType: "sync",
+      processedAt: daysAgo(now, 200),
+    };
+    const recent = {
+      _id: new ObjectId(),
+      eventType: "sync",
+      processedAt: daysAgo(now, 10),
+    };
+    // Expired session (past 30-day window) and a recent one (within window).
+    const expiredSession = { _id: new ObjectId(), expiresAt: daysAgo(now, 40) };
+    const recentSession = { _id: new ObjectId(), expiresAt: daysAgo(now, 5) };
+
+    await db.collection("sync_events").insertMany([expired, recent]);
+    await db.collection("sessions").insertMany([expiredSession, recentSession]);
+
+    const report = await buildPreviewReport(db, { now });
+
+    assert.deepEqual(idsFor(report.buckets.eligible, "sync_events"), [String(expired._id)]);
+    assert.deepEqual(idsFor(report.buckets.eligible, "sessions"), [String(expiredSession._id)]);
+    assert.ok(
+      !idsFor(report.buckets.eligible, "sessions").includes(String(recentSession._id)),
+      "records within the retention window must not be eligible"
+    );
+
+    const syncReport = report.collections.find((c) => c.collection === "sync_events");
+    assert.equal(syncReport.status, "processed");
+    assert.equal(syncReport.eligible, 1);
+
+    const sessionReport = report.collections.find((c) => c.collection === "sessions");
+    assert.equal(sessionReport.eligible, 1);
+  });
+
+  it("skips a permanently protected record with reason", async () => {
+    const now = new Date();
+    const purchase = {
+      _id: new ObjectId(),
+      buyerAddress: "0xbuyer",
+      materialId: new ObjectId().toString(),
+      status: "completed",
+      createdAt: daysAgo(now, 400),
+    };
+    await db.collection("purchases").insertOne(purchase);
+
+    const before = await db.collection("purchases").countDocuments();
+    const report = await buildPreviewReport(db, { now });
+    const after = await db.collection("purchases").countDocuments();
+
+    const skipped = report.buckets.skipped.find((entry) => entry.collection === "purchases");
+    assert.ok(skipped, "purchases must appear in the skipped bucket");
+    assert.equal(skipped.reason, "permanently_protected");
+
+    const purchaseReport = report.collections.find((c) => c.collection === "purchases");
+    assert.equal(purchaseReport.status, "skipped");
+    assert.equal(purchaseReport.eligible, 0);
+    assert.equal(before, after, "preview must not delete protected records");
+  });
+
+  it("holds a record linked to an active dispute with an explicit reason", async () => {
+    const now = new Date();
+    const held = {
+      _id: new ObjectId(),
+      userId: "user1",
+      message: "Disputed purchase notification",
+      read: true,
+      readAt: daysAgo(now, 200),
+      activeDispute: true,
+    };
+    const eligible = {
+      _id: new ObjectId(),
+      userId: "user1",
+      message: "Old clean notification",
+      read: true,
+      readAt: daysAgo(now, 200),
+    };
+    await db.collection("notifications").insertMany([held, eligible]);
+
+    const report = await buildPreviewReport(db, { now });
+
+    const heldEntries = report.buckets.held.filter((e) => e.collection === "notifications");
+    assert.equal(heldEntries.length, 1);
+    assert.equal(heldEntries[0].id, String(held._id));
+    assert.equal(heldEntries[0].reason, "active_dispute");
+
+    assert.deepEqual(idsFor(report.buckets.eligible, "notifications"), [String(eligible._id)]);
+    assert.ok(
+      !idsFor(report.buckets.eligible, "notifications").includes(String(held._id)),
+      "held records must not be eligible"
+    );
+
+    // Held classification is also available directly.
+    assert.equal(
+      resolveHoldReason("notifications", held, { now, materialIds: new Set() }),
+      "active_dispute"
+    );
+  });
+
+  it("holds material history linked to an existing material", async () => {
+    const now = new Date();
+    const materialId = new ObjectId();
+    const linked = {
+      _id: new ObjectId(),
+      materialId: materialId.toString(),
+      version: 1,
+      deletedAt: daysAgo(now, 800),
+    };
+    await db.collection("materials").insertOne({ _id: materialId, title: "Kept" });
+    await db.collection("material_history").insertOne(linked);
+
+    const report = await buildPreviewReport(db, { now });
+    const heldEntries = report.buckets.held.filter((e) => e.collection === "material_history");
+    assert.equal(heldEntries.length, 1);
+    assert.equal(heldEntries[0].reason, "linked_material_exists");
+  });
+
+  it("is deterministic across repeated previews", async () => {
+    const now = new Date();
+    const docs = Array.from({ length: 4 }, (_, i) => ({
+      _id: new ObjectId(),
+      eventType: "sync",
+      processedAt: daysAgo(now, 200 + i),
+    }));
+    await db.collection("sync_events").insertMany(docs);
+
+    const first = await buildPreviewReport(db, { now });
+    const second = await buildPreviewReport(db, { now });
+
+    assert.deepEqual(first.buckets, second.buckets);
+    assert.deepEqual(first.collections, second.collections);
+    // Ordered by ascending _id string.
+    const expected = docs.map((d) => String(d._id)).sort();
+    assert.deepEqual(idsFor(first.buckets.eligible, "sync_events"), expected);
+  });
+
+  it("performs no destructive change in preview mode", async () => {
+    const now = new Date();
+    const expired = { _id: new ObjectId(), expiresAt: daysAgo(now, 40) };
+    await db.collection("sessions").insertOne(expired);
+
+    const before = await db.collection("sessions").countDocuments();
+    const report = await buildPreviewReport(db, { now });
+    const after = await db.collection("sessions").countDocuments();
+
+    assert.equal(report.summary.totalDeleted, 0);
+    assert.equal(before, after);
+    assert.equal(await db.collection("sessions").countDocuments({ _id: expired._id }), 1);
+  });
+
+  it("applies cleanup for eligible records in execute mode", async () => {
+    const now = new Date();
+    const expired = { _id: new ObjectId(), expiresAt: daysAgo(now, 40) };
+    const fresh = { _id: new ObjectId(), expiresAt: daysAgo(now, 5) };
+    const purchase = {
+      _id: new ObjectId(),
+      buyerAddress: "0xbuyer",
+      materialId: new ObjectId().toString(),
+      status: "completed",
+      createdAt: daysAgo(now, 400),
+    };
+    await db.collection("sessions").insertMany([expired, fresh]);
+    await db.collection("purchases").insertOne(purchase);
+
+    const sessionResult = await cleanupCollection(
+      db,
+      "sessions",
+      RETENTION_POLICIES.sessions,
+      false,
+      now
+    );
+    assert.equal(sessionResult.deleted, 1);
+    assert.equal(await db.collection("sessions").countDocuments({ _id: expired._id }), 0);
+    assert.equal(await db.collection("sessions").countDocuments({ _id: fresh._id }), 1);
+
+    const purchaseResult = await cleanupCollection(
+      db,
+      "purchases",
+      RETENTION_POLICIES.purchases,
+      false,
+      now
+    );
+    assert.equal(purchaseResult.skipped, true);
+    assert.equal(purchaseResult.reason, "permanently_protected");
+    assert.equal(await db.collection("purchases").countDocuments({ _id: purchase._id }), 1);
   });
 });

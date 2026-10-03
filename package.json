@@ -47,7 +47,8 @@
     "worker:background": "node scripts/run-background-worker.mjs",
     "worker:background:once": "node scripts/run-background-worker.mjs --once",
     "worker:background:status": "node scripts/run-background-worker.mjs --status",
-    "worker:background:reprocess": "node scripts/run-background-worker.mjs --reprocess-dead-letters"
+    "worker:background:reprocess": "node scripts/run-background-worker.mjs --reprocess-dead-letters",
+    "validate:e2e-purchase": "node scripts/validate-e2e-purchase-coverage.mjs"
   },
   "dependencies": {
     "@creit-tech/stellar-wallets-kit": "npm:@jsr/creit-tech__stellar-wallets-kit@^2.1.0",
@@ -83,7 +84,6 @@
     "yauzl": "^3.4.0"
   },
   "devDependencies": {
-    "@nominationfoundation/hardhat-ethers": "^3.1.2",
     "@tailwindcss/postcss": "^4.2.3",
     "@testing-library/dom": "^10.4.1",
     "@testing-library/jest-dom": "^6.9.1",

@@ -1,5 +1,10 @@
 # Webhook Signatures
 
+> **Canonical serialization:** Signed webhook payloads are serialized using the
+> canonical JSON rules defined in
+> [`docs/canonical-serialization.md`](canonical-serialization.md). The
+> `rawBody` you verify against MUST be the canonical byte sequence.
+
 EduVault delivers outbound webhooks to creator-configured endpoints for
 purchase, refund, entitlement, and dispute lifecycle events. Every delivery
 is signed so the receiving server can verify the payload was produced by
@@ -25,6 +30,12 @@ where:
   `X-EduVault-Timestamp` header (decimal string, no fractional part).
 - `rawBody` is the **exact bytes** of the HTTP request body before any
   parsing.
+
+The `rawBody` is produced by the canonical serializer, which guarantees that
+equivalent payloads (same logical values, different key order, whitespace,
+or casing) produce byte-identical output. Verifiers MUST NOT re-serialize
+the parsed JSON to reconstruct `rawBody`; doing so may produce a different
+byte sequence and cause `EVT_WEBHOOK_001`.
 
 The HMAC key is the creator's `webhookSigningSecret` stored in the `users`
 collection. During secret rotation, both the current secret
@@ -106,6 +117,10 @@ export function verifyWebhookSignature(
   // Step 2: Build the signing input.
   const signingInput = `${timestamp}.${rawBody}`;
 
+  // NOTE: `rawBody` must already be the canonical serialization. Do not
+  // call JSON.stringify(JSON.parse(rawBody)) here — that would change the
+  // byte sequence and break verification.
+
   // Step 3: Compute expected signature(s).
   function computeSig(key) {
     return (
@@ -151,6 +166,10 @@ def verify_webhook_signature(
 
     signing_input = f"{timestamp}.".encode() + raw_body
 
+    # NOTE: raw_body must already be the canonical serialization. Do not
+    # re-serialize the parsed JSON — that would change the byte sequence
+    # and break verification.
+
     def compute(key: str) -> str:
         mac = hmac.new(key.encode(), signing_input, hashlib.sha256)
         return "sha256=" + mac.hexdigest()
@@ -177,6 +196,12 @@ All event payloads follow a common envelope:
 }
 ```
 
+The envelope is serialized canonically: object keys are sorted lexicographically
+by Unicode code point, strings are NFC-normalized, numbers use the shortest
+round-trippable decimal form, and no insignificant whitespace is emitted.
+See [`docs/canonical-serialization.md`](canonical-serialization.md) for the
+full rules and normalization table.
+
 | Field        | Type     | Description                                              |
 | ------------ | -------- | -------------------------------------------------------- |
 | `event`      | `string` | Event type identifier (see [Event Types](#event-types)). |
@@ -184,10 +209,27 @@ All event payloads follow a common envelope:
 | `timestamp`  | `number` | Unix epoch seconds matching `X-EduVault-Timestamp`.      |
 | `data`       | `object` | Event-specific payload.                                  |
 
+### Normalization rules for `data`
+
 The envelope and every nested `data` object must be serialized canonically
 before hashing, signing, or comparison. See
 [Canonical Serialization](#canonical-serialization).
 
+- **Key ordering:** all object keys are sorted lexicographically before
+  serialization. Producers and consumers MUST NOT rely on insertion order.
+- **Whitespace:** no spaces, tabs, or newlines are emitted between tokens.
+- **Casing:** event names, status enums, and resolution enums are
+  case-sensitive and MUST be emitted in their canonical form (e.g.
+  `purchase.completed`, `Active`, `RefundBuyer`). Free-text fields are
+  preserved verbatim after NFC normalization.
+- **Numeric precision:** monetary amounts (`grossAmount`, `platformFee`,
+  `sellerNet`, `unitPrice`, `totalPaid`, `refundAmount`) are serialized as
+  **decimal strings** of the smallest indivisible unit. They MUST NOT be
+  emitted as JSON numbers, to avoid IEEE-754 precision loss.
+- **Ledger numbers** (`openedLedger`, `resolvedLedger`) are integers and
+  MUST be emitted as JSON numbers within the safe integer range.
+- **Hashes and addresses** (`metadataHash`, `rightsHash`, `materialId`,
+  `*Address`, `asset`) are lowercase hex or canonical Stellar strkey form.
 ---
 
 ## Event Types
@@ -368,6 +410,10 @@ After 5 failures the delivery is moved to the dead-letter queue and no further
 automatic retries are attempted. Creators can inspect and replay dead-lettered
 events from the creator dashboard.
 
+Replayed deliveries are re-serialized canonically before signing, so the
+`X-EduVault-Signature` on a replay may differ from the original delivery if
+the original was produced before canonical serialization was enforced.
+
 Delivery timeout per attempt: **10 seconds**.
 
 ---
@@ -422,3 +468,19 @@ Webhook-related failure codes from `docs/API_REFERENCE.md`:
   who captures a valid delivery can replay it indefinitely.
 - Secrets are **never logged** or returned in API responses. If a secret is
   compromised, rotate it immediately using `PATCH /api/profile`.
+
+---
+
+## Legacy Records
+
+Webhook deliveries and stored payloads created before canonical serialization
+was enforced may not match the current canonical form. Consumers SHOULD:
+
+1. Verify the signature against the stored `rawBody` first.
+2. If verification fails, attempt verification against the canonical
+   re-serialization of the parsed payload.
+3. Log a warning when the fallback path is used so legacy records can be
+   identified and migrated.
+
+New deliveries always use canonical serialization and MUST verify against
+the canonical form only.

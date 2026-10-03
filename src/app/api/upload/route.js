@@ -15,6 +15,7 @@ import { consumeActorQuota } from '@/lib/quotaManager'
 import { enqueueSideEffect } from '@/lib/backend/outbox'
 import { getDb } from '@/lib/mongodb'
 import { processThumbnail, ThumbnailProcessingError } from '@/lib/upload/processThumbnail'
+import { withTelemetryRoute, ACTOR_TYPES } from '@/lib/monitoring/telemetry'
 
 export const dynamic = 'force-dynamic'
 
@@ -56,7 +57,7 @@ const ALLOWED_IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/webp']
 const RETRY_ATTEMPTS = 3
 const RETRY_DELAY_MS = 1000
 
-export async function POST(request) {
+async function handlePost(request) {
   return withApiHardening(
     request,
     { route: 'upload', rateLimit: { limit: 20, windowMs: 60_000 } },
@@ -409,3 +410,5 @@ export async function POST(request) {
     }
   )
 }
+
+export const POST = withTelemetryRoute('material.upload', ACTOR_TYPES.CREATOR, handlePost)

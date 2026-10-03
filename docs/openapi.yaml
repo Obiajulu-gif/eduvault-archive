@@ -349,7 +349,7 @@ components:
           type: string
           format: date-time
 
-    IncidentInput:
+IncidentInput:
       type: object
       description: Inputs for the incident impact calculator.
       required: [incidentId, window]
@@ -462,6 +462,99 @@ components:
               type: string
               description: Human-readable explanation of the redaction.
 
+    ReceiptPayload:
+      type: object
+      description: |
+        Canonical, deterministic receipt payload. The `SIGNATURE_VERSION` and
+        `SIGNATURE_ALGORITHM` are constants so consumers can recreate the
+        canonical bytes and verify the HMAC-SHA256 signature independently.
+      required:
+        - receiptId
+        - operation
+        - actor
+        - timestamp
+        - status
+        - references
+        - signatureVersion
+        - signatureAlgorithm
+        - signature
+      properties:
+        receiptId:
+          type: string
+          description: Stable identifier derived from the canonical payload hash
+        operation:
+          type: string
+          enum:
+            - material.create
+            - material.import
+            - purchase.create
+            - entitlement.grant
+            - profile.update
+        actor:
+          type: object
+          required: [type, id]
+          properties:
+            type:
+              type: string
+              enum: [user, system]
+            id:
+              type: string
+              description: User ObjectId or wallet address
+        timestamp:
+          type: string
+          format: date-time
+          description: ISO-8601 timestamp of when the operation completed
+        status:
+          type: string
+          enum: [success, failure, denied]
+        references:
+          type: object
+          description: External references to the affected resources
+          additionalProperties:
+            type: string
+        signatureVersion:
+          type: string
+          enum: [v1]
+        signatureAlgorithm:
+          type: string
+          enum: [HMAC-SHA256]
+        signature:
+          type: string
+          description: Hex-encoded HMAC-SHA256 over the canonical payload bytes
+
+    Receipt:
+      allOf:
+        - $ref: "#/components/schemas/ReceiptPayload"
+        - type: object
+          required: [createdAt]
+          properties:
+            createdAt:
+              type: string
+              format: date-time
+              description: When the receipt record was persisted
+
+    ReceiptList:
+      type: object
+      required: [receipts, total]
+      properties:
+        receipts:
+          type: array
+          items:
+            $ref: "#/components/schemas/Receipt"
+        total:
+          type: integer
+
+    ReceiptVerification:
+      type: object
+      required: [receiptId, valid]
+      properties:
+        receiptId:
+          type: string
+        valid:
+          type: boolean
+        reason:
+          type: string
+          description: Present when valid is false
   responses:
     Unauthorized:
       description: Not authenticated
@@ -486,7 +579,7 @@ security:
   - cookieAuth: []
 
 paths:
-  # ---------------------------------------------------------------------------
+  # --------------------------------------------------------------------------
   # Materials
   # --------------------------------------------------------------------------
   /api/materials:
@@ -503,7 +596,7 @@ paths:
                 type: array
                 items:
                   $ref: "#/components/schemas/Material"
-        "401":
+"401":
           description: Not authenticated
           content:
             application/json:
@@ -588,6 +681,18 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/MaterialImportCommitResponse"
+        "400":
+          description: Invalid or duplicate rows (plan included, nothing written), or a malformed payload
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/MaterialImportResponse"
+                  - $ref: "#/components/schemas/Error"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/RateLimited"
 
   /api/incidents/impact:
     post:

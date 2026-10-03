@@ -9,6 +9,7 @@ import { auditLog } from "@/lib/api/audit";
 import { generateAccessToken, generateRefreshToken, storeRefreshToken } from "@/lib/auth/tokenService";
 import { errorResponse } from "@/lib/utils/errorResponse";
 import { buildWalletLookupQuery, normalizeProfileForSession } from "@/lib/migrations/profileMigration";
+import { normalizeSignedPayload } from "@/lib/canonicalization";
 
 export async function POST(request) {
   return withApiHardening(
@@ -33,11 +34,43 @@ export async function POST(request) {
           });
         }
 
-        const result = await verifyChallenge(address, nonce, signedTransactionXdr, {
+        // Canonicalize the signed payload before verification so equivalent
+        // inputs (ordering, whitespace, casing, numeric precision) produce
+        // the same representation. Non-canonical input is either normalized
+        // or rejected consistently by the normalizer.
+        const normalized = normalizeSignedPayload({
+          address,
+          nonce,
+          signedTransactionXdr,
           action,
           origin,
           network,
           contract,
+        });
+
+        if (!normalized.ok) {
+          auditLog({
+            event: "auth_verify_normalization_failed",
+            route: "auth/verify",
+            method: "POST",
+            status: 400,
+            reason: normalized.reason,
+            address,
+          });
+          return errorResponse({
+            status: 400,
+            detail: normalized.reason,
+            instance: "/api/auth/verify",
+          });
+        }
+
+        const canonical = normalized.canonical;
+
+        const result = await verifyChallenge(canonical.address, canonical.nonce, canonical.signedTransactionXdr, {
+          action: canonical.action,
+          origin: canonical.origin,
+          network: canonical.network,
+          contract: canonical.contract,
         });
 
         if (!result.valid) {
@@ -47,7 +80,7 @@ export async function POST(request) {
             method: "POST",
             status: 401,
             reason: result.reason,
-            address,
+            address: canonical.address,
           });
           return errorResponse({
             status: 401,
@@ -56,23 +89,23 @@ export async function POST(request) {
           });
         }
 
-        cleanupExpiredChallenges().catch(() => {});
+        cleanuqExpiredChallenges().catch(() => {});
 
         const db = await getDb();
         const users = db.collection("users");
-        const rawUser = await users.findOne(buildWalletLookupQuery(address));
+        const rawUser = await users.findOne(buildWalletLookupQuery(canonical.address));
         const user = rawUser ? normalizeProfileForSession(rawUser) : null;
 
         if (!process.env.JWT_SECRET) {
           return errorResponse({ status: 500, detail: "Server configuration error", instance: "/api/auth/verify" });
         }
 
-        const userId = user?._id?.toString() ?? address;
+        const userId = user?._id?.toString() ?? canonical.address;
         const tokenPayload = {
           sub: userId,
           email: user?.email ?? "",
           name: user?.fullName ?? "",
-          walletAddress: address,
+          walletAddress: canonical.address,
           action: result.sessionContext.action,
         };
 
@@ -109,7 +142,7 @@ export async function POST(request) {
           route: "auth/verify",
           method: "POST",
           status: 200,
-          address,
+          address: canonical.address,
           action: result.sessionContext.action,
         });
 

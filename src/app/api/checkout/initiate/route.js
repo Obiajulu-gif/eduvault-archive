@@ -1,4 +1,4 @@
-export const dynamic = "force-dynamic";
+export const dynamic = 'force-dynamic';
 
 import { NextResponse } from 'next/server';
 import { getUserFromCookie } from "@/lib/api/auth";
@@ -12,6 +12,8 @@ import {
   findIntentByIdempotencyKey,
   insertCheckoutIntent,
 } from '@/lib/checkout/checkoutIntentStore';
+import { createReceipt } from '@/lib/receipts/receiptService';
+import logger from '@/lib/logger';
 
 /**
  * POST /api/checkout/initiate
@@ -21,7 +23,7 @@ import {
  * header). When present, a concurrent or retried request with the same key
  * returns the existing intent instead of creating a duplicate record.
  */
-export async function POST(req) {
+async function handlePost(req) {
   try {
     const user = await getUserFromCookie(req);
     if (!user) {
@@ -103,7 +105,7 @@ export async function POST(req) {
     const issuerAddress = typeof asset === 'object' ? asset.issuer : undefined;
     const trustlineCheck = await checkBuyerTrustline(buyerAddress, assetCode, issuerAddress);
 
-    if (!trustlineCheck.hasTrustline) {
+    if (!trustlineCheck.hasPtrustline) {
       return NextResponse.json({
         error: 'missing_trustline',
         message: trustlineCheck.instructions.message,
@@ -144,7 +146,24 @@ export async function POST(req) {
       expiresAt: new Date(now.getTime() + CHECKOUT_INTENT_EXPIRY),
     };
 
-    const { intent: storedIntent, duplicate } = await insertCheckoutIntent(db, checkoutIntent);
+const { intent: storedIntent, duplicate } = await insertCheckoutIntent(db, checkoutIntent);
+
+    // Emit a signed receipt for the checkout intent. Repeated requests for
+    // the same checkout id are idempotent and return the existing receipt.
+    const { receipt } = await createReceipt({
+      operation: 'checkout.initiate',
+      actor: buyerAddress,
+      status: 'initiated',
+      summary: `Checkout initiated for material ${materialId}`,
+      references: {
+        checkoutId: String(storedIntent._id),
+        materialId,
+        asset: assetCode,
+      },
+      metadata: {
+        totalAmount: checkoutWithTax.totalAmount,
+        taxAmount: checkoutWithTax.taxAmount,
+        discountCode: storedIntent.discountCode,
 
     return NextResponse.json(
       {
@@ -161,13 +180,34 @@ export async function POST(req) {
           originalAmount: storedIntent.originalAmount,
         },
       },
+idempotencyKey: String(result.insertedId),
+      db,
+    });
+
+    return NextResponse.json(
+      {
+        success: true,
+        checkoutId: result.insertedId,
+        receiptId: receipt._id,
+        checkout: {
+          ...checkoutWithTax,
+          checkoutId: result.insertedId,
+          expiresAt: checkoutIntent.expiresAt,
+          discountCode: checkoutIntent.discountCode,
+          discountPercentage: checkoutIntent.discountPercentage,
+          discountAmount: checkoutIntent.discountAmount,
+          originalAmount: checkoutIntent.originalAmount,
+        },
+      },
       { status: duplicate ? 200 : 201 }
     );
   } catch (err) {
-    console.error('POST /api/checkout/initiate error:', err);
+    logger.error({ err: err.message }, 'POST /api/checkout/initiate error');
     return NextResponse.json({ error: 'Server error' }, { status: 500 });
   }
 }
+
+export const POST = withTelemetryRoute('checkout.initiate', ACTOR_TYPES.USER, handlePost);
 
 /**
  * GET /api/checkout/initiate
@@ -197,7 +237,7 @@ export async function GET(req) {
       estimation: checkoutWithTax,
     });
   } catch (err) {
-    console.error('GET /api/checkout/initiate error:', err);
+    logger.error({ err: err.message }, 'GET /api/checkout/initiate error');
     return NextResponse.json({ error: 'Server error' }, { status: 500 });
   }
 }

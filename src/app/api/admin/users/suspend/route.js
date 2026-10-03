@@ -17,6 +17,17 @@ import { sendSuspensionEmail, sendReactivationEmail } from '@/lib/email/suspensi
 import { appendAuditRecord } from '@/lib/backend/auditLedger'
 import { enqueueMaterialSearchProjection } from '@/lib/backend/materialSearchProjection'
 import { notify } from '@/lib/notifications/notifications'
+import { computePermissionDiff, isBroadChange } from '@/lib/auth/permissionDiff'
+
+async function getAdminUser(request) {
+  const cookieHeader = request.headers.get('cookie') || ''
+  const cookieMatch = cookieHeader.match(/auth_token=([^;]+)/)
+  const token = cookieMatch ? decodeURIComponent(cookieMatch[1]) : null
+  if (!token) return null
+  const verification = await verifyDashboardToken(token, process.env.JWT_SECRET)
+  if (!verification.valid) return null
+  return verification.payload
+}
 
 /**
  * POST /api/admin/users/suspend
@@ -25,13 +36,18 @@ import { notify } from '@/lib/notifications/notifications'
  *   {
  *     userId: string,          // MongoDB _id of the target user
  *     action: "suspend" | "reactivate",
- *     reason?: string          // Required when action === "suspend"
+*     reason?: string,          // Required when action === "suspend"
+ *     confirmBroad?: boolean,      // Required when the permission diff is broad
+ *     preview?: boolean          // When true, returns the diff without applying
+ *     expectedPermissionsHash?: string // Stale-policy guard from a prior preview
  *     approval: { reason, scope, actor, expiresAt }
  *   }
  *
  * Suspends or reactivates a user account and dispatches a notification email.
- * Both directions are protected maintainer actions and require a role-scoped
+* Both directions are protected maintainer actions and require a role-scoped
  * approval with a reason, actor, and future expiry.
+ * Before applying, computes a before/after permission diff and requires
+ * explicit confirmation for broad changes.
  */
 export async function POST(request) {
   try {
@@ -42,7 +58,7 @@ export async function POST(request) {
     const admin = authorization.user
 
     const body = await request.json()
-    const { userId, action, reason, approval } = body
+const { userId, action, reason, confirmBroad, preview, expectedPermissionsHash, approval } = body
 
     if (!userId || !action) {
       return NextResponse.json({ error: 'userId and action are required.' }, { status: 400 })
@@ -76,6 +92,60 @@ export async function POST(request) {
     }
 
     const newStatus = isSuspending ? 'suspended' : 'active'
+
+    // Compute the before/after permission diff for the target actor. This is the
+    // gate that decides whether the change is broad and whether the caller has seen
+    // the current policy state.
+    const diff = await computePermissionDiff({ db, user: targetUser, action })
+
+    if (expectedPermissionsHash && expectedPermissionsHash !== diff.beforeHash) {
+      auditLog({
+        event: 'permission_diff_stale',
+        route: 'admin/users/suspend',
+        method: 'POST',
+        status: 409,
+        actor: admin.sub,
+        target: userId,
+        reason: 'stale_policy',
+      })
+      return NextResponse.json(
+        {
+          error: 'Permission policy changed since preview. Re-preview before applying.',
+          code: 'STALE_POLICY',
+          diff,
+        },
+        { status: 409 }
+      )
+    }
+
+    const broad = isBroadChange(diff)
+
+    if (preview) {
+      return NextResponse.json({ success: true, preview: true, broad, diff })
+    }
+
+    if (broad && !confirmBroad) {
+      auditLog(
+        {
+          event: 'permission_diff_confirmation_required',
+          route: 'admin/users/suspend',
+          method: 'POST',
+          status: 428,
+          actor: admin.sub,
+          target: userId,
+          reason: 'confirmation_required',
+        }
+      )
+      return NextResponse.json(
+        {
+          error: 'This change is broad and requires explicit confirmation.',
+          code: 'CONFIRMATION_REQUIRED',
+          broad: true,
+          diff,
+        },
+        { status: 428 }
+      )
+    }
 
     await users.updateOne(
       { _id: new ObjectId(userId) },
@@ -112,7 +182,12 @@ export async function POST(request) {
         ? ADMIN_AUDIT_ACTIONS.USER_SUSPENDED
         : ADMIN_AUDIT_ACTIONS.USER_REACTIVATED,
       reason,
-      metadata: { listingsUpdated: listings.modified, previousStatus: targetUser.status ?? null },
+      metadata: {
+        listingsUpdated: listings.modified,
+        previousStatus: targetUser.status ?? null,
+        permissionDiff: diff,
+        broad,
+      },
     })
 
     await appendAuditRecord({
@@ -121,8 +196,8 @@ export async function POST(request) {
       actor: admin.sub,
       action: `user.${action}`,
       target: { type: 'user', id: userId },
-      intent: { action, reason },
-      result: { status: newStatus, listingsUpdated: listings.modified },
+      intent: { action, reason, confirmBroad: Boolean(confirmBroad), broad },
+      result: { status: newStatus, listingsUpdated: listings.modified, diff },
       reason,
       approval: validation.approval,
     })
@@ -181,9 +256,11 @@ export async function POST(request) {
       isSuspended: isSuspending,
       listingsUpdated: listings.modified,
       emailSent,
+      broad,
+      diff,
     })
   } catch (err) {
-    auditLog({ event: 'user_suspend_error', route: 'admin/users/suspend', method: 'POST', status: 500, reason: err.message })
+    auditLog( { event: 'user_suspend_error', route: 'admin/users/suspend', method: 'POST', status: 500, reason: err.message })
     return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 })
   }
 }

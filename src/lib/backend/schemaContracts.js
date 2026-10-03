@@ -42,6 +42,7 @@ export const COLLECTIONS = {
   backgroundJobs: "background_jobs",
   // Recovery workflow for stuck pending actions (#828).
   pendingActions: "pending_actions",
+  sensitiveAccessLog: "sensitive_access_log",
 };
 
 export const REQUIRED_INDEXES = {
@@ -245,6 +246,9 @@ export const REQUIRED_INDEXES = {
   notifications: [
     { keys: { recipient: 1, dedupeKey: 1 }, options: { unique: true, name: "notifications_dedupe_idx" } },
     { keys: { recipient: 1, read: 1, createdAt: -1 }, options: { name: "notifications_inbox_idx" } },
+    // #834: delivery tracking / diagnostics scan a recipient's failed and
+    // exhausted notifications without a collection scan.
+    { keys: { recipient: 1, deliveryStatus: 1, lastAttemptAt: -1 }, options: { name: "notifications_delivery_idx", background: true } },
   ],
   // #789: Background worker framework jobs queue indexes
   background_jobs: [
@@ -253,6 +257,14 @@ export const REQUIRED_INDEXES = {
     { keys: { status: 1, scheduledFor: 1, lockedUntil: 1 }, options: { name: "background_jobs_lease_idx", background: true } },
     { keys: { name: 1, status: 1 }, options: { name: "background_jobs_name_status_idx", background: true } },
     { keys: { createdAt: -1 }, options: { name: "background_jobs_created_idx", background: true } },
+  ],
+  // #889: sensitive field access events are looked up by correlation, by actor
+  // window, and by resource, and denials are reviewed by decision/time.
+  sensitive_access_log: [
+    { keys: { correlationId: 1 }, options: { unique: true, name: "sensitive_access_correlation_idx" } },
+    { keys: { actorId: 1, at: -1 }, options: { name: "sensitive_access_actor_idx", background: true } },
+    { keys: { resourceType: 1, resourceId: 1, at: -1 }, options: { name: "sensitive_access_resource_idx", background: true } },
+    { keys: { decision: 1, at: -1 }, options: { name: "sensitive_access_decision_idx", background: true } },
   ],
 };
 

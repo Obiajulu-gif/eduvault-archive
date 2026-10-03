@@ -1,0 +1,13 @@
+{
+  "_id": "legacy-mat-incompatible-0004",
+  "schemaVersion": 99,
+  "title": "Record from a future schema",
+  "description": "Written by a server that declares a schema version this build does not know.",
+  "category": "Artifacts",
+  "price": 5,
+  "unknownEntitlementModel": {
+    "kind": "soulbound",
+    "payer": "sponsored"
+  },
+  "createdAt": "2026-09-30T00:00:00.000Z"
+}

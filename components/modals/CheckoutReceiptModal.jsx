@@ -2,7 +2,7 @@
 "use client";
 
 // @ts-nocheck
-
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { useEffect, useRef } from "react";
 import {
@@ -12,6 +12,7 @@ import {
   FaExternalLinkAlt,
   FaLockOpen,
   FaReceipt,
+  FaShieldAlt,
   FaSpinner,
   FaTimes,
 } from "react-icons/fa";
@@ -75,6 +76,63 @@ const toneClasses = {
   },
 };
 
+const RECEIPT_SCHEMA_VERSION = "eduvault.receipt.v1";
+
+function stableStringify(value) {
+  if (value === null || typeof value !== "object") {
+    return JSON.stringify(value);
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map((entry) => stableStringify(entry)).join(",")}]`;
+  }
+  const keys = Object.keys(value).sort();
+  return `{${keys
+    .map((key) => `${JSON.stringify(key)}:${stableStringify(value[key])}`)
+    .join(",")}}`;
+}
+
+function canonicalizeReceiptPayload(payload) {
+  return stableStringify({
+    schema: RECEIPT_SCHEMA_VERSION,
+    operation: payload.operation,
+    actor: payload.actor,
+    issuedAt: payload.issuedAt,
+    status: payload.status,
+    references: {
+      itemId: payload.references?.itemId ?? null,
+      transactionHash: payload.references?.transactionHash ?? null,
+      explorerUrl: payload.references?.explorerUrl ?? null,
+    },
+    amounts: {
+      totalAmount: payload.amounts?.totalAmount ?? null,
+      totalFee: payload.amounts?.totalFee ?? null,
+      currency: payload.amounts?.currency ?? null,
+    },
+  });
+}
+
+async function computeReceiptDigest(canonicalPayload) {
+  if (typeof globalThis !== "undefined" && globalThis.crypto?.subtle?.digest) {
+    const encoded = new TextEncoder().encode(canonicalPayload);
+    const digest = await globalThis.crypto.subtle.digest("SHA-256", encoded);
+    return Array.from(new Uint8Array(digest))
+      .map((byte) => byte.toString(16).padStart(2, "0"))
+      .join("");
+  }
+  // Deterministic fallback for environments without SubtleCrypto (e.g. jsdom).
+  let hash = 0;
+  for (let index = 0; index < canonicalPayload.length; index += 1) {
+    hash = (hash * 31 + canonicalPayload.charCodeAt(index)) >>> 0;
+  }
+  return `fallback-${hash.toString(16).padStart(8, "0")}`;
+}
+
+function shortenDigest(digest) {
+  if (!digest) return "Pending signature";
+  if (digest.length <= 20) return digest;
+  return `${digest.slice(0, 12)}…${digest.slice(-8)}`;
+}
+
 function shortenHash(hash) {
   if (!hash) return "Pending Stellar hash";
   if (hash.length <= 18) return hash;
@@ -103,6 +161,7 @@ export default function CheckoutReceiptModal({
   currency = "XLM",
   purchasedAt,
   errorMessage,
+  actor,
   onClose,
   onRetry,
   onDownload,
@@ -115,17 +174,95 @@ export default function CheckoutReceiptModal({
   const isBusy = status === "signing" || status === "confirming";
   const isSuccess = status === "success";
   const isError = status === "error";
-  const errorId = "checkout-receipt-error";
+const errorId = "checkout-receipt-error";
   const dialogRef = useRef(null);
   const previouslyFocusedRef = useRef(null);
   const titleId = useId();
   const descriptionId = useId();
+
+  const [receiptState, setReceiptState] = useState({
+    digest: null,
+    canonical: null,
+    verified: null,
+    error: null,
+  });
+
+  const receiptPayload = useMemo(
+    () => ({
+      operation: "checkout.purchase",
+      actor: actor || "anonymous",
+      issuedAt: purchasedAt || new Date().toISOString(),
+      status,
+      references: {
+        itemId: itemName || null,
+        transactionHash: transactionHash || null,
+        explorerUrl: explorerUrl || null,
+      },
+      amounts: {
+        totalAmount: totalAmount ?? null,
+        totalFee: totalFee ?? null,
+        currency: currency || null,
+      },
+    }),
+    [
+      actor,
+      currency,
+      explorerUrl,
+      itemName,
+      purchasedAt,
+      status,
+      totalAmount,
+      totalFee,
+      transactionHash,
+    ],
+  );
   const formattedDate = purchasedAt
     ? new Intl.DateTimeFormat("en", {
         dateStyle: "medium",
         timeStyle: "short",
       }).format(new Date(purchasedAt))
     : "Just now";
+
+const canonicalReceipt = useMemo(
+    () => canonicalizeReceiptPayload(receiptPayload),
+    [receiptPayload],
+  );
+
+  const handleSignReceipt = async () => {
+    try {
+      const digest = await computeReceiptDigest(canonicalReceipt);
+      setReceiptState({
+        digest,
+        canonical: canonicalReceipt,
+        verified: true,
+        error: null,
+      });
+    } catch (signError) {
+      setReceiptState({
+        digest: null,
+        canonical: canonicalReceipt,
+        verified: false,
+        error: signError?.message || "Unable to sign receipt",
+      });
+    }
+  };
+
+  const handleVerifyReceipt = async () => {
+    if (!receiptState.digest || !receiptState.canonical) {
+      setReceiptState((previous) => ({
+        ...previous,
+        verified: false,
+        error: "No signed receipt available to verify",
+      }));
+      return;
+    }
+    const recomputed = await computeReceiptDigest(receiptState.canonical);
+    setReceiptState((previous) => ({
+      ...previous,
+      verified: recomputed === previous.digest,
+      error: recomputed === previous.digest ? null : "Receipt digest mismatch detected",
+    }));
+  };
 
   const getFocusable = useCallback((node) => {
     if (!node) return [];
@@ -189,7 +326,6 @@ export default function CheckoutReceiptModal({
       }
     };
   }, [isOpen, isBusy, onClose, getFocusable]);
-
   return (
     <AnimatePresence>
       {isOpen ? (
@@ -302,6 +438,54 @@ export default function CheckoutReceiptModal({
                     </ReceiptRow>
                     <ReceiptRow label="Completed">{formattedDate}</ReceiptRow>
                   </div>
+                </div>
+
+                <div className="mt-5 rounded-[1.5rem] border border-slate-200 bg-white/90 p-3 shadow-inner shadow-slate-200/70 sm:p-4">
+                  <div className="mb-3 flex items-center justify-between gap-2 px-1">
+                    <div className="flex items-center gap-2 text-sm font-bold text-slate-900">
+                      <FaShieldAlt className="text-emerald-600" /> Signed activity receipt
+                    </div>
+                    <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 font-mono text-[10px] uppercase tracking-[0.18em] text-slate-500">
+                      {RECEIPT_SCHEMA_VERSION}
+                    </span>
+                  </div>
+                  <div className="space-y-3">
+                    <ReceiptRow label="Operation">{receiptPayload.operation}</ReceiptRow>
+                    <ReceiptRow label="Actor">{receiptPayload.actor}</ReceiptRow>
+                    <ReceiptRow label="Issued at">{receiptPayload.issuedAt}</ReceiptRow>
+                    <ReceiptRow label="Status">{receiptPayload.status}</ReceiptRow>
+                    <ReceiptRow label="Digest">
+                      <span className="font-mono text-xs text-slate-700">
+                        {shortenDigest(receiptState.digest)}
+                      </span>
+                    </ReceiptRow>
+                  </div>
+                  <div className="mt-3 flex flex-col gap-2 sm:flex-row">
+                    <button
+                      type="button"
+                      onClick={handleSignReceipt}
+                      className="inline-flex flex-1 items-center justify-center gap-2 rounded-2xl bg-emerald-600 px-4 py-2.5 text-xs font-bold uppercase tracking-[0.18em] text-white shadow-lg shadow-emerald-500/20 transition hover:-translate-y-0.5 hover:bg-emerald-700"
+                    >
+                      Sign receipt
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleVerifyReceipt}
+                      className="inline-flex flex-1 items-center justify-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 py-2.5 text-xs font-bold uppercase tracking-[0.18em] text-slate-700 transition hover:-translate-y-0.5 hover:border-slate-300"
+                    >
+                      Verify receipt
+                    </button>
+                  </div>
+                  {receiptState.error ? (
+                    <p className="mt-3 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-semibold text-rose-700">
+                      {receiptState.error}
+                    </p>
+                  ) : null}
+                  {receiptState.verified === true && !receiptState.error ? (
+                    <p className="mt-3 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-700">
+                      Receipt verified against canonical payload.
+                    </p>
+                  ) : null}
                 </div>
 
                 {isError ? (

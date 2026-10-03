@@ -12,6 +12,10 @@ Clients and frontends must use these codes rather than parsing prose error
 messages. Webhook signature verification and retry semantics are described
 in [`docs/webhook-signatures.md`](webhook-signatures.md).
 
+Canonical serialization and strict input normalization rules for signed,
+hashed, compared, or settled payloads are defined in
+[`docs/canonical-serialization.md`](canonical-serialization.md).
+
 ## Collections
 
 ### `users`
@@ -130,7 +134,14 @@ record (material), keyed by the source record id and a normalized visibility
 scope. The index is derived from `materials` and `entitlement_cache` and must
 never be treated as the source of truth for access control.
 
-Required fields:
+{
+  "notifications": [
+    { "id": "66f…", "type": "import_partial_failure", "severity": "error", "title": "Import partially failed",
+      "message": "1 created, 0 updated, 0 skipped, 1 failed.", "link": "/dashboard/my-materials",
+      "read": false, "createdAt": "2026-09-26T09:00:00.000Z" }
+  ],
+  "unreadCount": 1
+}
 
 - `_id`: stable index key, for example `material:<materialId>`.
 - `sourceType`: always `material` today; reserved for future indexable types.
@@ -176,6 +187,13 @@ Visibility constraints:
 
 Audit trail for the stale-index repair job.
 
+`signedXdr` and any other signed or settled payloads are canonicalized before
+verification and settlement. Non-canonical input is normalized or rejected
+consistently, and legacy records are handled via the compatibility rules in
+[`docs/canonical-serialization.md`](canonical-serialization.md).
+
+### `GET /api/entitlements`
+
 Required fields:
 
 - `_id`: stable run id.
@@ -198,7 +216,14 @@ Response:
 
 - `success`, `user`, `emailSent`.
 
-### `API_REFERENCE.md` quick reference
+{
+  "error": {
+    "code": "EVT_PURCHASE_007",
+    "message": "Human-readable description (informational only).",
+    "retryable": true,
+    "supportAction": "refresh_quote"
+  }
+}
 
 The complete taxonomy of stable codes is in
 [`docs/API_REFERENCE.md`](API_REFERENCE.md). The quick-reference mapping
