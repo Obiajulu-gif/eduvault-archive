@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from 'vitest';
 import { getDb } from '@/lib/mongodb';
 import { REQUIRED_INDEXES } from '@/lib/backend/schemaContracts';
 import {
@@ -9,6 +9,10 @@ import {
   resolveRecipientByWallet,
   NOTIFICATION_TYPES,
   FEATURE_FLAG_GATED_TYPES,
+  DELIVERY_STATUSES,
+  recordDeliveryAttempt,
+  retryFailedDelivery,
+  getDeliveryDiagnostics,
 } from './notifications';
 
 // Real Mongo (vitest globalSetup starts mongodb-memory-server): dedupe relies
@@ -223,5 +227,121 @@ describe('critical lifecycle notifications', () => {
     expect(pub).not.toHaveProperty('recipient');
     expect(pub).not.toHaveProperty('dedupeKey');
     expect(pub).not.toHaveProperty('walletAddress');
+  });
+});
+
+// ── #834: delivery tracking + safe retry ─────────────────────────────────────
+
+describe('delivery tracking and retry', () => {
+  async function create(overrides = {}) {
+    const payload = event(overrides);
+    const result = await notify(db, payload);
+    const doc = await db.collection('notifications').findOne({
+      recipient: payload.recipient,
+      dedupeKey: payload.dedupeKey,
+    });
+    return { result, doc, id: String(doc._id) };
+  }
+
+  it('creates notifications pending and a duplicate source event neither duplicates nor resets delivery state', async () => {
+    const { id, doc } = await create();
+    expect(doc.deliveryStatus).toBe(DELIVERY_STATUSES.pending);
+    expect(doc.attempts).toBe(0);
+    expect(doc.lastAttemptAt).toBeNull();
+    expect(doc.lastError).toBeNull();
+
+    await recordDeliveryAttempt(db, id, { recipient: 'user-a', status: 'sent' });
+
+    // A retried source event reuses the dedupeKey: no new row, no state reset.
+    expect(await notify(db, event())).toEqual({ created: false });
+    expect(await db.collection('notifications').countDocuments({ recipient: 'user-a' })).toBe(1);
+    const after = await db.collection('notifications').findOne({ _id: doc._id });
+    expect(after.deliveryStatus).toBe(DELIVERY_STATUSES.sent);
+    expect(after.attempts).toBe(1);
+  });
+
+  it('retries a failed delivery and marks it sent on success', async () => {
+    const { id, doc } = await create();
+
+    const failing = vi.fn().mockRejectedValue(new Error('smtp down'));
+    const first = await retryFailedDelivery(db, id, failing, { recipient: 'user-a', maxAttempts: 3 });
+    expect(first).toMatchObject({ outcome: 'failed', deliveryStatus: 'failed', attempts: 1, error: 'smtp down' });
+    expect(failing).toHaveBeenCalledTimes(1);
+
+    let delivered;
+    const succeeding = vi.fn().mockImplementation(async (payload) => { delivered = payload; });
+    const second = await retryFailedDelivery(db, id, succeeding, { recipient: 'user-a', maxAttempts: 3 });
+    expect(second).toMatchObject({ outcome: 'sent', deliveryStatus: 'sent', attempts: 2 });
+    expect(succeeding).toHaveBeenCalledTimes(1);
+    expect(delivered).not.toHaveProperty('recipient');
+    expect(delivered).not.toHaveProperty('dedupeKey');
+
+    const after = await db.collection('notifications').findOne({ _id: doc._id });
+    expect(after.deliveryStatus).toBe(DELIVERY_STATUSES.sent);
+    expect(after.lastError).toBeNull();
+    expect(after.sentAt).toBeInstanceOf(Date);
+  });
+
+  it('never double-sends a notification already in the terminal sent state', async () => {
+    const { id } = await create();
+    await recordDeliveryAttempt(db, id, { recipient: 'user-a', status: 'sent' });
+
+    const deliver = vi.fn();
+    const result = await retryFailedDelivery(db, id, deliver, { recipient: 'user-a' });
+    expect(result).toMatchObject({ outcome: 'already_sent', deliveryStatus: 'sent', doubleSendPrevented: true });
+    expect(deliver).not.toHaveBeenCalled();
+  });
+
+  it('marks a delivery exhausted after maxAttempts failures and stops retrying', async () => {
+    const { id, doc } = await create();
+    const failing = vi.fn().mockRejectedValue(new Error('still down'));
+
+    const first = await retryFailedDelivery(db, id, failing, { recipient: 'user-a', maxAttempts: 2 });
+    expect(first).toMatchObject({ outcome: 'failed', deliveryStatus: 'failed', attempts: 1 });
+
+    const second = await retryFailedDelivery(db, id, failing, { recipient: 'user-a', maxAttempts: 2 });
+    expect(second).toMatchObject({ outcome: 'exhausted', deliveryStatus: 'exhausted', attempts: 2, error: 'still down' });
+    expect(failing).toHaveBeenCalledTimes(2);
+
+    const after = await db.collection('notifications').findOne({ _id: doc._id });
+    expect(after.deliveryStatus).toBe(DELIVERY_STATUSES.exhausted);
+    expect(after.attempts).toBe(2);
+
+    // Terminal: a later retry is a no-op and hands back the diagnostics.
+    const third = await retryFailedDelivery(db, id, failing, { recipient: 'user-a', maxAttempts: 2 });
+    expect(third).toMatchObject({ outcome: 'exhausted', deliveryStatus: 'exhausted', attempts: 2 });
+    expect(failing).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps delivery payloads permission-safe across users', async () => {
+    const { id, doc } = await create({ recipient: 'user-a', message: 'private to a' });
+
+    // user-b can neither record an attempt nor retry user-a's notification...
+    expect(await recordDeliveryAttempt(db, id, { recipient: 'user-b', status: 'sent' }))
+      .toMatchObject({ updated: false });
+    expect((await db.collection('notifications').findOne({ _id: doc._id })).deliveryStatus)
+      .toBe(DELIVERY_STATUSES.pending);
+
+    const deliver = vi.fn();
+    expect(await retryFailedDelivery(db, id, deliver, { recipient: 'user-b' })).toEqual({ outcome: 'not_found' });
+    expect(deliver).not.toHaveBeenCalled();
+
+    // ...nor read user-a's failure diagnostics.
+    await recordDeliveryAttempt(db, id, { recipient: 'user-a', status: 'failed', error: 'boom' });
+    expect(await getDeliveryDiagnostics(db, 'user-b')).toHaveLength(0);
+    const own = await getDeliveryDiagnostics(db, 'user-a');
+    expect(own).toHaveLength(1);
+    expect(own[0]).not.toHaveProperty('recipient');
+    expect(own[0]).toMatchObject({ deliveryStatus: 'failed', attempts: 1, lastError: 'boom' });
+  });
+
+  it('stores delivery errors collapsed and length-capped (sensitive-safe)', async () => {
+    const { id } = await create();
+    const failing = vi.fn().mockRejectedValue(new Error(`token\n\n   ${'x'.repeat(500)}`));
+
+    const result = await retryFailedDelivery(db, id, failing, { recipient: 'user-a', maxAttempts: 3 });
+    expect(result.error.length).toBeLessThanOrEqual(200);
+    expect(result.error).not.toMatch(/\s{2,}/);
+    expect(result.error.startsWith('token x')).toBe(true);
   });
 });

@@ -1,0 +1,8 @@
+{
+  "_id": "legacy-mat-missing-price-0002",
+  "title": "Unpriced Legacy Lesson",
+  "description": "Legacy listing created before price became mandatory.",
+  "category": "Mathematics",
+  "userAddress": "0x1111111111111111111111111111111111111111",
+  "createdAt": "2025-11-02T12:30:00.000Z"
+}

@@ -14,6 +14,7 @@ import { sendReceiptIfEligible } from '@/lib/email';
 import { createCheckoutQuote, consumeCheckoutQuote } from '@/lib/checkout/quotes';
 import { buildAnalyticsEvent, recordServerAnalyticsEvent } from '@/lib/backend/analyticsEvents';
 import { appendCriticalMutation } from '@/lib/backend/auditLedger';
+import { withTelemetryRoute, ACTOR_TYPES } from '@/lib/monitoring/telemetry';
 
 function duplicateKey(error) {
   return error?.code === 11000;
@@ -135,7 +136,7 @@ export async function GET(req) {
   }
 }
 
-export async function POST(req) {
+async function handlePost(req) {
   try {
     const user = await getUserFromCookie(req);
     const db = await getDb();
@@ -262,3 +263,5 @@ export async function POST(req) {
     return NextResponse.json({ error: "Server error" }, { status: 500 });
   }
 }
+
+export const POST = withTelemetryRoute('purchase.complete', ACTOR_TYPES.USER, handlePost);

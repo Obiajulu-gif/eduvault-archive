@@ -43,4 +43,4 @@ export default function config(phase) {
   assertRuntimeEnv();
 
   return nextConfig;
-}
+};

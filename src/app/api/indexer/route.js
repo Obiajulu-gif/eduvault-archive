@@ -15,6 +15,7 @@ import {
   STELLAR_RPC_URL,
   NETWORK_PASSPHRASE,
 } from "@/lib/config/chain";
+import { withTelemetryRoute, ACTOR_TYPES } from "@/lib/monitoring/telemetry";
 
 const INDEXER_SECRET = process.env.INDEXER_SECRET ?? "";
 const BATCH_LIMIT = 100;
@@ -31,7 +32,7 @@ function isAuthorised(request) {
   return false;
 }
 
-export async function POST(request) {
+async function handlePost(request) {
   if (!isAuthorised(request)) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
@@ -88,6 +89,8 @@ export async function POST(request) {
     );
   }
 }
+
+export const POST = withTelemetryRoute('indexer.ingest', ACTOR_TYPES.SYSTEM, handlePost);
 
 export async function GET(request) {
   if (!isAuthorised(request)) {

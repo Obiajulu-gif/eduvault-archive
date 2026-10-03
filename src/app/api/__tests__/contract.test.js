@@ -1,22 +1,19 @@
 // @vitest-environment node
-// @vitest-environment node
 //
 // #793: contract drift tests. Real route handlers run against Mongo
-// (mongodb-memory-server via vitest globalSetup) and every response body is
+// (mongodbq-memory-server via vitest globalSetup) and every response body is
 // checked against the schema documented for that status in docs/openapi.yaml.
 // Removing or retyping a documented field, or changing a status code without
 // updating the spec, fails here.
 import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from 'vitest';
-import { readFileSync } from 'node:fs';
 import { readFileSync } from 'node:fs';
 import { parse } from 'yaml';
 import { Collection } from 'mongodb';
 
 const { currentUser } = vi.hoisted(() => ({ currentUser: { value: null } }));
 
-vi.mock('@/lib/api/auth', () => ({ getUserFromCookie: vi.fn().async () => currentUser.value }));
+vi.mock('@/lib/api/auth', () => ({ getUserFromCookie: vi.fn(async () => currentUser.value) }));
 vi.mock('@/lib/api/hardening', () => ({ withApiHardening: vi.fn((req, options, handler) => handler()) }));
-vi.mock('@/lib/api/audit', () => ({ auditLog: vi.fn() }));
 vi.mock('@/lib/api/audit', () => ({ auditLog: vi.fn() }));
 vi.mock('@/lib/cache/redis', () => ({ invalidateCatalogCache: vi.fn() }));
 
@@ -24,17 +21,17 @@ import { getDb } from '@/lib/mongodb';
 import { REQUIRED_INDEXES } from '@/lib/backend/schemaContracts';
 import { POST as importMaterials } from '../materials/import/route';
 import { GET as listNotifications, PATCH as markRead } from '../notifications/route';
+import { POST as createReceipt } from '../receipts/route';
+import { GET as getReceipt } from '../receipts/[id]/route';
 
-const spec = parse(readFileSync(new URL('../../../../docs/openapi.yaml', import.meta.url), 'utf8'));
 const spec = parse(readFileSync(new URL('../../../../docs/openapi.yaml', import.meta.url), 'utf8'));
 
 function resolve(schema) {
   let s = schema;
-  while (s && s.$ref) s = s.$ref.replace('#/', '').split('/').reduce((node, key) => node[key], spec);
+  while (s?.$ref) s = s.$ref.replace('#/', '').split('/').reduce((node, key) => node[key], spec);
   return s;
 }
 
-function typeOf(value) {
 function typeOf(value) {
   if (value === null) return 'null';
   if (Array.isArray(value)) return 'array';
@@ -42,8 +39,7 @@ function typeOf(value) {
   return typeof value;
 }
 
-// Minimal JSON Schema subset used by the spec: $ref, allOf, oneoF, type
-// (incl. arrays), required, properties, items, enum.
+// Minimal JSON Schema subset used by the spec: $ref, allOf, oneOf, type
 // (incl. arrays), required, properties, items, enum.
 function validate(value, rawSchema, path = '$') {
   const schema = resolve(rawSchema);
@@ -51,9 +47,8 @@ function validate(value, rawSchema, path = '$') {
   if (schema.allOf) return schema.allOf.flatMap((s) => validate(value, s, path));
   if (schema.oneOf) {
     const results = schema.oneOf.map((s) => validate(value, s, path));
-    return results.some((r) => r.length === 0) ? [] : [`${path}: matches no oneOf branch (${results.flat().join('; ')})`];
+    return results.some((r) => r.length === 0) ? [] : [`${path}: matches no oneOf branch (${results.flat().join('; ')})`)];
   }
-  const errors = [];
   const errors = [];
   if (schema.type) {
     const allowed = [].concat(schema.type);
@@ -62,7 +57,6 @@ function validate(value, rawSchema, path = '$') {
       return [`${path}: expected ${allowed.join('|')}, got ${actual}`];
     }
   }
-  if (schema.enum && !schema.enum.includes(value)) errors.push(`${path}: ${JSON.stringify(value)} not in enum`);
   if (schema.enum && !schema.enum.includes(value)) errors.push(`${path}: ${JSON.stringify(value)} not in enum`);
   if (value && typeof value === 'object' && !Array.isArray(value)) {
     for (const key of schema.required || []) {
@@ -73,7 +67,6 @@ function validate(value, rawSchema, path = '$') {
     }
   }
   if (Array.isArray(value) && schema.items) {
-  if (Array.isArray(value) && schema.items) {
     value.forEach((item, i) => errors.push(...validate(item, schema.items, `${path}[${i}]`)));
   }
   return errors;
@@ -81,7 +74,6 @@ function validate(value, rawSchema, path = '$') {
 
 async function expectContract(res, route, method) {
   const operation = spec.paths[route][method];
-  const documented = operation.responses[String(res.status)];
   const documented = operation.responses[String(res.status)];
   expect(documented, `${method.toUpperCase()} ${route} returned undocumented status ${res.status}`).toBeDefined();
   const body = await res.json();
@@ -91,22 +83,24 @@ async function expectContract(res, route, method) {
 }
 
 const jsonRequest = (url, method, body) => new Request(`http://localhost${url}`, {
-const jsonRequest = (url, method, body) => new Request(`http://localhost${url}`, {
   method,
   headers: { 'Content-Type': 'application/json' },
   body: body === undefined ? undefined : JSON.stringify(body),
 });
 
 const runImport = (body) => importMaterials(jsonRequest('/api/materials/import', 'POST', body));
+const runPreview = (body) => previewPermissionDiff(jsonRequest('/api/permissions/preview', 'POST', body));
 
-let db;
+const runCreateReceipt = (body) => createReceipt(jsonRequest('/api/receipts', 'POST', body));
+const runGetReceipt = (id) => getReceipt(jsonRequest(`/api/receipts/${id}`, 'GET'), { params: { id } });
+
 let db;
 let userAddress;
 
 beforeAll(async () => {
   db = await getDb();
-  for (const collection of ['materials', 'notifications']) {
-    for (const { keys, options } of REQUIRED_INDEXES[collection]) {
+  for (const collection of ['materials', 'notifications', 'receipts']) {
+    for (const { keys, options } of REQUIRED_INDEXES.collection || []) {
       await db.collection(collection).createIndex(keys, options);
     }
   }
@@ -122,15 +116,13 @@ afterEach(() => {
 });
 
 const records = [
-const records = [
   { externalId: 'ext-1', title: 'Algebra notes', storageKey: 'ipfs://algebra', price: 2 },
-  { externalId: 'ext-2', title: 'Physics notes', storageKey: 'ipfs://physics' },
+  { externalId: 'ext-3', title: 'Physics notes', storageKey: 'ipfs://physics' },
 ];
 
 describe('POST /api/materials/import contract', () => {
   it('dry run returns the plan and performs no persistent writes', async () => {
     const writeMethods = ['insertOne', 'insertMany', 'updateOne', 'updateMany', 'bulkWrite', 'replaceOne', 'deleteOne', 'deleteMany', 'findOneAndUpdate'];
-    const spies = writeMethods.map((m) => vi.spyOn(Collection.prototype, m));
     const spies = writeMethods.map((m) => vi.spyOn(Collection.prototype, m));
 
     const res = await runImport({ dryRun: true, records });
@@ -141,7 +133,7 @@ describe('POST /api/materials/import contract', () => {
     for (const spy of spies) expect(spy).not.toHaveBeenCalled();
   });
 
-  it('dyr run reports invalid and duplicate rows with 400 and no writes', async () => {
+  it('dry run reports invalid and duplicate rows with 400 and no writes', async () => {
     const res = await runImport({
       dryRun: true,
       records: [...records, { externalId: 'ext-1', title: 'Dup', storageKey: 'ipfs://dup' }, { title: '', storageKey: 'ipfs://x' }],
@@ -150,7 +142,7 @@ describe('POST /api/materials/import contract', () => {
 
     expect(res.status).toBe(400);
     expect(body.invalidRows.map((r) => r.row)).toEqual([3, 4]);
-    expect(await db.collection('materials').countDocuments({ userAddress })).toBe(0);
+    expect(await db.collection('materials').countDocuments( { userAddress })).toBe(0);
   });
 
   it('commit with invalid rows writes nothing', async () => {
@@ -158,7 +150,7 @@ describe('POST /api/materials/import contract', () => {
     await expectContract(res, '/api/materials/import', 'post');
 
     expect(res.status).toBe(400);
-    expect(await db.collection('materials').countDocuments({ userAddress })).toBe(0);
+    expect(await db.collection('materials').countDocuments( { userAddress })).toBe(0);
   });
 
   it('commit creates, then a repeated import is idempotent, then changes become updates', async () => {
@@ -188,7 +180,7 @@ describe('POST /api/materials/import contract', () => {
     await runImport({ dryRun: false, records: [records[0]] });
 
     // Simulate a concurrent import landing between planning and writing: the
-    // plan misses ext-1, so its insert hits the unique index while ext-2 lands.
+    // plan misses ext-1, so its insert hits the unique index while ext-3 lands.
     vi.spyOn(Collection.prototype, 'find').mockReturnValueOnce({ toArray: async () => [] });
     const res = await runImport({ dryRun: false, records });
     const body = await expectContract(res, '/api/materials/import', 'post');
@@ -218,7 +210,7 @@ describe('/api/notifications contract', () => {
     await expectContract(res, '/api/notifications', 'get');
   });
 
-  it('lists and marks only the calles\' notifications', async () => {
+  it('lists and marks only the caller\'s notifications', async () => {
     await runImport({ dryRun: false, records: [records[0]] });
 
     const res = await listNotifications(jsonRequest('/api/notifications?limit=5', 'GET'));
@@ -239,5 +231,74 @@ describe('/api/notifications contract', () => {
     const empty = await markRead(jsonRequest('/api/notifications', 'PATCH', {}));
     expect(empty.status).toBe(400);
     await expectContract(empty, '/api/notifications', 'patch');
+  });
+});
+
+describe('/api/receipts contract', () => {
+  const criticalOp = {
+    operation: 'materials.import',
+    status: 'succeeded',
+    externalRefs: { importBatchId: 'batch-1' },
+    payload: { created: 2, updated: 0 },
+  };
+
+  it('creates a signed receipt for a critical operation', async () => {
+    const res = await runCreateReceipt(criticalOp);
+    const body = await expectContract(res, '/api/receipts', 'post');
+
+    expect(res.status).toBe(201);
+    expect(body.receipt).toMatchObject({
+      actor: currentUser.value.sub,
+      operation: 'materials.import',
+      status: 'succeeded',
+      externalRefs: { importBatchId: 'batch-1' },
+    });
+    expect(body.receipt.id).toBeTruthy();
+    expect(body.receipt.timestamp).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+    expect(body.receipt.signature).toMatch(/^[0-9a-f]+$/);
+    expect(body.receipt.payloadHash).toMatch(/^[0-9a-f]+$/);
+  });
+
+  it('produces a stable, verifiable payload for identical requests', async () => {
+    const first = await runCreateReceipt(criticalOp);
+    const firstBody = await expectContract(first, '/api/receipts', 'post');
+    expect(first.status).toBe(201);
+
+    const second = await runCreateReceipt(criticalOp);
+    const secondBody = await expectContract(second, '/api/receipts', 'post');
+    expect(second.status).toBe(200);
+    expect(secondBody.receipt.id).toBe(firstBody.receipt.id);
+    expect(secondBody.receipt.payloadHash).toBe(firstBody.receipt.payloadHash);
+  });
+
+  it('returns the receipt to its actor and verifies the signature', async () => {
+    const created = await runCreateReceipt(criticalOp);
+    const createdBody = await expectContract(created, '/api/receipts', 'post');
+
+    const res = await runGetReceipt(createdBody.receipt.id);
+    const body = await expectContract(res, '/api/receipts/{id}', 'get');
+    expect(res.status).toBe(200);
+    expect(body.verified).toBe(true);
+  });
+
+  it('denies receipt lookup to a non-actor non-admin', async () => {
+    const created = await runCreateReceipt(criticalOp);
+    const createdBody = await expectContract(created, '/api/receipts', 'post');
+
+    currentUser.value = { sub: 'other-user', role: 'student' };
+    const res = await runGetReceipt(createdBody.receipt.id);
+    expect(res.status).toBe(403);
+  });
+
+  it('detects tampering by failing signature verification', async () => {
+    const created = await runCreateReceipt(criticalOp);
+    const createdBody = await expectContract(created, '/api/receipts', 'post');
+    const id = createdBody.receipt.id;
+
+    await db.collection('receipts').updateOne({ _id: id }, { $set: { 'payload.created': 999 } });
+
+    const res = await runGetReceipt(id);
+    const body = await expectContract(res, '/api/receipts/{id}', 'get');
+    expect(body.verified).toBe(false);
   });
 });

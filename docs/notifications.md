@@ -18,6 +18,45 @@ recovery events.
 - **Read state is per recipient.** `markNotificationsRead` only ever updates the
   caller's own notifications; ids belonging to anyone else simply don't match.
 
+## Delivery tracking and retries
+
+Each notification carries a delivery lifecycle (#834):
+
+| Field | Meaning |
+| ----- | ------- |
+| `deliveryStatus` | `pending` → `sent` / `failed` → `exhausted` |
+| `attempts` | Number of delivery attempts recorded |
+| `lastAttemptAt` | Timestamp of the most recent attempt |
+| `lastError` | Sanitized (collapsed, ≤200 char) failure reason |
+| `sentAt` | Timestamp of the successful attempt, if any |
+
+- New notifications are inserted `pending` with `attempts: 0`. Because `notify`
+  only ever `$setOnInsert`s, a retried source event with the same
+  `(recipient, dedupeKey)` does not create a second row **and does not reset**
+  the existing delivery state.
+- `recordDeliveryAttempt(db, id, { recipient, status, error })` advances the
+  state and increments `attempts`. It is recipient-scoped, so a caller can
+  never flip another user's delivery state, and it refuses to overwrite a
+  terminal `sent` notification — a late or racing failure cannot un-send it.
+- `retryFailedDelivery(db, id, deliverFn, { recipient, maxAttempts = 3 })`
+  invokes `deliverFn` at most once per call with a recipient-scoped public
+  payload (no `recipient`/`dedupeKey`). On success it records `sent`; on
+  failure it records `failed`, then `exhausted` once `attempts >= maxAttempts`.
+  It never re-delivers an `already_sent` notification (returns
+  `doubleSendPrevented: true`) and never auto-retries an `exhausted` one.
+- `getDeliveryDiagnostics(db, recipient, { limit })` returns the recipient's
+  `failed`/`exhausted` notifications with `attempts`, `lastAttemptAt`, and the
+  sanitized `lastError` for operator triage. Both the lookup and the returned
+  rows are scoped to the recipient.
+
+Delivery state is intentionally **not** exposed on the public inbox payload;
+only the internal helpers and diagnostics see it.
+
+No migration step is required: notifications created before #834 simply lack
+the delivery fields and are treated as `attempts: 0` on their first tracked
+retry. The `notifications_delivery_idx` index is created by the normal
+`REQUIRED_INDEXES` startup path.
+
 ## Event types
 
 | Type | Severity | Default deep link | Recipient |
@@ -71,3 +110,9 @@ Both routes are scoped to the authenticated session user. See
 - feature-flag gating — critical lifecycle notifications are skipped when the
   flag is off (the safe default)
 - deep-link validation — non-internal links are rejected
+- delivery tracking — a duplicate source event neither duplicates nor resets
+  delivery state
+- retry — a failed delivery can be retried to `sent`, is never double-sent once
+  `sent`, and is marked `exhausted` after `maxAttempts`
+- permission safety — another user cannot read, retry, or flip a notification,
+  and delivery errors are sanitized

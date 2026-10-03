@@ -9,8 +9,9 @@ import { auditLog } from "@/lib/api/audit";
 import { authorizeMaterialAccess } from "@/lib/entitlement";
 import { getIpfsUrl } from "@/lib/config/chain";
 import { normalizeBuyerAddress } from "@/lib/purchases/access";
+import { withTelemetryRoute, ACTOR_TYPES } from "@/lib/monitoring/telemetry";
 
-export async function GET(req, { params }) {
+async function handleGet(req, { params }) {
   return withApiHardening(
     req,
     { route: "material-deliver", rateLimit: { limit: 60, windowMs: 60_000 } },
@@ -118,3 +119,5 @@ export async function GET(req, { params }) {
     }
   );
 }
+
+export const GET = withTelemetryRoute('material.deliver', ACTOR_TYPES.USER, handleGet);

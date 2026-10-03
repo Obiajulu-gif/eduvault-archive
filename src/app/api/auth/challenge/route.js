@@ -4,6 +4,7 @@ import { NextResponse } from "next/server";
 import { issueChallenge } from "@/lib/auth/challenge";
 import { normalizeWalletAddress } from "@/lib/api/validation";
 import { withApiHardening } from "@/lib/api/hardening";
+import { canonicalizeChallengeParams } from "@/lib/auth/canonicalization";
 
 export async function GET(request) {
   return withApiHardening(
@@ -13,20 +14,32 @@ export async function GET(request) {
       try {
         const { searchParams } = new URL(request.url);
         const address = normalizeWalletAddress(searchParams.get("address"));
-        const action = searchParams.get("action") || "default";
-        const origin = searchParams.get("origin");
-        const network = searchParams.get("network");
-        const contract = searchParams.get("contract");
 
         if (!address) {
           return NextResponse.json({ error: "Missing or invalid address" }, { status: 400 });
         }
 
-        const challenge = await issueChallenge(address, {
-          action,
-          origin,
-          network,
-          contract,
+        const normalized = canonicalizeChallengeParams({
+          address,
+          action: searchParams.get("action"),
+          origin: searchParams.get("origin"),
+          network: searchParams.get("network"),
+          contract: searchParams.get("contract"),
+        });
+
+        if (!normalized.ok) {
+          return NextResponse.json(
+            { error: normalized.error },
+            { status: 400 }
+          );
+        }
+
+        const challenge = await issueChallenge(normalized.address, {
+          action: normalized.action,
+          origin: normalized.origin,
+          network: normalized.network,
+          contract: normalized.contract,
+          canonical: normalized.canonical,
         });
         return NextResponse.json(challenge);
       } catch (error) {

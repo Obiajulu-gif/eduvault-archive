@@ -50,8 +50,10 @@ on-chain `get_purchase_snapshot(purchaseId)` result without a live API call.
 
 **Schema source:** `src/lib/learner-export/schema.js`
 **Builder:** `src/lib/learner-export/buildLearnerExport.js`
+**Authorized entrypoint:** `src/lib/learner-export/exportLearnerData.js`
 **Route:** `src/app/api/learner-export/route.js`
-**Tests:** `src/lib/__tests__/learnerExport.test.js`
+**Tests:** `src/lib/__tests__/learnerExport.test.js`,
+`src/lib/__tests__/exportLearnerData.test.js`
 
 **Error codes** on failure: `EVT_AUTH_001` (not authenticated),
 `EVT_AUTH_002` (account suspended), `EVT_ENTITLEMENT_004` (export assembly
@@ -104,3 +106,45 @@ falls back to the safer behavior of not exposing data. See
 - **Large export** — 250 purchases are all included and the document validates.
 - **Out-of-scope** — a caller only ever receives their own data; entitlements,
   refunds, and progress are scoped to the session user as well.
+
+### Authorized export entrypoint (#838)
+
+`buildLearnerExport()` is a pure assembler — it trusts the collections it is
+given, so the caller must prove the requester may see the subject's records.
+`exportLearnerData({ requester, subject, ... })` centralises that proof as the
+authorized entrypoint for programmatic callers. The HTTP route
+(`GET /api/learner-export`) applies the same self-export-only policy inline by
+resolving the session user and scoping every query to that wallet.
+
+**Authorization rules:**
+
+| Requester                                          | Result                                                                 |
+| -------------------------------------------------- | ---------------------------------------------------------------------- |
+| Owns the subject (`requester` wallet === subject)  | Allowed — scope `self`. May request `redaction: full` (own PII).       |
+| Role `admin` or `support`, or `admin:access`       | Allowed — scope `privileged`, for support/dispute/compliance workflows. |
+| Any other authenticated or anonymous requester     | Denied — throws `ExportAuthorizationError` **before** any record is read. |
+
+A denied export throws the typed `ExportAuthorizationError` with `code`
+(`EXPORT_UNAUTHENTICATED` → 401, `EXPORT_FORBIDDEN` → 403) and never returns a
+document. The error is thrown before assembly, so a denied request cannot leak
+data even partially.
+
+**Privacy guarantees:**
+
+- Cross-user (`privileged`) exports are capped at `partial` redaction — another
+  learner's `email` and `fullName` are always `null`, even if `full` is asked
+  for. Only a learner's own export may emit PII.
+- Every user-owned collection (`purchases`, `entitlements`, `refunds`,
+  `progressRecords`) is filtered to rows owned by the subject as defense in
+  depth. Unattributable or foreign rows are dropped, never included, so a
+  miscalled query cannot exfiltrate another learner's data.
+
+**Self-describing metadata** — every export carries `schemaVersion`
+(`1.0.0`) and `generatedAt` (ISO 8601), plus the `retention` block described
+above. The wrapper adds an `authorization` block recording the scope, the
+effective redaction level, and the audit reason. Schema compatibility rules are
+unchanged: consumers ignore unknown top-level keys.
+
+**Tests (`src/lib/__tests__/exportLearnerData.test.js`)** cover the four
+acceptance cases — valid, empty, denied, and a 4,000-purchase large export —
+plus the cross-user PII cap and foreign-row filtering.

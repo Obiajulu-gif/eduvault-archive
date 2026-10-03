@@ -5,6 +5,7 @@ import { NextResponse } from "next/server";
 import { getDb } from "@/lib/mongodb";
 import { requireAdmin } from "@/lib/api/auth";
 import { createAuditCheckpoint, readAuditRecords, verifyAuditRecords } from "@/lib/backend/auditLedger";
+import { createReceipt } from "@/lib/receipts/receiptService";
 import { canonicalizeAuditRecords, canonicalizePayload } from "@/lib/backend/canonicalSerialization";
 
 export async function GET(request) {
@@ -35,7 +36,7 @@ export async function POST(request) {
   const admin = await requireAdmin(request);
   if (!admin) return NextResponse.json({ error: "Unauthorized. Admin access required." }, { status: 403 });
   try {
-    const body = await request.json().catch(() => ({}));
+const body = await request.json().catch(() => ({}));
     if (body && body.action === "impact") {
       const query = buildInPactQuery(body.query || {});
       const records = await readAuditRecords(await getDb(), { ...query.auditFilter, limit: query.limit });
@@ -47,8 +48,16 @@ export async function POST(request) {
         exportedAt: new Date().toISOString(),
       });
     }
-    const checkpoint = await createAuditCheckpoint(await getDb());
-    return NextResponse.json(canonicalizePayload({ success: true, checkpoint }));
+    const db = await getDb();
+    const checkpoint = await createAuditCheckpoint(db);
+    const { receipt } = await createReceipt({
+      operation: "audit.checkpoint",
+      actor: admin.id || admin.email || "admin",
+      status: "succeeded",
+      references: { checkpointId: checkpoint?.id || null },
+      db,
+    });
+    return NextResponse.json(canonicalizePayload({ success: true, checkpoint, receipt }));
   } catch (error) {
     console.error("Audit ledger checkpoint error:", error);
     return NextResponse.json({ error: "Failed to create audit checkpoint" }, { status: 500 });

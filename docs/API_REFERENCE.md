@@ -2,7 +2,7 @@
 
 This document defines the **stable error-code taxonomy** for every major
 failure path in the EduVault system: purchase, entitlement, download,
-refund, storage, indexer, and webhook.
+refund, storage, indexer, webhook, and activity receipts.
 
 Clients and frontends **must** use these codes rather than parsing prose
 error messages. Prose descriptions are informational only and may change
@@ -30,7 +30,7 @@ Every API error response has the shape:
 | `code` | `string` | Stable machine-readable code. Never changes within a major version. |
 | `message` | `string` | Informational prose. May change. Do not parse. |
 | `retryable` | `boolean` | `true` when the same request may succeed if retried after a delay. |
-| `supportAction` | `string \ | null` | Suggested next step. See [Support Actions](#support-actions). |
+| `supportAction` | `string \| null` | Suggested next step. See [Support Actions](#support-actions). |
 
 ---
 
@@ -47,6 +47,7 @@ Codes are prefixed by subsystem:
 | `EVT_STORAGE_` | IPFS / Pinata storage |
 | `EVT_INDEXER_` | Stellar event indexer |
 | `EVT_WEBHOOK_` | Outbound creator webhooks |
+| `EVT_RECEIPT_` | Activity receipts |
 | `EVT_AUTH_` | Authentication / authorisation |
 | `EVT_CONTRACT_` | On-chain Soroban contract errors |
 | `EVT_INPUT_` | Request validation / input errors |
@@ -116,9 +117,9 @@ Codes are prefixed by subsystem:
 | `EVT_REFUND_007` | 401 | false | Refund authorization expired — the refund authorization payload has passed its expiry timestamp. | `contact_support` |
 | `EVT_REFUND_008` | 422 | false | Insufficient escrow balance — escrow does not hold enough funds to cover the refund amount. | `contact_support` |
 | `EVT_REFUND_009` | 422 | false | Purchase buyer not found — the PurchaseBuyer mapping is missing; refund cannot identify the recipient. | `contact_support` |
-| `EVT_REFUND_010` | 503 | true | Refund transaction failed — the Stellar transaction submission failed after retries. | `retry_later` |
+| `EVT_REFUND_010`| 503 | true | Refund transaction failed — the Stellar transaction submission failed after retries. | `retry_later` |
 | `EVT_REFUND_011` | 404 | false | Purchase not found — no purchase record exists for the given purchase ID. | `none` |
-| `EVT_REFUND_012` | 409 | false | Refund window expired — the refund was requested after the `REFUND_WINDOW_DAYN` cutoff. | `contact_support` |
+| `EVT_REFUND_012` | 409 | false | Refund window expired — the refund was requested after the `REFUND_WINDOW_DAYS` cutoff. | `contact_support` |
 
 ---
 
@@ -132,7 +133,7 @@ Codes are prefixed by subsystem:
 | `EVT_STORAGE_004` | 413 | false | File too large — upload exceeds the configured per-file size limit. | `none` |
 | `EVT_STORAGE_005` | 415 | false | Unsupported file type — the MIME type is not in the permitted upload list. | `none` |
 | `EVT_STORAGE_006` | 503 | true | Quota threshold exceeded — Pinata usage has crossed the alert threshold; new uploads are blocked. | `contact_support` |
-| `EVT_STORAGE_007` | 422 | false | CID mismatch — the content hash returned by the pin endpoint does not match the expected CID. | `contact_support` |
+| `EVT_STORAGE_007` | 422 | false | Pinata CID mismatch — the content hash returned by the pin endpoint does not match the expected CID. | `contact_support` |
 | `EVT_STORAGE_008` | 404 | false | Content not pinned — the requested CID is not present in the primary or secondary provider's pin set. | `contact_support` |
 
 ---
@@ -148,7 +149,7 @@ Codes are prefixed by subsystem:
 | `EVT_INDEXER_005` | 409 | false | Duplicate event — an event with this stable ID has already been processed (idempotency guard). | `none` |
 | `EVT_INDEXER_006` | 422 | false | Event schema mismatch — the on-chain event's topic/field set does not match the expected schema snapshot. | `contact_support` |
 | `EVT_INDEXER_007` | 503 | true | Dead-letter overflow — the dead-letter queue has exceeded its depth limit; manual intervention required. | `contact_support` |
-| `EVT_INDEXER_008` | 503 | true | Surge pricing detected — on-chain base fee exceeds the `STELLAR_SURGE_FEE_THRESHOLD`; transaction submission deferred. | `retry_later` |
+| `EVT_INDEXER_008` | 503 | true | Surge pricing detected — on-chain base fee exceeds the `XL_SURGE_FEE_THRESHOLD`; transaction submission deferred. | `retry_later` |
 | `EVT_INDEXER_009` | 500 | false | Ledger gap detected — a sequence discontinuity was found in the processed ledger range; recovery scan required. | `contact_support` |
 
 ---
@@ -168,12 +169,51 @@ Codes are prefixed by subsystem:
 
 ---
 
-## Authentication / Authorisation Errors (`EVT_AUTH_`)
+## Activity Receipt Errors (`EVT_RECEIPT_`)
+
+Receipts are created for critical operations (purchase, refund, download,
+upload/pin, entitlement grant/revoke, and marketplace listing changes).
+Each receipt has a canonical, stable payload containing the actor, timestamp,
+status, and external references, and is signed so that tampering is detectable.
 
 | Code | HTTP | Retryable | Description | Support Action |
 |---|---|---|---|---|
 | `EVT_AUTH_001` | 401 | false | Missing credentials — the request did not include a valid authentication credential. | `none` |
-| `EVT_AUTH_002` | 401 | false | Invalid token — the authentication token could not be verified. | `none` |
-| `EVT_AUTH_003` | 401 | false | Token expired — the authentication token has passed its expiry. | `refresh_credentials` |
-| `EVT_AUTH_004` | 403 | false | Insufficient permissions — the authenticated principal lacks the required role or scope. | `none` |
+| `EVT_AUTH_002` | 401 | false | Invalid token — the provided token failed signature or claim validation. | `none` |
+| `EVT_AUTH_003` | 401 | true | Token expired — the access token has passed its expiry; refresh and retry. | `refresh_capability` |
+| `EVT_AUTH_004` | 403 | false | Insufficient role — the authenticated actor does not hold the required role. | `none` |
 | `EVT_AUTH_005` | 409 | false | Wallet not linked — the authenticated user has no verified wallet address on record. | `link_wallet` |
+
+---
+
+## Contract Errors (`EVT_CONTRACT_`)
+
+| Code | HTTP | Retryable | Description | Support Action |
+|---|---|---|---|---|
+| `EVT_CONTRACT_001` | 500 | true | Contract invocation failed — the Soroban contract returned an unexpected error. | `retry_later` |
+| `EVT_CONTRACT_002` | 503 | true | Contract simulation failed — the pre-flight simulation did not succeed. | `retry_later` |
+| `EVT_CONTRACT_003` | 503 | true | Transaction submission failed — the signed transaction was rejected by the network. | `retry_later` |
+
+---
+
+## Input Errors (`EVT_INPUT_`)
+
+| Code | HTTP | Retryable | Description | Support Action |
+|---|---|---|---|---|
+| `EVT_INPUT_001` | 400 | false | Missing required field — a required field was omitted from the request body or query. | `none` |
+| `EVT_INPUT_002` | 400 | false | Invalid field format — a field failed format validation (e.g. address, CID, or timestamp). | `none` |
+| `EVT_INPUT_003` | 422 | false | Unknown operation type — the requested operation type is not supported. | `none` |
+
+---
+
+## Support Actions
+
+| Action | Meaning |
+|---|---|
+| `none` | No automatic remedy; the request is definitively rejected. |
+| `retry_later` | Wait and repeat the same request. |
+| `refresh_quote` | Re-fetch the material quote and retry with the new values. |
+| `refresh_capability` | Re-issue a download capability token and retry. |
+| `reduce_quantity` | Lower the requested quantity or recipient count and retry. |
+| `contact_support` | Escalate to EduVault support with the code and request ID. |
+| `link_wallet` | Prompt the user to link and verify a wallet address before retrying. |

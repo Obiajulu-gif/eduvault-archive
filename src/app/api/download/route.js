@@ -44,6 +44,7 @@ import {
 } from '@/lib/downloads/capabilityToken';
 import { recordDownloadAccess } from '@/lib/downloads/accessLog';
 import { buildAnalyticsEvent, enqueueAnalyticsEvent } from '@/lib/backend/analyticsEvents';
+import { withTelemetryRoute, ACTOR_TYPES } from '@/lib/monitoring/telemetry';
 
 export { CAPABILITY_TTL_MS, CAPABILITY_MAX_BYTES };
 
@@ -53,7 +54,7 @@ function clientIpFrom(request) {
   return request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || request.headers.get('x-real-ip') || null;
 }
 
-export async function GET(request) {
+async function handleGet(request) {
   const { searchParams } = new URL(request.url);
   const materialId = searchParams.get('materialId') ?? '';
   const buyerAddressParam = searchParams.get('buyerAddress') ?? '';
@@ -259,3 +260,5 @@ export async function GET(request) {
     }
   );
 }
+
+export const GET = withTelemetryRoute('material.download', ACTOR_TYPES.USER, handleGet);

@@ -68,10 +68,44 @@ The retention cleanup script runs automatically via cron:
 node scripts/data-retention-cleanup.mjs
 ```
 
+**Deterministic preview** (per-record buckets, never writes):
+```bash
+node scripts/data-retention-cleanup.mjs --preview
+node scripts/data-retention-cleanup.mjs --preview --report-json ./retention-preview.json
+```
+
 **Execute mode** (performs deletion):
 ```bash
 node scripts/data-retention-cleanup.mjs --execute
 ```
+
+### Reviewing Preview Output (maintainers)
+
+`--preview` (and `--report-json <path>`) runs a deterministic, read-only scan
+and categorises every collection and expired record into one of four buckets:
+
+| Bucket | Meaning | Action |
+|--------|---------|--------|
+| `eligible` | Expired records that `--execute` would delete | Confirm the set matches expectations |
+| `held` | Expired records protected by an active dispute, audit, legal, refund, or settlement link (with an explicit `reason`) | Must remain; never expected in `eligible` |
+| `skipped` | Whole collections not cleanable: `permanently_protected`, `collection_not_found`, or `no_retention_policy` | Expected; no action |
+| `failed` | Collections whose protection evaluation errored | **Do not apply** until resolved |
+
+The report is deterministic: collections are ordered alphabetically, records by
+ascending `_id`, and repeated runs over unchanged data produce identical
+`buckets`. To decide whether to apply:
+
+1. Run `--preview` (or emit `--report-json` for review/archival).
+2. Confirm `buckets.failed` is empty. If not, investigate before any apply.
+3. Confirm every `buckets.held` entry is genuinely protected (check its
+   `reason`) and that `buckets.eligible` contains only records you intend to
+   delete.
+4. Optionally re-run with the same `--report-json` and diff against a prior
+   report; identical output confirms the dataset is stable.
+5. Only then run `--execute`. Preview is guaranteed to perform zero writes.
+
+> Note: `--preview` reports the authoritative `held` set. The legacy
+> `--execute` path is unchanged; review the preview before applying.
 
 ### Reporting
 
@@ -80,6 +114,8 @@ Each cleanup run generates:
 2. **Summary report** with totals per collection
 3. **Sample records** showing what would be/was deleted
 4. **Protection report** listing why records were protected
+5. **Preview buckets** (`eligible`/`held`/`skipped`/`failed`) when `--preview`
+   or `--report-json` is used
 
 Example output:
 ```
@@ -116,8 +152,19 @@ Automated tests validate:
 - ✅ Expired records outside retention window are identified correctly
 - ✅ Protection conditions are evaluated correctly
 - ✅ Dry-run mode never modifies data
+- ✅ Preview bucket contains an eligible expired record
+- ✅ Preview skips a permanently protected record with `reason`
+- ✅ Preview holds a dispute/audit/financial-linked record with `reason`
+- ✅ Preview is deterministic across repeated runs
+- ✅ Preview performs no destructive change
+- ✅ Apply mode deletes eligible records and still skips protected ones
 
 Test file: `tests/backend/data-retention-cleanup.test.mjs`
+
+Run the focused backend test:
+```bash
+npx tsx --test tests/backend/data-retention-cleanup.test.mjs
+```
 
 ## Compliance
 
