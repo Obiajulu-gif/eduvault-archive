@@ -44,6 +44,12 @@ export const COLLECTIONS = {
 };
 
 export const REQUIRED_INDEXES = {
+  actor_quotas: [
+    { keys: { actorId: 1, resource: 1 }, options: { unique: true, name: 'actor_quotas_scope_unique_idx' } },
+  ],
+  actor_quota_usage: [
+    { keys: { actorId: 1, resource: 1 }, options: { unique: true, name: 'actor_quota_usage_scope_unique_idx' } },
+  ],
   users: [
     { keys: { email: 1 }, options: { unique: true } },
     { keys: { walletAddressLower: 1 }, options: { sparse: true } },

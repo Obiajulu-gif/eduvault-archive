@@ -8,6 +8,8 @@ import { pinata } from '@/lib/pinata'
 import { getDb } from '@/lib/mongodb'
 import { enqueueSideEffect } from '@/lib/backend/outbox'
 import { createQuarantineRecord } from '@/lib/publishing/quarantine'
+import { requirePermission } from '@/lib/api/auth'
+import { assertActorQuota, consumeActorQuota, UserQuotaError } from '@/lib/quotaManager'
 
 const MAX_FILES_PER_BATCH = 10
 const MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024 // 10 MB per file
@@ -43,6 +45,12 @@ export async function POST(request) {
     { route: 'materials/bulk-upload', rateLimit: { limit: 10, windowMs: 60_000 } },
     async () => {
       try {
+        const authorization = await requirePermission(request, 'creator:manage')
+        if (!authorization.ok) {
+          return NextResponse.json({ error: 'Creator access required' }, { status: authorization.status })
+        }
+        const user = authorization.user
+        const uploaderAddress = user.walletAddress || user.address || user.sub
         const form = await request.formData()
         const files = form.getAll('files')
 
@@ -130,12 +138,24 @@ export async function POST(request) {
           )
         }
 
+        const db = await getDb()
+        const totalSize = files.reduce((sum, file) => sum + file.size, 0)
+        try {
+          await assertActorQuota(db, uploaderAddress, 'storage', totalSize)
+          await assertActorQuota(db, uploaderAddress, 'compute', files.length)
+          await assertActorQuota(db, uploaderAddress, 'indexing', files.length)
+          await consumeActorQuota(db, uploaderAddress, 'storage', totalSize)
+          await consumeActorQuota(db, uploaderAddress, 'compute', files.length)
+          await consumeActorQuota(db, uploaderAddress, 'indexing', files.length)
+        } catch (quotaError) {
+          if (!(quotaError instanceof UserQuotaError)) throw quotaError
+          return NextResponse.json({ error: quotaError.message, resource: quotaError.resource }, { status: 429 })
+        }
+
         // Concurrent upload execution via Promise.allSettled
         const uploadPromises = files.map(async (file, index) => {
           const uploadedFile = await pinata.upload.public.file(file)
           const gatewayUrl = await pinata.gateways.public.convert(uploadedFile.cid)
-          const uploaderAddress = request.headers.get('x-wallet-address') || 'anonymous'
-          const db = await getDb()
           const quarantine = await createQuarantineRecord({
             db,
             contentHash: uploadedFile.cid,
@@ -212,6 +232,9 @@ export async function POST(request) {
           { status: 200 }
         )
       } catch (err) {
+        if (err instanceof UserQuotaError) {
+          return NextResponse.json({ error: err.message, resource: err.resource }, { status: 429 })
+        }
         auditLog({
           event: 'bulk_upload_failed',
           route: 'materials/bulk-upload',

@@ -1,5 +1,6 @@
-import { describe, it, expect, beforeEach } from 'vitest';
-import { getDb } from '@/lib/mongodb';
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { MongoClient } from 'mongodb';
+import { MongoMemoryServer } from 'mongodb-memory-server';
 import {
   assertActorQuota,
   consumeActorQuota,
@@ -11,9 +12,24 @@ import {
 
 describe('quotaManager', () => {
   let db;
+  let mongo;
+  let client;
+
+  beforeAll(async () => {
+    mongo = await MongoMemoryServer.create();
+    client = new MongoClient(mongo.getUri());
+    await client.connect();
+    db = client.db('quota-tests');
+    await db.collection('actor_quotas').createIndex({ actorId: 1, resource: 1 }, { unique: true });
+    await db.collection('actor_quota_usage').createIndex({ actorId: 1, resource: 1 }, { unique: true });
+  });
+
+  afterAll(async () => {
+    await client?.close();
+    await mongo?.stop();
+  });
 
   beforeEach(async () => {
-    db = await getDb();
     await db.collection('actor_quotas').deleteMany({});
     await db.collection('actor_quota_usage').deleteMany({});
   });
@@ -79,5 +95,47 @@ describe('quotaManager', () => {
     const usage = await getActorQuotaUsage(db, actorId, resource);
     expect(usage.used).toBe(1024 * 1024 * 1024);
     expect(usage.limit).toBe(-1);
+  });
+
+  it('does not let concurrent requests increment usage past the scoped limit', async () => {
+    const actorId = 'concurrent-user';
+    const resource = 'compute';
+    await setActorQuotaOverride(db, actorId, resource, 100);
+    await consumeActorQuota(db, actorId, resource, 80);
+
+    const results = await Promise.allSettled([
+      consumeActorQuota(db, actorId, resource, 11),
+      consumeActorQuota(db, actorId, resource, 11),
+    ]);
+
+    expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
+    expect(results.filter((result) => result.status === 'rejected')).toHaveLength(1);
+    expect((await getActorQuotaUsage(db, actorId, resource)).used).toBe(91);
+  });
+
+  it('returns a safe error with remediation without exposing the actor id', async () => {
+    const actorId = 'private-user-123';
+    await setActorQuotaOverride(db, actorId, 'indexing', 1);
+    await consumeActorQuota(db, actorId, 'indexing', 1);
+
+    let error;
+    try {
+      await consumeActorQuota(db, actorId, 'indexing', 1);
+    } catch (caught) {
+      error = caught;
+    }
+    expect(error).toMatchObject({
+      name: 'UserQuotaError',
+      status: 429,
+      resource: 'indexing',
+      message: expect.stringMatching(/Reduce current usage or contact support/),
+    });
+    expect(error.message).not.toContain(actorId);
+  });
+
+  it('rejects missing actors, unknown resources, and invalid amounts', async () => {
+    await expect(consumeActorQuota(db, '', 'storage', 1)).rejects.toThrow(/actorId/);
+    await expect(consumeActorQuota(db, 'user1', 'unknown', 1)).rejects.toThrow(/Unsupported quota resource/);
+    await expect(consumeActorQuota(db, 'user1', 'storage', 0)).rejects.toThrow(/positive safe integer/);
   });
 });

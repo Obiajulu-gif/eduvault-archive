@@ -34,6 +34,8 @@ import { createHash } from 'node:crypto';
 import { getDb } from '@/lib/mongodb';
 import { createQuarantineRecord, QUARANTINE_STATES } from '@/lib/publishing/quarantine';
 import { enqueueSideEffect } from '@/lib/backend/outbox';
+import { requirePermission } from '@/lib/api/auth';
+import { assertActorQuota, consumeActorQuota, UserQuotaError } from '@/lib/quotaManager';
 
 export async function POST(request) {
   return withApiHardening(
@@ -41,10 +43,15 @@ export async function POST(request) {
     { route: 'materials/upload', rateLimit: { limit: 20, windowMs: 60_000 } },
     async () => {
       try {
+        const authorization = await requirePermission(request, 'creator:manage');
+        if (!authorization.ok) {
+          return NextResponse.json({ error: 'Creator access required' }, { status: authorization.status });
+        }
+        const user = authorization.user;
         const form = await request.formData();
         const file = form.get('file');
         const image = form.get('thumbnail');
-        const uploaderAddress = request.headers.get('x-wallet-address') || 'anonymous';
+        const uploaderAddress = user.walletAddress || user.address || user.sub;
 
         // 1. Require a document file
         if (!file) {
@@ -116,6 +123,20 @@ export async function POST(request) {
           return NextResponse.json({ error: validationErr.message }, { status: 400 });
         }
 
+        const db = await getDb();
+        const totalSize = file.size + (image?.size || 0);
+        try {
+          await assertActorQuota(db, uploaderAddress, 'storage', totalSize);
+          await assertActorQuota(db, uploaderAddress, 'compute', 1);
+          await assertActorQuota(db, uploaderAddress, 'indexing', 1);
+          await consumeActorQuota(db, uploaderAddress, 'storage', totalSize);
+          await consumeActorQuota(db, uploaderAddress, 'compute', 1);
+          await consumeActorQuota(db, uploaderAddress, 'indexing', 1);
+        } catch (quotaError) {
+          if (!(quotaError instanceof UserQuotaError)) throw quotaError;
+          return NextResponse.json({ error: quotaError.message, resource: quotaError.resource }, { status: 429 });
+        }
+
         // 7. Stream upload into quarantine and create scan record
         const fileBytes = Buffer.from(await file.arrayBuffer());
         const byteHash = createHash('sha256').update(fileBytes).digest('hex');
@@ -130,7 +151,6 @@ export async function POST(request) {
 
         const title = form.get('title') || form.get('name') || 'Untitled Material';
 
-        const db = await getDb();
         const quarantine = await createQuarantineRecord({
           db,
           contentHash: uploadedFile.cid,
@@ -194,6 +214,9 @@ export async function POST(request) {
           metadata: null,
         });
       } catch (err) {
+        if (err instanceof UserQuotaError) {
+          return NextResponse.json({ error: err.message, resource: err.resource }, { status: 429 });
+        }
         auditLog({ event: 'upload_failed', route: 'materials/upload', method: 'POST', status: 500, reason: err.message });
         return NextResponse.json({ error: err.message || 'Upload failed' }, { status: 500 });
       }

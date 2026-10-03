@@ -10,6 +10,19 @@ const { mockDb, mockEnqueueSideEffect } = vi.hoisted(() => ({
   mockEnqueueSideEffect: vi.fn(),
 }))
 
+vi.mock('@/lib/api/auth', () => ({
+  requirePermission: vi.fn().mockResolvedValue({
+    ok: true,
+    user: { sub: 'creator-1', walletAddress: 'GCREATOR1' },
+  }),
+}))
+
+vi.mock('@/lib/quotaManager', () => ({
+  assertActorQuota: vi.fn(),
+  consumeActorQuota: vi.fn(),
+  UserQuotaError: class UserQuotaError extends Error {},
+}))
+
 vi.mock('@/lib/pinata', () => ({
   pinata: {
     upload: {

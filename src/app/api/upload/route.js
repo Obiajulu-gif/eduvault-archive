@@ -1,6 +1,7 @@
 // Resolves #430: Implement a secure API route that receives file uploads and pins them to IPFS via Pinata.
 import { NextResponse } from 'next/server'
 import { auditLog } from '@/lib/api/audit'
+import { requirePermission } from '@/lib/api/auth'
 import { withApiHardening } from '@/lib/api/hardening'
 import { normalizeStringList, sanitizeObject, validateUploadPayload, validateUploadFileMetadata } from '@/lib/api/validation'
 import { getPinningProviders } from '@/lib/pinata'
@@ -11,7 +12,7 @@ import { sanitizeRichText, isSafeUrl } from '@/lib/api/contentSanitizer'
 import { guardZipArchiveUpload } from '@/lib/backend/archiveUploadGuard'
 import { validateUploadedFile, detectExecutableExtension } from '@/lib/ipfs/uploadValidator'
 import { createQuarantineRecord } from '@/lib/publishing/quarantine'
-import { consumeActorQuota } from '@/lib/quotaManager'
+import { assertActorQuota, consumeActorQuota, UserQuotaError } from '@/lib/quotaManager'
 import { enqueueSideEffect } from '@/lib/backend/outbox'
 import { getDb } from '@/lib/mongodb'
 import { processThumbnail, ThumbnailProcessingError } from '@/lib/upload/processThumbnail'
@@ -63,6 +64,13 @@ async function handlePost(request) {
     { route: 'upload', rateLimit: { limit: 20, windowMs: 60_000 } },
     async () => {
       try {
+        const authorization = await requirePermission(request, 'creator:manage')
+        if (!authorization.ok) {
+          auditLog({ event: 'auth_failed', route: 'upload', method: 'POST', status: authorization.status })
+          return NextResponse.json({ error: 'Creator access required' }, { status: authorization.status })
+        }
+        const user = authorization.user
+
         const form = await request.formData()
         const file = form.get('file')
         let image = form.get('thumbnail')
@@ -191,7 +199,9 @@ async function handlePost(request) {
 
         const results = {}
         const db = await getDb()
-        const uploaderAddress = request.headers.get('x-wallet-address') || 'anonymous'
+        // Derive quota scope from the authenticated account; never trust a
+        // caller-supplied wallet header to choose a fresh quota bucket.
+        const uploaderAddress = user.walletAddress || user.address || user.sub
         const totalSize = file.size + (image?.size || 0)
         
         try {
@@ -202,10 +212,16 @@ async function handlePost(request) {
         }
         
         try {
+          await assertActorQuota(db, uploaderAddress, 'storage', totalSize)
+          await assertActorQuota(db, uploaderAddress, 'compute', 1)
+          await assertActorQuota(db, uploaderAddress, 'indexing', 1)
           await consumeActorQuota(db, uploaderAddress, 'storage', totalSize)
+          await consumeActorQuota(db, uploaderAddress, 'compute', 1)
+          await consumeActorQuota(db, uploaderAddress, 'indexing', 1)
         } catch (quotaError) {
-          auditLog({ event: 'upload_failed', route: 'upload', method: 'POST', status: 429, reason: 'user_storage_quota_exceeded' })
-          return NextResponse.json({ error: quotaError.message }, { status: 429 })
+          if (!(quotaError instanceof UserQuotaError)) throw quotaError
+          auditLog({ event: 'upload_failed', route: 'upload', method: 'POST', status: 429, reason: `user_${quotaError.resource}_quota_exceeded` })
+          return NextResponse.json({ error: quotaError.message, resource: quotaError.resource }, { status: 429 })
         }
         const pinningProviders = getPinningProviders()
 
