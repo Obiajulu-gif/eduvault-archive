@@ -1,0 +1,28 @@
+name: Release Readiness
+
+on:
+  # A PR is gated only when it adds or changes the evidence file. Tag pushes
+  # are always gated, so a release can't ship without evidence.
+  pull_request:
+    paths:
+      - "release/readiness.json"
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  release-gate:
+    name: Release Readiness Gate
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      # The gate only reads the evidence file, so no npm install is needed.
+      - name: Check release evidence for this commit
+        run: node scripts/release-readiness.mjs --evidence release/readiness.json --commit "$GITHUB_SHA"

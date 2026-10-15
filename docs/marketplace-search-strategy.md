@@ -75,3 +75,28 @@ Text is the fraction of query tokens present in searchable fields. Popularity is
 ## Measurement and review
 
 Record p50/p95 latency, result click-through rate, facet-request rate, and MongoDB execution statistics by query shape. Benchmark with at least 100,000 representative projection documents before enabling a new index broadly; compare write latency and storage size before and after index creation. Any new filter or sort must add a documented query shape, an explain check, and a representative ranking test.
+
+## Stale index detection and repair (#977)
+
+`POST /api/search/reconcile` checks a batch of materials against
+`material_search_documents` and returns the drift in `diff`. It now also returns
+`summary`, which counts findings by type and by repair action, and sets
+`requiresOperator` when a human has to act before the automated repair runs.
+
+| Finding | Meaning | Repair | Needs operator |
+| ------- | ------- | ------ | -------------- |
+| `missing` | searchable material, no projection | `reindex_material` (`repair: true`) | no |
+| `stale` | projection version behind the material | `reindex_material` (`repair: true`) | no |
+| `unauthorized` | projection exposes a material that is no longer public | `remove_projection` (`repair: true`) | **yes** (high priority) |
+| `orphan` | projection with no source material | `remove_projection`, after confirming no restore is pending | **yes** |
+| `cache_generation_behind` | catalog cache key from an older revision | `let_ttl_expire` | no (low priority) |
+
+Logic lives in `src/lib/backend/staleIndexDetection.js` and is pure.
+`detectSearchIndexDrift` is for full-scan audits, because the batched reconcile
+route can't see orphans outside its cursor window.
+`detectStaleCacheKeys` takes the catalog cache keys to check and the current
+revision from `src/lib/cache/redis.js`. Keys in other formats are ignored.
+
+**Rollback:** detection is read-only. The only write is the existing
+`repair: true` path, and that is unchanged. Repairs are reversible by re-running
+reconcile, because projections are rebuilt from the `materials` collection.

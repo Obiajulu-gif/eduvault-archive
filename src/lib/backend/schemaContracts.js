@@ -28,6 +28,9 @@ export const COLLECTIONS = {
   indexerQuarantine: "indexer_quarantine",
   indexerOperatorAudit: "indexer_operator_audit",
   materialPreviews: "material_previews",
+  // #969: import rows held out of the write for an unsafe storageKey. Separate
+  // from the file-level `quarantine` collection used by uploads.
+  importQuarantine: "import_quarantine",
   // Off-chain mirrors maintained by the indexer for event types added in
   // #598 (payouts/escrow/dispute resolutions and the scholarship subsystem).
   bulkPurchases: "bulk_purchases",
@@ -39,6 +42,8 @@ export const COLLECTIONS = {
   checkoutQuotes: "checkout_quotes",
   storageQuotaHistory: "storage_quota_history",
   notifications: "notifications",
+  // #976: per-recipient opt-outs for optional notification types only.
+  notificationPreferences: "notification_preferences",
   backgroundJobs: "background_jobs",
   sensitiveAccessLog: "sensitive_access_log",
 };
@@ -235,6 +240,10 @@ export const REQUIRED_INDEXES = {
   ],
   // #638: sandboxed preview descriptors, keyed by the original file's content
   // hash. A separate trust domain from the file itself and from `materials`.
+  // #969: review quarantined import rows for one batch, in file order.
+  import_quarantine: [
+    { keys: { importBatchId: 1, row: 1 }, options: { name: "import_quarantine_batch_idx", background: true } },
+  ],
   material_previews: [
     { keys: { contentHash: 1 }, options: { unique: true, name: "material_previews_content_hash_idx", background: true } },
     { keys: { state: 1, updatedAt: 1 }, options: { name: "material_previews_state_idx", background: true } },
@@ -247,6 +256,10 @@ export const REQUIRED_INDEXES = {
     // #834: delivery tracking / diagnostics scan a recipient's failed and
     // exhausted notifications without a collection scan.
     { keys: { recipient: 1, deliveryStatus: 1, lastAttemptAt: -1 }, options: { name: "notifications_delivery_idx", background: true } },
+  ],
+  // #976: one preference per (recipient, type). Mandatory types never get a row.
+  notification_preferences: [
+    { keys: { recipient: 1, type: 1 }, options: { unique: true, name: "notification_preferences_recipient_type_idx" } },
   ],
   // #789: Background worker framework jobs queue indexes
   background_jobs: [

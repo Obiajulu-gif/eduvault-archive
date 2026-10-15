@@ -7,6 +7,7 @@ import { requireAdmin } from "@/lib/api/auth";
 import { auditLog } from "@/lib/api/audit";
 import { withApiHardening } from "@/lib/api/hardening";
 import { reconcileMaterialSearch } from "@/lib/backend/materialSearchProjection";
+import { summarizeFindings } from "@/lib/backend/staleIndexDetection";
 import { getDb } from "@/lib/mongodb";
 
 export async function POST(request) {
@@ -41,7 +42,9 @@ export async function POST(request) {
           repaired: result.repaired,
         });
 
-        return NextResponse.json(result);
+        // #977: operator-visible rollup of this batch's drift, with the repair
+        // each kind of finding needs. `diff` stays as before for existing clients.
+        return NextResponse.json({ ...result, summary: summarizeFindings(result.diff) });
       } catch (err) {
         auditLog({
           event: "search_reconciliation_failed",

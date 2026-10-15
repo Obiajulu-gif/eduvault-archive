@@ -116,3 +116,31 @@ Both routes are scoped to the authenticated session user. See
   `sent`, and is marked `exhausted` after `maxAttempts`
 - permission safety — another user cannot read, retry, or flip a notification,
   and delivery errors are sanitized
+
+## Notification preferences and mandatory alerts (#976)
+
+Users can switch off **optional** notification types. Every other type is
+**mandatory** and always delivered.
+
+| Kind | Types | Behaviour |
+| ---- | ----- | --------- |
+| Optional | `import_completed`, `import_partial_failure` | Honours `notification_preferences`. Default is on. |
+| Mandatory | everything else, including types added later | Always delivered. Cannot be turned off. |
+
+- **Storage:** `notification_preferences`, one document per `(recipient, type)`,
+  enforced by the unique index `notification_preferences_recipient_type_idx`.
+  Mandatory types never get a row.
+- **Routing:** `resolveNotificationDelivery` in `src/lib/notifications/preferences.js`
+  is pure. Unknown types are mandatory, so a new type fails safe.
+- **Auditability:** an opted-out notification is still inserted, with
+  `suppressed: true`, `suppressedReason: "opted_out"` and
+  `deliveryStatus: "suppressed"`. It is excluded from the inbox and unread count,
+  and `retryFailedDelivery` returns `outcome: "suppressed"` without delivering it.
+- **API:** `GET /api/notifications/preferences` lists the optional types with
+  their state. `PUT /api/notifications/preferences` with `{ "type", "enabled" }`
+  sets one. Mandatory types return `400`.
+
+**Rollback:** the route and model are additive. To revert, remove the
+`notification_preferences` collection, which restores the "always deliver"
+behaviour. Suppressed records stay in `notifications` for audit and are hidden
+from the inbox. To restore them, set `suppressed` to `false` on those documents.

@@ -43,8 +43,22 @@ Rows are matched against the caller's existing materials only:
 | `update` | the `externalId` matches and at least one field differs (`fields` lists which) |
 | `skip` | the `externalId` matches with no changes, or a row without an `externalId` has a `storageKey` that was already imported |
 | `error` | the row failed validation or duplicates an earlier row |
+| `quarantine` | the row is valid but its `storageKey` uses a scheme other than `ipfs:`, `http:` or `https:` (for example `javascript:`, `data:`, `file:`) |
 
 **Idempotency:** rows with an `externalId` can be re-imported safely. Re-running the same file gives all `skip`, and an edited file gives `update`. A unique index on `{ userAddress, externalId }` also blocks duplicates when two imports run at the same time. Rows without an `externalId` can never be updated, only created or skipped.
+
+## Quarantine (#969)
+
+A row whose `storageKey` could execute or hide content is **quarantined** rather than rejected:
+
+- It is never written to `materials`.
+- It does **not** block the accepted rows in the same file, so a single hostile row can't hold a whole batch hostage. Its action is `quarantine` with `reasons` (`code: "unsafe_storage_scheme"`).
+- Each quarantined row is stored in `import_quarantine` with the `importBatchId`, row number, `externalId`, title, the submitted `storageKey`, and reasons, so the creator and maintainers can trace it. Index: `import_quarantine_batch_idx`.
+- The response carries `quarantined` (count) and `rollback.quarantined` guidance.
+
+Recovery: review `import_quarantine` for the batch, correct the `storageKey` in the source file, and re-run the same file. The corrected row is then planned as `create` (or `skip` if it was already imported).
+
+Compatibility note: `storageKey` values with a disallowed scheme were previously accepted silently. They are now quarantined. No data migration is needed because such rows were never rendered safely in the first place. Existing `ipfs:`, `http(s):` and scheme-less keys are unaffected.
 
 ## Dry run
 
@@ -85,9 +99,11 @@ Every created record stores a `provenance` block naming its import batch, source
 
 ## Fixing invalid rows and partial imports
 
+- **Quarantined rows:** not written and not an error. Review `import_quarantine` by `importBatchId`, fix the `storageKey`, and re-run the file.
 - **Invalid rows (400):** fix each entry in `invalidRows` (the `row` number is its 1-based position in `records`), then dry-run again until `summary.error` is 0.
 - **Partial import (207):** the rows that succeeded are already saved. Fix the rows in `failedRows` and re-run the **same file**. Rows with an `externalId` that already succeeded are skipped, so only the failed rows get written. A `code: 11000` failure means another import created that `externalId` first; a dry run will now show that row as `skip` or `update`.
 - **Rolling back an import:**
+  - To discard quarantined rows, delete `import_quarantine` documents with `{ importBatchId: "<id>" }`. Nothing was written for them, so no material changes are needed.
   - To undo creates, delete `materials` with `{ importBatchId: "<id>" }`. `materials_import_batch_idx` indexes that field.
   - To undo updates, use the `material_history` entries with `changeReason: "import <id>"`. Their `changes` store the `from` value of every field the import changed. Materials an import updated also carry `lastImportBatchId` and a provenance revision record.
 

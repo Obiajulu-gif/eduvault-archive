@@ -1,6 +1,7 @@
 import { ObjectId } from "mongodb";
 import { COLLECTIONS } from "../backend/schemaContracts.js";
 import { isFeatureFlagEnabled } from "../featureFlags.js";
+import { getNotificationDelivery } from "./preferences.js";
 
 // #794: server-side notifications for events a user has to act on or know
 // about. Recipient is always the session user id (`sub`), and every read or
@@ -60,6 +61,9 @@ export const DELIVERY_STATUSES = Object.freeze({
   sent: "sent",
   failed: "failed",
   exhausted: "exhausted",
+  // #976: an optional notification the user opted out of. The record is kept
+  // for audit, but it is set at creation only and never delivered.
+  suppressed: "suppressed",
 });
 
 const MAX_DELIVERY_ERROR_LENGTH = 200;
@@ -93,6 +97,10 @@ export async function notify(db, { recipient, type, dedupeKey, title, message, l
   if (!NOTIFICATION_TYPES[type]) throw new Error(`Unknown notification type: ${type}`);
   if (link !== null && !isInternalLink(link)) throw new Error("Notification link must be an internal path");
 
+  // #976: mandatory types always deliver. An opted-out optional type is still
+  // written, marked suppressed, so the decision stays auditable.
+  const delivery = await getNotificationDelivery(db, recipient, type);
+
   const now = new Date();
   const doc = {
     recipient: String(recipient),
@@ -104,9 +112,11 @@ export async function notify(db, { recipient, type, dedupeKey, title, message, l
     link,
     read: false,
     readAt: null,
+    suppressed: !delivery.deliver,
+    suppressedReason: delivery.deliver ? null : delivery.reason,
     // Delivery tracking (#834): a fresh notification starts pending; state is
     // only ever advanced by recordDeliveryAttempt/retryFailedDelivery.
-    deliveryStatus: DELIVERY_STATUSES.pending,
+    deliveryStatus: delivery.deliver ? DELIVERY_STATUSES.pending : DELIVERY_STATUSES.suppressed,
     attempts: 0,
     lastAttemptAt: null,
     lastError: null,
@@ -144,6 +154,7 @@ export async function notify(db, { recipient, type, dedupeKey, title, message, l
 export async function recordDeliveryAttempt(db, id, { recipient, status, error = null } = {}) {
   if (!ObjectId.isValid(id)) return { updated: false, deliveryStatus: null, attempts: null };
   if (!DELIVERY_STATUSES[status]) throw new Error(`Unknown delivery status: ${status}`);
+  if (status === DELIVERY_STATUSES.suppressed) throw new Error("suppressed is set when a notification is created, not by delivery");
 
   const now = new Date();
   const filter = { _id: new ObjectId(id), ...(recipient ? { recipient: String(recipient) } : {}) };
@@ -197,6 +208,9 @@ export async function retryFailedDelivery(db, id, deliverFn, { recipient, maxAtt
   const doc = await db.collection(COLLECTIONS.notifications).findOne(filter);
   if (!doc) return { outcome: "not_found" };
 
+  if (doc.suppressed === true) {
+    return { outcome: "suppressed", deliveryStatus: DELIVERY_STATUSES.suppressed, attempts: doc.attempts ?? 0 };
+  }
   if (doc.deliveryStatus === DELIVERY_STATUSES.sent) {
     return {
       outcome: "already_sent",
@@ -331,10 +345,12 @@ export async function notifyWalletRecipient(db, event) {
 
 export async function listNotifications(db, recipient, { unreadOnly = false, limit = 20 } = {}) {
   const col = db.collection(COLLECTIONS.notifications);
-  const filter = { recipient: String(recipient), ...(unreadOnly ? { read: false } : {}) };
+  // Suppressed records are audit-only and never reach the inbox.
+  const visible = { recipient: String(recipient), suppressed: { $ne: true } };
+  const filter = { ...visible, ...(unreadOnly ? { read: false } : {}) };
   const [docs, unreadCount] = await Promise.all([
     col.find(filter).sort({ createdAt: -1 }).limit(limit).toArray(),
-    col.countDocuments({ recipient: String(recipient), read: false }),
+    col.countDocuments({ ...visible, read: false }),
   ]);
   return { notifications: docs.map(toPublic), unreadCount };
 }

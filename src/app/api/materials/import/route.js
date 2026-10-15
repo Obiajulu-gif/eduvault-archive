@@ -7,7 +7,7 @@ import { requirePermission } from "@/lib/api/auth";
 import { getDb } from "@/lib/mongodb";
 import { randomUUID } from "node:crypto";
 import { validateImportPayload, planImport, publicPlanRows, ImportValidationError } from "@/lib/backend/materialImport";
-import { buildMaterialHistoryEntry } from "@/lib/backend/schemaContracts";
+import { buildMaterialHistoryEntry, COLLECTIONS } from "@/lib/backend/schemaContracts";
 import { buildImportProvenance, recordProvenanceRevision, TRANSFORM_VERSIONS } from "@/lib/backend/provenance";
 import { sanitizeString } from "@/lib/api/validation";
 import { invalidateCatalogCache } from "@/lib/cache/redis";
@@ -91,13 +91,41 @@ export async function POST(request) {
           }, { status: 400 });
         }
 
-        const writeRows = plan.rows.filter((r) => r.action === "create" || r.action === "update");
-        if (writeRows.length === 0) {
-          return NextResponse.json({ ...report, imported: 0, created: 0, updated: 0, message: "Nothing to write: every row is already imported" });
-        }
-
         const now = new Date();
         const importBatchId = randomUUID();
+        const writeRows = plan.rows.filter((r) => r.action === "create" || r.action === "update");
+
+        // #969: quarantined rows are recorded for review but never written, and
+        // they don't block the accepted rows around them.
+        const quarantinedRows = plan.rows.filter((r) => r.action === "quarantine");
+        if (quarantinedRows.length > 0) {
+          await db.collection(COLLECTIONS.importQuarantine).insertMany(quarantinedRows.map((r) => ({
+            importBatchId,
+            userAddress,
+            row: r.row,
+            externalId: r.externalId || null,
+            title: r.record?.title || null,
+            storageKey: r.record?.storageKey || null,
+            reasons: r.reasons,
+            status: "quarantined",
+            createdAt: now,
+          })));
+        }
+
+        if (writeRows.length === 0) {
+          return NextResponse.json({
+            ...report,
+            importBatchId,
+            imported: 0,
+            created: 0,
+            updated: 0,
+            quarantined: quarantinedRows.length,
+            message: quarantinedRows.length > 0
+              ? `Nothing written: ${quarantinedRows.length} row(s) quarantined, the rest were already imported`
+              : "Nothing to write: every row is already imported",
+          });
+        }
+
         const quarantineCol = db.collection("quarantine");
 
         // A stable human-readable label for the import source, so a maintainer
@@ -282,11 +310,13 @@ export async function POST(request) {
           imported: created + updated,
           created,
           updated,
+          quarantined: quarantinedRows.length,
           failedRows,
           rollback: {
             importBatchId,
             created: `Undo creates by deleting materials with importBatchId "${importBatchId}".`,
             updated: `Prior values of updated materials are in material_history with changeReason "import ${importBatchId}".`,
+            quarantined: `Quarantined rows were not written. Review import_quarantine with importBatchId "${importBatchId}", correct the storageKey, and re-run the same file.`,
             retry: "Fix failedRows and re-run the same file; rows with an externalId that already succeeded are skipped.",
           },
         }, { status: !partial ? 201 : created + updated > 0 ? 207 : 500 });
