@@ -79,6 +79,15 @@ export const EntitlementState = Object.freeze({
  * @property {LearnerIdentity} identity
  * @property {PurchaseEntry[]} purchases
  * @property {ExportSummary} summary
+ * @property {ExportRetention} retention
+ */
+
+/**
+ * @typedef {object} ExportRetention
+ * @property {string}        artifactLifetime - Always 'ephemeral' — exports are never stored server-side.
+ * @property {string}        generatedAt      - ISO 8601 timestamp of generation.
+ * @property {string|null}   expiresAt        - Always null; no server-side artifact to expire.
+ * @property {string}        policy           - Human-readable retention policy.
  */
 
 /**
@@ -247,6 +256,23 @@ export function validateExport(doc) {
       if (typeof doc.summary[field] !== 'number') {
         errors.push(`summary.${field} must be a number`);
       }
+    }
+  }
+
+  if (!doc.retention || typeof doc.retention !== 'object') {
+    errors.push('retention must be an object');
+  } else {
+    if (doc.retention.artifactLifetime !== 'ephemeral') {
+      errors.push('retention.artifactLifetime must be "ephemeral"');
+    }
+    if (typeof doc.retention.generatedAt !== 'string' || isNaN(Date.parse(doc.retention.generatedAt))) {
+      errors.push('retention.generatedAt must be a valid ISO 8601 string');
+    }
+    if (doc.retention.expiresAt !== null) {
+      errors.push('retention.expiresAt must be null (exports are not stored server-side)');
+    }
+    if (typeof doc.retention.policy !== 'string' || doc.retention.policy.length === 0) {
+      errors.push('retention.policy must be a non-empty string');
     }
   }
 

@@ -60,6 +60,17 @@ export const materialService = {
     });
   },
 
+  updateMaterial: async (id, updateData) => {
+    return apiClient(`/api/materials?id=${id}`, {
+      method: 'PUT',
+      body: updateData,
+    });
+  },
+
+  getMaterialHistory: async (id) => {
+    return apiClient(`/api/materials/history?id=${id}`);
+  },
+
   getTrendingMaterials: async (params = {}) => {
     const searchParams = buildQueryParams({ ...params, sort: 'trending' });
     return apiClient(`/api/market-materials?${searchParams.toString()}`);

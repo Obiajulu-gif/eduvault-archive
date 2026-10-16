@@ -1,0 +1,137 @@
+[
+  {
+    "id": "non-hex-signature",
+    "description": "Signature value contains characters outside the hex alphabet.",
+    "category": "invalid-signature",
+    "body": "{\"event\":\"purchase.completed\",\"data\":{\"id\":\"mat-1\"}}",
+    "signatureHeader": "t=1700000000,v1=zzzznothex0000000000000000000000000000000000000000000000000000",
+    "secret": "a-signing-secret",
+    "verifyAt": 1700000000
+  },
+  {
+    "id": "truncated-signature",
+    "description": "Signature is shorter than a SHA-256 digest (truncated hex).",
+    "category": "invalid-signature",
+    "body": "{\"event\":\"purchase.completed\",\"data\":{\"id\":\"mat-1\"}}",
+    "signatureHeader": "t=1700000000,v1=abc123",
+    "secret": "a-signing-secret",
+    "verifyAt": 1700000000
+  },
+  {
+    "id": "oversized-signature",
+    "description": "Signature value is far longer than a SHA-256 digest, as if an attacker padded it to probe buffer handling.",
+    "category": "oversized-value",
+    "body": "{\"event\":\"purchase.completed\",\"data\":{\"id\":\"mat-1\"}}",
+    "signatureHeader": "t=1700000000,v1=aa00aa00aa00aa00aa00aa00aa00aa00aa00aa00aa00aa00aa00aa00aa00aa00aa00aa00aa00aa00aa00aa00aa00aa00aa00aa00aa00aa00aa00aa00aa00aa00",
+    "secret": "a-signing-secret",
+    "verifyAt": 1700000000
+  },
+  {
+    "id": "all-zero-signature",
+    "description": "Signature is a plausible-length but trivially wrong all-zero digest.",
+    "category": "invalid-signature",
+    "body": "{\"event\":\"purchase.completed\",\"data\":{\"id\":\"mat-1\"}}",
+    "signatureHeader": "t=1700000000,v1=0000000000000000000000000000000000000000000000000000000000000000",
+    "secret": "a-signing-secret",
+    "verifyAt": 1700000000
+  },
+  {
+    "id": "missing-v1-field",
+    "description": "Header is missing the v1= signature component entirely.",
+    "category": "missing-field",
+    "body": "{\"event\":\"purchase.completed\"}",
+    "signatureHeader": "t=1700000000",
+    "secret": "a-signing-secret",
+    "verifyAt": 1700000000
+  },
+  {
+    "id": "missing-timestamp-field",
+    "description": "Header is missing the t= timestamp component entirely.",
+    "category": "missing-field",
+    "body": "{\"event\":\"purchase.completed\"}",
+    "signatureHeader": "v1=aa00aa00aa00aa00aa00aa00aa00aa00aa00aa00aa00aa00aa00aa00aa00aa00",
+    "secret": "a-signing-secret",
+    "verifyAt": 1700000000
+  },
+  {
+    "id": "empty-signature-header",
+    "description": "Header is an empty string.",
+    "category": "missing-field",
+    "body": "{\"event\":\"purchase.completed\"}",
+    "signatureHeader": "",
+    "secret": "a-signing-secret",
+    "verifyAt": 1700000000
+  },
+  {
+    "id": "non-numeric-timestamp",
+    "description": "Timestamp component is not a valid number.",
+    "category": "schema-drift",
+    "body": "{\"event\":\"purchase.completed\"}",
+    "signatureHeader": "t=not-a-number,v1=aa00aa00aa00aa00aa00aa00aa00aa00aa00aa00aa00aa00aa00aa00aa00aa00",
+    "secret": "a-signing-secret",
+    "verifyAt": 1700000000
+  },
+  {
+    "id": "reordered-header-fields",
+    "description": "Header fields appear in the opposite order (v1 before t) -- the parser must not silently accept a different field layout than it was designed for.",
+    "category": "schema-drift",
+    "body": "{\"event\":\"purchase.completed\"}",
+    "signatureHeader": "v1=aa00aa00aa00aa00aa00aa00aa00aa00aa00aa00aa00aa00aa00aa00aa00aa00,t=1700000000",
+    "secret": "a-signing-secret",
+    "verifyAt": 1700000000
+  },
+  {
+    "id": "extra-unknown-field",
+    "description": "Header carries an unexpected third field, simulating a future/foreign webhook format sent to this verifier by mistake.",
+    "category": "schema-drift",
+    "body": "{\"event\":\"purchase.completed\"}",
+    "signatureHeader": "t=1700000000,v1=aa00aa00aa00aa00aa00aa00aa00aa00aa00aa00aa00aa00aa00aa00aa00aa00,v2=deadbeef",
+    "secret": "a-signing-secret",
+    "verifyAt": 1700000000
+  },
+  {
+    "id": "null-secret",
+    "description": "Caller passes a null/empty signing secret -- must fail closed, never treat 'no secret' as 'any signature valid'.",
+    "category": "missing-field",
+    "body": "{\"event\":\"purchase.completed\"}",
+    "signatureHeader": "t=1700000000,v1=aa00aa00aa00aa00aa00aa00aa00aa00aa00aa00aa00aa00aa00aa00aa00aa00",
+    "secret": "",
+    "verifyAt": 1700000000
+  },
+  {
+    "id": "expired-timestamp",
+    "description": "Timestamp is far outside the default 300s tolerance window (stale replay/clock-skew attempt).",
+    "category": "replay",
+    "body": "{\"event\":\"purchase.completed\"}",
+    "signatureHeader": "t=1699999000,v1=aa00aa00aa00aa00aa00aa00aa00aa00aa00aa00aa00aa00aa00aa00aa00aa00",
+    "secret": "a-signing-secret",
+    "verifyAt": 1700000000
+  },
+  {
+    "id": "future-timestamp",
+    "description": "Timestamp is far in the future relative to the verification clock -- a forged delivery trying to outlast the tolerance window.",
+    "category": "replay",
+    "body": "{\"event\":\"purchase.completed\"}",
+    "signatureHeader": "t=1700005000,v1=aa00aa00aa00aa00aa00aa00aa00aa00aa00aa00aa00aa00aa00aa00aa00aa00",
+    "secret": "a-signing-secret",
+    "verifyAt": 1700000000
+  },
+  {
+    "id": "deeply-nested-oversized-body",
+    "description": "Body contains a pathologically deep/large nested structure -- the signature still won't match the literal header, but this guards against the verifier throwing instead of returning false on unusual bodies.",
+    "category": "oversized-value",
+    "body": "{\"event\":\"purchase.completed\",\"data\":{\"nested\":{\"nested\":{\"nested\":{\"nested\":{\"nested\":{\"nested\":{\"nested\":{\"nested\":{\"values\":[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20]}}}}}}}}}}",
+    "signatureHeader": "t=1700000000,v1=aa00aa00aa00aa00aa00aa00aa00aa00aa00aa00aa00aa00aa00aa00aa00aa00",
+    "secret": "a-signing-secret",
+    "verifyAt": 1700000000
+  },
+  {
+    "id": "null-byte-in-body",
+    "description": "Body contains an embedded null byte, simulating a truncation or injection attempt against naive C-string-style parsers downstream.",
+    "category": "schema-drift",
+    "body": "{\"event\":\"purchase.completed\",\"data\":{\"id\":\"mat-1\\u0000admin\"}}",
+    "signatureHeader": "t=1700000000,v1=aa00aa00aa00aa00aa00aa00aa00aa00aa00aa00aa00aa00aa00aa00aa00aa00",
+    "secret": "a-signing-secret",
+    "verifyAt": 1700000000
+  }
+]

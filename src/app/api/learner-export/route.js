@@ -5,15 +5,35 @@
  * Supports subject learners, creators, customer support agents, external auditors,
  * and administrators with strict role-based masking, redaction, and audit metadata.
  *
+ * Authorization (#790)
+ * ────────────────────
+ * The export exposes purchase history and PII, so it is scoped strictly to
+ * the authenticated session user. The caller can never request another
+ * user's export: every query is filtered by the wallet address resolved from
+ * the session, not from a client-supplied header or parameter.
+ *
+ * Feature flag (#797)
+ * ────────────────────
+ * Gated behind FEATURE_FLAG_LEARNER_DATA_EXPORT. When the flag is off (the
+ * safe default) the endpoint returns 503 — missing configuration falls back
+ * to the safer behavior of not exposing data.
+ *
+ * Retention (#790)
+ * ────────────────
+ * Exports are generated on demand and never stored server-side, so there is
+ * no artifact to expire. The response carries a `retention` block and
+ * `Cache-Control: no-store` so intermediaries don't cache it.
+ *
  * Query parameters:
  *   redaction  — 'full' | 'partial' | 'minimal'  (default: 'partial')
  *   purpose    — string business justification (optional)
  *
- * Headers:
- *   x-wallet-address  — Target subject wallet address (required)
- *   x-requester-role  — 'learner' | 'creator' | 'support_agent' | 'external_auditor' | 'admin'
- *   x-requester-id    — Identity of calling principal (optional)
- *   x-export-purpose  — Audit justification (optional)
+ * Response:
+ *   200 application/json — LearnerExport document (see src/lib/learner-export/schema.js)
+ *   401 — not authenticated
+ *   403 — account suspended
+ *   503 — feature flag disabled
+ *   500 — internal error
  *
  * Error codes: EVT_AUTH_001, EVT_AUTH_FIELD_001, EVT_AUTH_FIELD_002, EVT_ENTITLEMENT_004
  */

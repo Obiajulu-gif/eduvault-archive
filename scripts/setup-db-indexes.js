@@ -98,9 +98,13 @@ async function setupMarketplaceIndexes() {
         { name: "material_search_popular_idx", background: true }
       );
 
-    await db.collection("material_analytics_events").createIndex(
-      { eventKey: 1 },
-      { name: "material_analytics_event_key", unique: true, background: true }
+    await db.collection("material_analytics_aggregates").createIndex(
+      { materialId: 1, day: 1, eventType: 1, source: 1, classification: 1, filterReason: 1 },
+      { name: "analytics_daily_bucket_unique", unique: true, background: true }
+    );
+    await db.collection("material_analytics_dedupe").createIndex(
+      { expiresAt: 1 },
+      { name: "analytics_dedupe_expiry", expireAfterSeconds: 0, background: true }
     );
 
     console.log("✅ All marketplace indexes created successfully!");

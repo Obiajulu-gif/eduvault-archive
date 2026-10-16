@@ -1,6 +1,8 @@
 // Garbage collection for unpurchased and orphaned Pinata uploads (#739)
 // Safely identifies and unpins content that is no longer referenced
 
+import { appendAuditRecord } from '@/lib/backend/auditLedger';
+
 export const UploadState = {
   DRAFT: 'draft',
   PUBLISHED: 'published',
@@ -139,14 +141,23 @@ export async function recordGCAction(db, cid, action, result) {
 
   const gcAuditLog = db.collection('gc_audit_log')
 
-  return gcAuditLog.insertOne({
+  await gcAuditLog.insertOne({
     cid,
     action,
     result: result.status,
     details: result.message || result.reason,
     timestamp: new Date(),
     dryRun: result.dryRun || false,
-  })
+  });
+
+  return appendAuditRecord({
+    db,
+    operationId: `gc:${action}:${cid}:${Date.now()}`,
+    actor: 'system',
+    action: `storage.gc.${action}`,
+    target: { type: 'storage_cid', id: cid },
+    result: { status: result.status, details: result.message || result.reason, dryRun: result.dryRun || false }
+  });
 }
 
 export async function markMaterialForGC(db, materialId, reason) {
