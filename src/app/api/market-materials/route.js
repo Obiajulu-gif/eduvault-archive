@@ -4,7 +4,7 @@ import { NextResponse } from "next/server";
 import { auditLog } from "@/lib/api/audit";
 import { withApiHardening } from "@/lib/api/hardening";
 import { parsePagination } from "@/lib/api/validation";
-import { applyMarketplaceRelevanceRanking, applyOwnershipRanking, buildMarketplaceDiscoveryQuery, buildMarketplaceFacetPipeline, buildMarketplaceSort, decodeMarketplaceCursor, buildMarketplaceCursorClause } from "@/lib/backend/marketplaceDiscovery";
+import { applyMarketplaceRelevanceRanking, applyOwnershipRanking, buildMarketplaceDiscoveryQuery, buildMarketplaceFacetPipeline, buildMarketplaceSort, decodeMarketplaceCursor, encodeMarketplaceCursor, buildMarketplaceCursorClause } from "@/lib/backend/marketplaceDiscovery";
 import { MATERIAL_SEARCH_COLLECTION } from "@/lib/backend/materialSearchProjection";
 import { getOwnedMaterialIds } from "@/lib/entitlement";
 import { getDb } from "@/lib/mongodb";
@@ -134,7 +134,7 @@ export async function GET(request) {
       // Generate next cursor if there are more items
       if (hasNextPage && items.length > 0) {
         const lastItem = items[items.length - 1];
-        nextCursor = Buffer.from(JSON.stringify({ _id: lastItem._id.toString(), ...Object.fromEntries(Object.keys(sort).filter((field) => field !== "_id").map((field) => [field, lastItem[field] instanceof Date ? lastItem[field].toISOString() : lastItem[field]])) })).toString('base64url');
+        nextCursor = encodeMarketplaceCursor(lastItem, sort);
       }
     } else {
       // Legacy offset-based pagination
