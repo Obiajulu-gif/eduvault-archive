@@ -1,44 +1,47 @@
 /**
  * GET /api/learner-export
  *
- * Export the authenticated learner's complete library: purchased materials,
- * immutable receipt anchors, progress/bookmarks, and refund state.
+ * Export learner library data with privacy-safe field-level authorization (#1017).
+ * Supports subject learners, creators, customer support agents, external auditors,
+ * and administrators with strict role-based masking, redaction, and audit metadata.
  *
  * Query parameters:
  *   redaction  — 'full' | 'partial' | 'minimal'  (default: 'partial')
+ *   purpose    — string business justification (optional)
  *
- * Response:
- *   200 application/json — LearnerExport document (see src/lib/learner-export/schema.js)
- *   401 — not authenticated
- *   403 — authenticated as a different wallet (address mismatch guard)
- *   500 — internal error
+ * Headers:
+ *   x-wallet-address  — Target subject wallet address (required)
+ *   x-requester-role  — 'learner' | 'creator' | 'support_agent' | 'external_auditor' | 'admin'
+ *   x-requester-id    — Identity of calling principal (optional)
+ *   x-export-purpose  — Audit justification (optional)
  *
- * Error codes: EVT_AUTH_001, EVT_AUTH_002, EVT_ENTITLEMENT_004
- * (see docs/API_REFERENCE.md)
+ * Error codes: EVT_AUTH_001, EVT_AUTH_FIELD_001, EVT_AUTH_FIELD_002, EVT_ENTITLEMENT_004
  */
 
 import { NextResponse } from 'next/server';
 import { getDb }        from '../../../lib/mongodb.js';
 import { buildLearnerExport } from '../../../lib/learner-export/buildLearnerExport.js';
 import { RedactionLevel, validateExport } from '../../../lib/learner-export/schema.js';
+import {
+  applyFieldLevelAuthorization,
+  ExportRole,
+  FieldAuthorizationError,
+} from '../../../lib/learner-export/fieldAuthorization.js';
 
 export async function GET(request) {
-  // ── authentication ───────────────────────────────────────────────────────
-  const authHeader = request.headers.get('authorization') ?? '';
-  const sessionCookie = request.cookies?.get?.('session')?.value ?? null;
-
-  // Resolve wallet address from session/JWT.  In the real app this would call
-  // the session-verification utility; here we derive it from the
-  // x-wallet-address header (set by the authenticated middleware) or the
-  // Authorization bearer token claim.
+  // ── authentication & headers ──────────────────────────────────────────────
   const walletAddress = request.headers.get('x-wallet-address') ?? null;
+  const rawRequesterRole = request.headers.get('x-requester-role') ?? ExportRole.SUBJECT;
+  const requesterId = request.headers.get('x-requester-id') ?? null;
+  const { searchParams } = new URL(request.url);
+  const purpose = request.headers.get('x-export-purpose') ?? searchParams.get('purpose') ?? 'library_export';
 
   if (!walletAddress) {
     return NextResponse.json(
       {
         error: {
           code:          'EVT_AUTH_001',
-          message:       'Authentication required. Provide a valid session token.',
+          message:       'Authentication required. Provide a valid session or x-wallet-address.',
           retryable:     false,
           supportAction: null,
         },
@@ -48,40 +51,21 @@ export async function GET(request) {
   }
 
   // ── query params ─────────────────────────────────────────────────────────
-  const { searchParams } = new URL(request.url);
-  const rawRedaction     = searchParams.get('redaction') ?? RedactionLevel.PARTIAL;
-  const redactionLevel   = Object.values(RedactionLevel).includes(rawRedaction)
+  const rawRedaction   = searchParams.get('redaction') ?? RedactionLevel.PARTIAL;
+  const redactionLevel = Object.values(RedactionLevel).includes(rawRedaction)
     ? rawRedaction
     : RedactionLevel.PARTIAL;
-
-  // Only allow 'full' redaction for the owner of the account (the learner
-  // themselves) — do not expose full PII to third-party integrations.
-  // In production this would cross-check against the JWT sub claim; here
-  // we trust the middleware-injected x-wallet-address header.
 
   try {
     const db = await getDb();
 
-    // ── fetch user ──────────────────────────────────────────────────────
+    // ── fetch user ──────────────────────────────────────────────────────────
     const user = await db.collection('users').findOne(
       { walletAddressLower: walletAddress.toLowerCase() },
       { projection: { password: 0, webhookSigningSecret: 0, webhookSigningSecretPrevious: 0 } },
     );
 
-    if (!user) {
-      // User record doesn't exist yet — return an empty but valid export.
-      const emptyExport = buildLearnerExport({
-        user:      { walletAddress },
-        purchases: [],
-        entitlements: [],
-        refunds:   [],
-        materials: [],
-        redactionLevel,
-      });
-      return NextResponse.json(emptyExport, { status: 200 });
-    }
-
-    // ── fetch purchases ──────────────────────────────────────────────────
+    // ── fetch purchases ─────────────────────────────────────────────────────
     const purchases = await db.collection('purchases')
       .find({ buyerAddress: { $regex: new RegExp(`^${escapeRegex(walletAddress)}$`, 'i') } })
       .sort({ createdAt: -1 })
@@ -91,7 +75,7 @@ export async function GET(request) {
       purchases.map(p => p.materialId).filter(Boolean),
     )];
 
-    // ── fetch supporting collections in parallel ──────────────────────────
+    // ── fetch supporting collections in parallel ───────────────────────────
     const [entitlements, refunds, materials, progressRecords] = await Promise.all([
       db.collection('entitlement_cache').find({
         buyerAddress: { $regex: new RegExp(`^${escapeRegex(walletAddress)}$`, 'i') },
@@ -110,9 +94,9 @@ export async function GET(request) {
       }).toArray(),
     ]);
 
-    // ── assemble export ───────────────────────────────────────────────────
-    const exportDoc = buildLearnerExport({
-      user,
+    // ── assemble base export ───────────────────────────────────────────────
+    const baseExport = buildLearnerExport({
+      user: user || { walletAddress },
       purchases,
       entitlements,
       refunds,
@@ -121,8 +105,8 @@ export async function GET(request) {
       redactionLevel,
     });
 
-    // Validate before returning — catches any regression in buildLearnerExport.
-    const violations = validateExport(exportDoc);
+    // ── validate schema ────────────────────────────────────────────────────
+    const violations = validateExport(baseExport);
     if (violations.length > 0) {
       console.error('[learner-export] schema violations:', violations);
       return NextResponse.json(
@@ -138,15 +122,38 @@ export async function GET(request) {
       );
     }
 
-    return NextResponse.json(exportDoc, {
+    // ── apply field-level authorization ────────────────────────────────────
+    const privacySafeExport = applyFieldLevelAuthorization(baseExport, {
+      requesterRole: rawRequesterRole,
+      requesterId,
+      subjectWallet: walletAddress,
+      purpose,
+    });
+
+    return NextResponse.json(privacySafeExport, {
       status: 200,
       headers: {
-        'Content-Disposition': `attachment; filename="eduvault-library-export-${Date.now()}.json"`,
+        'Content-Disposition': `attachment; filename="eduvault-export-${Date.now()}.json"`,
         'Cache-Control': 'no-store',
+        'x-export-role': rawRequesterRole,
       },
     });
 
   } catch (err) {
+    if (err instanceof FieldAuthorizationError) {
+      return NextResponse.json(
+        {
+          error: {
+            code: err.code,
+            message: err.message,
+            retryable: false,
+            supportAction: null,
+          },
+        },
+        { status: err.status || 403 },
+      );
+    }
+
     console.error('[learner-export] unexpected error:', err);
     return NextResponse.json(
       {
@@ -161,8 +168,6 @@ export async function GET(request) {
     );
   }
 }
-
-// ── helpers ───────────────────────────────────────────────────────────────
 
 function escapeRegex(str) {
   return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
