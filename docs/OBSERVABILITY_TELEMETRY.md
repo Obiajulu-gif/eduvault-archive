@@ -185,3 +185,113 @@ nested operations, and `getCorrelationId()` to read the current one.
 3. Use an allow-listed `metadata` object (never the raw request/DB document).
 4. Run `npx vitest run src/lib/monitoring` — the coverage test fails if fewer
    than five operations are declared or any record is missing a field.
+
+## High-cardinality protection
+
+Redaction (above) keeps secrets out of telemetry. The guard in
+[`src/lib/monitoring/telemetryGuard.js`](../src/lib/monitoring/telemetryGuard.js)
+keeps *attacker-controlled volume and variety* from wrecking the log/metric
+backend and the dashboards built on it. It runs inside `emitRecord()` for every
+`withTelemetry`, `withTelemetryRoute` and `recordMetric` call.
+
+### What is enforced
+
+| Layer | Rule | Result |
+| --- | --- | --- |
+| Label values | `operation`, `actorType`, `result`, `metric`, `metricType`, `errorCode` must be ≤64 chars of `[A-Za-z0-9_.:-]` and must not look like an identifier (UUID, ObjectId/hex digest ≥16, Stellar strkey, ≥9-digit number, opaque 32+ char token) | Offending value replaced by `__invalid__`; rejection counted by reason |
+| Label keys | `validateLabels()` only accepts `ALLOWED_LABEL_KEYS`; per-entity keys (`userId`, `walletAddress`, `txHash`, `email`, `url`, …) are rejected | Dropped with a reason (`high_cardinality_key`, `key_not_allowed`) |
+| Series cardinality | At most 500 distinct `operation|actorType|result|metric` series and 100 distinct `errorCode`s per idle window (10 min) | Excess folds into `__overflow__` series / `errorCode=__overflow__`; still counted |
+| Sampling | Per-series token bucket (success 100 burst / 50 per s, failure 300 burst / 150 per s) plus a global bucket (2000 burst / 1000 per s) with 20% reserved for failures | Excess records are not emitted but are tallied |
+| Field bounds | `metadata`/`error` and API-logger context: ≤40 keys, ≤50 array items, depth ≤5, keys `[A-Za-z0-9_.$-]{1,64}`, control characters → space, `__proto__`/`constructor`/`prototype` dropped | Excess dropped and counted in `fieldsDropped` |
+| Redaction | Unchanged `redactSensitive()`, applied after bounding (so a secret is never truncated into an unmatchable fragment) | `[REDACTED]` |
+
+Sampling is deterministic (token bucket, no random draw), so the same input at
+the same timestamps always produces the same output.
+
+### Keeping dashboards correct under sampling
+
+Sampled-out records are never silently lost:
+
+- The next kept record for that series carries
+  `suppressed: { count, value }` — the number (and summed `value` for
+  counters) of records dropped since the previous kept one.
+- `flushTelemetrySummaries()` (also called opportunistically every 30 s) emits a
+  `telemetry.suppressed` metric per series with the pending tally.
+- `getTelemetryGuardStats()` returns exact, unsampled counters per series
+  (`total`, `failures`), plus `sampledOut`, `overflowed`, `labelRejections`,
+  `fieldsDropped`, and `lostSuppressed`.
+
+True volume for a series = kept records + `suppressed.count` (+ any pending
+summary). Rate panels should sum `1 + suppressed.count` per kept record.
+Latency percentiles are computed over kept records only; because failures have
+their own larger budget, error rate and error latency stay representative even
+when successes are heavily sampled.
+
+Alert on these signals — they mean someone is probing or a caller is building
+labels from input:
+
+- `labelRejections` growing, or many records with `operation="__invalid__"`
+- `overflowed` > 0 or any `__overflow__` series
+- `sampledOut` sustained > 0 outside a known incident
+- `fieldsDropped.keys` growing (request-derived objects reaching log context)
+
+### Rules for call sites
+
+1. Put only bounded categories in `operation`/`metric`/`errorCode`. Never
+   interpolate ids, paths, emails or error messages into them.
+2. Per-entity context (order id, material id) belongs in `metadata`, which is
+   bounded and redacted but is not an indexed dimension.
+3. Configure your log pipeline to index only the dimension fields above; do not
+   promote `metadata.*` keys to labels.
+4. Use `sanitizeLogFields(obj)` for any ad-hoc log line containing
+   request-derived data (the API request logger already does).
+
+### Edge cases and failure modes
+
+- **Legitimate new operation name rejected.** Names must be lower-case dotted
+  words, e.g. `payout.release`. A name with `/`, spaces or an id is collapsed to
+  `__invalid__`; check `labelRejections` and fix the call site.
+- **Operation names that look like identifiers.** A name made of 16+ hex chars
+  or a 9+ digit run is treated as an identifier and rejected.
+- **Series table full of stale series.** Idle series (>10 min) are evicted when
+  the table is full; any unreported suppression on an evicted series is counted
+  in `lostSuppressed` (the 30 s summary flush makes this rare).
+- **Overflow series.** Overflow series are force-admitted (a fixed handful of
+  keys) so excess volume is still counted rather than dropped.
+- **Per-process state.** Buckets and counters are per Node process/instance.
+  Fleet-wide volume is the sum across instances; the global budget is
+  per-instance.
+- **Failure storms.** Failures are sampled too (otherwise a failing dependency
+  could flood the backend), but with a 3× burst and a reserved global slice.
+  Their tally is preserved, so failure *rate* stays exact.
+- **Broken sink.** A throwing sink is caught and never fails the operation.
+- **Clock jumps backwards.** Elapsed time is clamped at 0, so buckets just stop
+  refilling until the clock catches up.
+- **Memory.** State is bounded: ≤500 (+ a few overflow) series and ≤100 error
+  codes, each a few numbers.
+
+### Rollback and recovery
+
+- **Disable the guard at runtime:** set `TELEMETRY_GUARD=off` (read on every
+  emission, restart not needed where env can be changed live; otherwise
+  redeploy). Records then flow unsampled and unvalidated exactly as before this
+  change. **Redaction stays on** — it is independent of the guard.
+- **Retune instead of disabling:** call `resetTelemetryGuard({ config })` with
+  larger buckets or `maxSeries` if legitimate traffic is being sampled.
+  `createTelemetryGuard` options are the only tuning surface.
+- **Recover counts after an incident:** `getTelemetryGuardStats()` and the
+  `telemetry.suppressed` summaries contain the exact totals; reconstruct
+  dashboards from `kept + suppressed.count`.
+- **Clear state:** `resetTelemetryGuard()` drops all series, buckets and
+  counters; sampling resumes from full buckets.
+
+### Verification
+
+```bash
+npx vitest run src/lib/monitoring
+```
+
+`telemetryGuard.test.js` covers label validation, series/error-code caps,
+deterministic sampling, count preservation, failure priority, recovery after
+abuse, field bounding, prototype-pollution keys, redaction ordering, the
+summary flush, and the rollback switch.

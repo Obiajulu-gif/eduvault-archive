@@ -20,6 +20,7 @@
 import crypto from "node:crypto";
 import { AsyncLocalStorage } from "node:async_hooks";
 import logger from "../logger.js";
+import { boundFields, createTelemetryGuard } from "./telemetryGuard.js";
 
 export const TELEMETRY_SCHEMA_VERSION = 1;
 
@@ -235,9 +236,37 @@ export function assertTelemetryRecord(record) {
   return true;
 }
 
-function emitRecord(record) {
-  const safe = redactSensitive(record);
+/**
+ * Telemetry guard singleton (label validation, cardinality limits, sampling).
+ * Set `TELEMETRY_GUARD=off` to bypass it at runtime; redaction always applies.
+ */
+let guard = createTelemetryGuard();
 
+function guardEnabled() {
+  return process.env.TELEMETRY_GUARD !== "off";
+}
+
+/** Exact, unsampled counters plus label-rejection and overflow tallies. */
+export function getTelemetryGuardStats() {
+  return guard.getStats();
+}
+
+/** Rebuild the guard (tests, config changes). Accepts `createTelemetryGuard` options. */
+export function resetTelemetryGuard(options) {
+  guard = createTelemetryGuard(options);
+  return guard;
+}
+
+/**
+ * Bound and redact arbitrary log context (key count, key shape, array size,
+ * control characters, secret shapes). Use for any log line that includes
+ * request-derived fields.
+ */
+export function sanitizeLogFields(fields) {
+  return redactSensitive(boundFields(fields).value);
+}
+
+function deliver(safe) {
   if (telemetrySink) {
     try {
       telemetrySink(safe);
@@ -245,11 +274,53 @@ function emitRecord(record) {
       // A broken sink must never break the instrumented operation.
       console.error("[telemetry] sink failed:", err);
     }
-    return safe;
+    return;
   }
 
   const level = safe.result === TELEMETRY_RESULT.FAILURE ? "error" : "info";
   logger[level]({ [TELEMETRY_LOG_NAMESPACE]: true, ...safe }, "telemetry");
+}
+
+function flushSuppressionSummaries() {
+  for (const summary of guard.drainSummaries()) {
+    deliver(
+      redactSensitive({
+        operation: "telemetry.suppressed_summary",
+        actorType: ACTOR_TYPES.SYSTEM,
+        result: TELEMETRY_RESULT.SUCCESS,
+        latencyMs: 0,
+        correlationId: ensureCorrelationId(),
+        timestamp: new Date().toISOString(),
+        schemaVersion: TELEMETRY_SCHEMA_VERSION,
+        metric: "telemetry.suppressed",
+        metricType: "counter",
+        value: summary.suppressedCount,
+        metadata: summary,
+      })
+    );
+  }
+}
+
+/** Emit pending "records dropped by sampling" summaries immediately. */
+export function flushTelemetrySummaries() {
+  flushSuppressionSummaries();
+}
+
+/**
+ * Returns the redacted record that was emitted, or `null` when sampling
+ * dropped it (the drop is still counted and reported via `suppressed`).
+ */
+function emitRecord(record) {
+  let prepared = record;
+  if (guardEnabled()) {
+    const decision = guard.process(record);
+    if (guard.summaryDue()) flushSuppressionSummaries();
+    if (!decision.emit) return null;
+    prepared = decision.record;
+  }
+
+  const safe = redactSensitive(prepared);
+  deliver(safe);
   return safe;
 }
 
@@ -421,10 +492,14 @@ const telemetry = {
   TELEMETRY_SCHEMA_VERSION,
   assertTelemetryRecord,
   ensureCorrelationId,
+  flushTelemetrySummaries,
   getCorrelationId,
+  getTelemetryGuardStats,
   recordMetric,
   redactSensitive,
+  resetTelemetryGuard,
   resetTelemetrySink,
+  sanitizeLogFields,
   runWithCorrelationId,
   setTelemetrySink,
   validateTelemetryRecord,
