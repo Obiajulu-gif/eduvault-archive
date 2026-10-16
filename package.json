@@ -32,7 +32,11 @@
     "indexer:stellar": "node scripts/run-stellar-indexer.mjs",
     "clean:intents": "node scripts/clean-stale-intents.mjs",
     "clean:intents:dry": "DRY_RUN=true node scripts/clean-stale-intents.mjs",
-    "indexer:deadletter": "node scripts/indexer-deadletter.mjs"
+    "indexer:deadletter": "node scripts/indexer-deadletter.mjs",
+    "monitor:journey": "node scripts/journey-monitor.mjs",
+    "monitor:journey:dry": "node scripts/journey-monitor.mjs --dry-run",
+    "verify:restore": "node scripts/verify-restore.mjs",
+    "support:expire": "node scripts/expire-support-sessions.mjs"
   },
   "dependencies": {
     "@creit-tech/stellar-wallets-kit": "npm:@jsr/creit-tech__stellar-wallets-kit@^2.1.0",

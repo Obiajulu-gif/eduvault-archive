@@ -38,6 +38,9 @@ export const COLLECTIONS = {
   adminTransfers: "admin_transfers",
   checkoutQuotes: "checkout_quotes",
   storageQuotaHistory: "storage_quota_history",
+  // Time-bounded maintainer impersonation / support access (see
+  // src/lib/auth/supportAccess.js). Immutable audit lives in audit_ledger.
+  supportSessions: "support_sessions",
 };
 
 export const REQUIRED_INDEXES = {
@@ -209,6 +212,16 @@ export const REQUIRED_INDEXES = {
   material_previews: [
     { keys: { contentHash: 1 }, options: { unique: true, name: "material_previews_content_hash_idx", background: true } },
     { keys: { state: 1, updatedAt: 1 }, options: { name: "material_previews_state_idx", background: true } },
+  ],
+  support_sessions: [
+    // Lookup is by hash of the bearer token, never the raw token.
+    { keys: { tokenHash: 1 }, options: { unique: true, name: "support_sessions_token_hash_idx" } },
+    // "Does this user have an active support session?" (user-facing notices).
+    { keys: { targetUserId: 1, status: 1, expiresAt: 1 }, options: { name: "support_sessions_target_idx" } },
+    // "Which sessions did this maintainer start?" (admin listing / forensics).
+    { keys: { actorId: 1, createdAt: -1 }, options: { name: "support_sessions_actor_idx" } },
+    // Scheduled expiry sweep (scripts/expire-support-sessions.mjs).
+    { keys: { status: 1, expiresAt: 1 }, options: { name: "support_sessions_expiry_idx" } },
   ],
 };
 

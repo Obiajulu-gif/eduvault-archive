@@ -1,5 +1,5 @@
 import crypto from 'node:crypto';
-import { COLLECTIONS } from './schemaContracts';
+import { COLLECTIONS } from './schemaContracts.js';
 
 export const AUDIT_LEDGER_VERSION = 'v1';
 const GENESIS_HASH = '0'.repeat(64);

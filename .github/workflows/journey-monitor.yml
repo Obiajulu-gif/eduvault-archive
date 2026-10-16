@@ -1,0 +1,41 @@
+name: Journey Monitor
+
+# Synthetic end-to-end health check for the critical workflow:
+# quote -> purchase -> entitlement -> authorized access -> download capability.
+# The dry-run step always executes (no secrets required); the live step runs
+# only when MONGODB_URI is configured as a repository secret.
+#
+# See docs/journey-monitor.md for runbook details.
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+
+jobs:
+  journey:
+    name: Synthetic journey
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      MONGODB_URI: ${{ secrets.MONGODB_URI }}
+      MONGODB_DB: ${{ vars.MONGODB_DB }}
+      JOURNEY_MONITOR_WEBHOOK_URL: ${{ secrets.JOURNEY_MONITOR_WEBHOOK_URL }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+
+      - name: Dry-run wiring check (always)
+        run: npm run monitor:journey:dry
+
+      - name: Live journey against the configured database
+        if: env.MONGODB_URI != ''
+        run: node scripts/journey-monitor.mjs --runs=2
