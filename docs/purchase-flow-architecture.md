@@ -31,6 +31,58 @@ These buckets aggregate purchase, refund, and payout events to ensure totals rec
 ## Future Production Enhancements
 Currently, the prototype relies on the client submitting the transaction hash to the backend. For a fully trustless production system, the `/api/purchase` endpoint should be upgraded to use the Stellar Horizon SDK to verify the transaction payload mathematically (verifying the `amount`, `destination`, and `asset`) before generating the entitlement.
 
+## Concurrency & Idempotency Strategy (Issue #10)
+
+Critical mutation paths in the purchase and entitlement flow are protected by
+deterministic locking plus idempotency keys so that concurrent requests cannot
+produce duplicate or inconsistent records.
+
+### Protected Mutation Paths
+* **`POST /api/purchase`** — creates the entitlement record and (on success) the
+  receipt provenance bundle. Vulnerable to duplicate submissions from retries,
+  double-clicks, or parallel tabs.
+* **`POST /api/purchase/:id/refund`** — flips `refundStatus` and re-issues the
+  receipt bundle. Vulnerable to concurrent refund requests racing the same
+  purchase.
+* **`POST /api/disputes`** — transitions a purchase into a dispute lifecycle.
+  Vulnerable to two disputes being opened for the same purchase.
+
+### Locking Model
+* Each mutation acquires a **per-resource lock** keyed by a deterministic
+  identifier (`purchase:{buyer}:{materialId}` for purchases,
+  `refund:{purchaseId}` for refunds, `dispute:{purchaseId}` for disputes).
+* Locks are implemented as an in-process async mutex for the prototype and are
+  designed to be swapped for a MongoDB unique-index + `findOneAndUpdate`
+  compare-and-set in production.
+* The lock is held only for the duration of the read-modify-write critical
+  section; network I/O is performed inside the section to guarantee that the
+  entitlement record and receipt bundle are written atomically from the
+  caller's perspective.
+
+### Idempotency
+* Every mutation accepts an `Idempotency-Key` header. The key is stored
+  alongside the resulting record. A repeated request with the same key returns
+  the previously created record unchanged instead of creating a new one.
+* Duplicate purchase retries therefore return the existing entitlement and the
+  same `receiptHash`; they never create a second irreversible record.
+* Refund and dispute mutations are idempotent on `(purchaseId, targetState)`:
+  replaying a refund that already reached `refunded` is a no-op.
+
+### Timeout Behavior
+* Mutations that exceed the configured lock-acquisition timeout (default
+  `LOCK_TIMEOUT_MS = 5000`) fail fast with `409 Conflict` and a
+  `retryable: true` body, rather than blocking indefinitely or partially
+  writing state.
+* If the critical section is interrupted after the entitlement write but before
+  the receipt bundle write, the next request with the same idempotency key
+  repairs the missing bundle deterministically.
+
+### Tests
+`tests/backend/purchase-concurrency.test.mjs` exercises the mutation paths with
+simultaneous success, conflicting requests, duplicate retries, and timeout
+scenarios, asserting that domain invariants hold and no duplicate irreversible
+records are created.
+
 ## Receipt Provenance Bundles (Issue #679)
 
 Learners and auditors need a receipt that ties material version, creator,

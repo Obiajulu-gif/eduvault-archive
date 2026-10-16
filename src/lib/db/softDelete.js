@@ -79,6 +79,8 @@ export function buildRestorePatch({ now = new Date() } = {}) {
  * Returns `{ ok, reason }` rather than throwing so route handlers can map the
  * outcome onto a status code without a try/catch around normal flow.
  */
+import { transitionMaterialState, MaterialLifecycleState } from './materialLifecycle.js';
+
 export async function softDeleteMaterial({
   db,
   filter,
@@ -92,14 +94,17 @@ export async function softDeleteMaterial({
   if (!existing) return { ok: false, reason: "not_found" };
   if (isSoftDeleted(existing)) return { ok: false, reason: "already_deleted", material: existing };
 
-  const patch = {
-    ...buildSoftDeletePatch({ deletedBy, reason, now }),
-    searchVersion: Number(existing.searchVersion || existing.version || 1) + 1,
-  };
-
-  await materials.updateOne(filter, { $set: patch });
-
-  return { ok: true, material: existing, updatedMaterial: { ...existing, ...patch } };
+  try {
+    const updatedMaterial = await transitionMaterialState(
+      db,
+      existing._id,
+      MaterialLifecycleState.RETIRED,
+      { actor: deletedBy, reason }
+    );
+    return { ok: true, material: existing, updatedMaterial };
+  } catch (err) {
+    return { ok: false, reason: "invalid_transition", error: err.message };
+  }
 }
 
 /** Restore a previously retired listing. */
@@ -110,12 +115,15 @@ export async function restoreMaterial({ db, filter, now = new Date() }) {
   if (!existing) return { ok: false, reason: "not_found" };
   if (!isSoftDeleted(existing)) return { ok: false, reason: "not_deleted", material: existing };
 
-  const patch = {
-    ...buildRestorePatch({ now }),
-    searchVersion: Number(existing.searchVersion || existing.version || 1) + 1,
-  };
-
-  await materials.updateOne(filter, { $set: patch });
-
-  return { ok: true, material: existing, updatedMaterial: { ...existing, ...patch } };
+  try {
+    const updatedMaterial = await transitionMaterialState(
+      db,
+      existing._id,
+      MaterialLifecycleState.ACTIVE,
+      {}
+    );
+    return { ok: true, material: existing, updatedMaterial };
+  } catch (err) {
+    return { ok: false, reason: "invalid_transition", error: err.message };
+  }
 }

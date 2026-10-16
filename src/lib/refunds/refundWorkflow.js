@@ -10,6 +10,7 @@ import {
 } from '@/lib/stellar/refundService';
 import { deriveRefundTerms } from './refundPolicy';
 import { recordRefundAuditEvent } from './refundAudit';
+import { notifyWalletRecipient } from '@/lib/notifications/notifications';
 import logger from '@/lib/logger';
 
 /**
@@ -47,6 +48,51 @@ export const REFUND_STATUS = {
   REJECTED: 'rejected',
 };
 
+/**
+ * Explicit transition matrix. Every `transition()` call is checked against it,
+ * so an illegal edge is a deterministic programmer error rather than a silent
+ * no-op. Recovery edges are `submitting|pending -> approved` (automatic retry)
+ * and `failed -> approved` (admin retry); `pending -> pending` is the
+ * idempotent re-poll. `settled` and `rejected` are terminal.
+ */
+export const REFUND_TRANSITIONS = Object.freeze({
+  [REFUND_STATUS.REQUESTED]: Object.freeze([REFUND_STATUS.APPROVED, REFUND_STATUS.REJECTED]),
+  [REFUND_STATUS.APPROVED]: Object.freeze([REFUND_STATUS.SUBMITTING]),
+  [REFUND_STATUS.SUBMITTING]: Object.freeze([
+    REFUND_STATUS.PENDING,
+    REFUND_STATUS.SETTLED,
+    REFUND_STATUS.FAILED,
+    REFUND_STATUS.APPROVED,
+  ]),
+  [REFUND_STATUS.PENDING]: Object.freeze([
+    REFUND_STATUS.PENDING,
+    REFUND_STATUS.SETTLED,
+    REFUND_STATUS.FAILED,
+    REFUND_STATUS.APPROVED,
+  ]),
+  [REFUND_STATUS.FAILED]: Object.freeze([REFUND_STATUS.APPROVED, REFUND_STATUS.REJECTED]),
+  [REFUND_STATUS.SETTLED]: Object.freeze([]),
+  [REFUND_STATUS.REJECTED]: Object.freeze([]),
+});
+
+export const REFUND_TERMINAL_STATUSES = Object.freeze(
+  Object.keys(REFUND_TRANSITIONS).filter((status) => REFUND_TRANSITIONS[status].length === 0)
+);
+
+export function isValidRefundTransition(fromStatus, toStatus) {
+  return Object.hasOwn(REFUND_TRANSITIONS, fromStatus) && REFUND_TRANSITIONS[fromStatus].includes(toStatus);
+}
+
+export class InvalidRefundTransitionError extends Error {
+  constructor(fromStatus, toStatus) {
+    super(`Invalid refund transition from ${fromStatus} to ${toStatus}`);
+    this.name = 'InvalidRefundTransitionError';
+    this.code = 'INVALID_REFUND_TRANSITION';
+    this.fromStatus = fromStatus;
+    this.toStatus = toStatus;
+  }
+}
+
 const MAX_SUBMIT_RETRIES = Number(process.env.REFUND_MAX_RETRY_ATTEMPTS || 5);
 const STUCK_SUBMITTING_MS = Number(process.env.REFUND_STUCK_SUBMITTING_MS || 5 * 60 * 1000);
 // A submitted transaction's own time-bounds (see buildRefundTransaction's
@@ -61,6 +107,11 @@ function refundsCollection(db) {
 
 async function transition(db, refundId, fromStatuses, toStatus, extraSet = {}) {
   const from = Array.isArray(fromStatuses) ? fromStatuses : [fromStatuses];
+  for (const status of from) {
+    if (!isValidRefundTransition(status, toStatus)) {
+      throw new InvalidRefundTransitionError(status, toStatus);
+    }
+  }
   return refundsCollection(db).findOneAndUpdate(
     { _id: refundId, status: { $in: from } },
     { $set: { status: toStatus, updatedAt: new Date(), ...extraSet } },
@@ -146,6 +197,18 @@ export async function requestRefund({ db, purchaseId, buyerAddress, actor, reaso
     newStatus: REFUND_STATUS.REQUESTED,
     reason,
   });
+
+  // #776: tell the buyer their claim was received. Dedupe key is scoped to the
+  // claim, so a retried request (same purchase) never notifies twice. Gated
+  // behind the critical-lifecycle flag; failures never block the refund.
+  notifyWalletRecipient(db, {
+    walletAddress: purchase.buyerAddress,
+    type: 'refund_requested',
+    dedupeKey: `refund:requested:${refundId}`,
+    title: 'Refund requested',
+    message: `Your refund claim for this purchase was received and is awaiting review.`,
+    link: '/dashboard/purchases',
+  }).catch((e) => logger.warn({ err: e?.message, refundId: String(refundId) }, 'refund notification failed'));
 
   return { success: true, refund: { ...doc, _id: refundId }, alreadyExists: false };
 }
@@ -253,6 +316,18 @@ async function retryOrFail(db, refund, failureReason, detail, actor, fromStatuse
       newStatus: REFUND_STATUS.FAILED,
       reason: failureReason,
     });
+    // #776: the refund exhausted its retries — the buyer has to act (or wait
+    // for an admin retry), so this is exactly the recovery event that needs a
+    // notification. Dedupe key is scoped to the claim so the automatic-retry
+    // path can't notify more than once per failed attempt.
+    notifyWalletRecipient(db, {
+      walletAddress: refund.buyerAddress,
+      type: 'refund_failed',
+      dedupeKey: `refund:failed:${refund._id}`,
+      title: 'Refund needs attention',
+      message: `We couldn't complete your refund automatically (${failureReason}). Our team has been notified and will follow up.`,
+      link: '/dashboard/purchases',
+    }).catch((e) => logger.warn({ err: e?.message, refundId: String(refund._id) }, 'refund notification failed'));
     return { outcome: 'failed', refund: failed };
   }
 
@@ -422,8 +497,12 @@ export async function finalizeSettlement({
 
   if (!current.entitlementRevoked) {
     await revokeEntitlementFn(current.materialId, current.buyerAddress);
+    // Exactly-once mirroring: two overlapping finalizers (worker + reconciler,
+    // or two reconciler runs) can both reach this point, so the increment is
+    // gated on this refund not already being recorded on the purchase. Same
+    // single-document atomicity, and a crash-retry stays safe too.
     await db.collection(COLLECTIONS.purchases).updateOne(
-      { _id: new ObjectId(current.purchaseId) },
+      { _id: new ObjectId(current.purchaseId), appliedRefundIds: { $ne: String(refundId) } },
       {
         $set: {
           settlementState: 'Refunded',
@@ -432,6 +511,7 @@ export async function finalizeSettlement({
           updatedAt: new Date(),
         },
         $inc: { refundedAmount: current.amount },
+        $push: { appliedRefundIds: String(refundId) },
       }
     );
     await refundsCollection(db).updateOne(
@@ -449,6 +529,18 @@ export async function finalizeSettlement({
     });
     current = { ...current, entitlementRevoked: true };
   }
+
+  // #776: the money is back with the buyer — notify once per claim. The dedupe
+  // key makes this idempotent across the reconciliation retries that call
+  // finalizeSettlement repeatedly for the same settled refund.
+  notifyWalletRecipient(db, {
+    walletAddress: current.buyerAddress,
+    type: 'refund_settled',
+    dedupeKey: `refund:settled:${refundId}`,
+    title: 'Refund completed',
+    message: `Your refund of ${current.amount} ${current.assetCode} was completed and your access to the material was revoked.`,
+    link: '/dashboard/purchases',
+  }).catch((e) => logger.warn({ err: e?.message, refundId: String(refundId) }, 'refund notification failed'));
 
   return { outcome: 'settled', refund: current };
 }

@@ -27,6 +27,8 @@ export const mockCollections = {
     users: makeCollectionMock(),
     purchases: makeCollectionMock(),
     entitlement_cache: makeCollectionMock(),
+    checkout_quotes: makeCollectionMock(),
+    checkout_intents: makeCollectionMock(),
 };
 
 const mockDb = {

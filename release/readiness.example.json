@@ -1,0 +1,26 @@
+{
+  "release": "v0.2.0",
+  "commit": "replace-with-the-full-commit-sha-being-released",
+  "generatedAt": "2026-10-14T10:00:00Z",
+  "migrations": [
+    {
+      "id": "add_notification_preferences_001",
+      "status": "applied",
+      "dryRunPassed": true,
+      "rollbackDocumented": true
+    }
+  ],
+  "securityChecks": {
+    "dependencyAudit": "passed",
+    "secretScan": "passed"
+  },
+  "smokeTests": {
+    "status": "passed",
+    "ranAt": "2026-10-14T09:40:00Z"
+  },
+  "rollbackRehearsal": {
+    "status": "passed",
+    "rehearsedAt": "2026-10-10T16:00:00Z",
+    "restoredToCommit": "replace-with-the-last-known-good-commit-sha"
+  }
+}

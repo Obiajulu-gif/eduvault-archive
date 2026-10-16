@@ -6,6 +6,7 @@ import { ObjectId } from 'mongodb';
 import { getDb } from '@/lib/mongodb';
 import { requireAdmin } from '@/lib/api/auth';
 import { approveRefund, processApprovedRefund } from '@/lib/refunds/refundWorkflow';
+import { APPROVAL_SCOPES, validateApproval } from '@/lib/admin/approval';
 
 /**
  * Authorize a requested refund claim (Issue #27). This only performs the
@@ -16,6 +17,10 @@ import { approveRefund, processApprovedRefund } from '@/lib/refunds/refundWorkfl
  * best-effort inline attempt here so approval doesn't have to wait for the
  * next worker poll, but a failure to submit immediately is not an error —
  * the worker will pick it up on its next pass regardless.
+ *
+ * The approval must carry a reason, actor, expiry, and the `refund:approve`
+ * scope. Missing, expired, or mismatched approvals are rejected before any
+ * state change happens.
  */
 export async function POST(request) {
   try {
@@ -25,20 +30,30 @@ export async function POST(request) {
     }
 
     const body = await request.json().catch(() => ({}));
-    const { refundId, reason } = body;
+    const { refundId, reason, approval } = body;
 
     if (!refundId || !ObjectId.isValid(refundId)) {
       return NextResponse.json({ error: 'Missing or invalid refundId' }, { status: 400 });
     }
 
-    const db = await getDb();
     const actor = admin.walletAddress || admin.sub;
+    const validation = validateApproval({
+      approval,
+      requiredScope: APPROVAL_SCOPES.REFUND_APPROVE,
+      actor,
+    });
+    if (!validation.valid) {
+      return NextResponse.json({ error: validation.code }, { status: 403 });
+    }
+
+    const db = await getDb();
 
     const result = await approveRefund({
       db,
       refundId: new ObjectId(refundId),
       actor,
-      reason: typeof reason === 'string' ? reason.slice(0, 500) : null,
+      reason: typeof reason === 'string' ? reason.slice(0, 500) : validation.approval.reason,
+      approval: validation.approval,
     });
 
     if (!result.success) {

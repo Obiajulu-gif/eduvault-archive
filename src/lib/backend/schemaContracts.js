@@ -28,6 +28,9 @@ export const COLLECTIONS = {
   indexerQuarantine: "indexer_quarantine",
   indexerOperatorAudit: "indexer_operator_audit",
   materialPreviews: "material_previews",
+  // #969: import rows held out of the write for an unsafe storageKey. Separate
+  // from the file-level `quarantine` collection used by uploads.
+  importQuarantine: "import_quarantine",
   // Off-chain mirrors maintained by the indexer for event types added in
   // #598 (payouts/escrow/dispute resolutions and the scholarship subsystem).
   bulkPurchases: "bulk_purchases",
@@ -39,6 +42,10 @@ export const COLLECTIONS = {
   checkoutQuotes: "checkout_quotes",
   storageQuotaHistory: "storage_quota_history",
   notifications: "notifications",
+  // #976: per-recipient opt-outs for optional notification types only.
+  notificationPreferences: "notification_preferences",
+  backgroundJobs: "background_jobs",
+  sensitiveAccessLog: "sensitive_access_log",
 };
 
 export const REQUIRED_INDEXES = {
@@ -55,6 +62,12 @@ export const REQUIRED_INDEXES = {
       options: { unique: true, partialFilterExpression: { externalId: { $type: "string" } }, name: "materials_import_external_id_idx" },
     },
     { keys: { importBatchId: 1 }, options: { sparse: true, name: "materials_import_batch_idx" } },
+    // #888: provenance lookups from the maintainer export endpoint and by
+    // batch/actor/source. Sparse so records predating provenance stay out.
+    { keys: { "provenance.kind": 1 }, options: { name: "materials_provenance_kind_idx", background: true } },
+    { keys: { "provenance.origin.importBatchId": 1 }, options: { sparse: true, name: "materials_provenance_import_batch_idx", background: true } },
+    { keys: { "provenance.origin.materialId": 1 }, options: { sparse: true, name: "materials_provenance_source_idx", background: true } },
+    { keys: { "provenance.actor.walletAddress": 1 }, options: { sparse: true, name: "materials_provenance_actor_idx", background: true } },
     { keys: { visibility: 1, createdAt: -1 } },
     { keys: { materialId: 1 }, options: { sparse: true } },
     { keys: { tokenId: 1 }, options: { unique: true, sparse: true } },
@@ -106,6 +119,15 @@ export const REQUIRED_INDEXES = {
   storage_quota_history: [
     { keys: { provider: 1, checkedAt: -1 } },
     { keys: { checkedAt: 1 }, options: { expireAfterSeconds: 31536000 } },
+  ],
+  // Privacy-preserving analytics: aggregate counters are queryable by a
+  // creator's materials; opaque dedupe keys expire after one short window.
+  material_analytics_aggregates: [
+    { keys: { materialId: 1, day: 1, eventType: 1, source: 1, classification: 1, filterReason: 1 }, options: { unique: true, name: "analytics_daily_bucket_unique" } },
+    { keys: { day: -1, materialId: 1 }, options: { name: "analytics_daily_material_idx" } },
+  ],
+  material_analytics_dedupe: [
+    { keys: { expiresAt: 1 }, options: { expireAfterSeconds: 0, name: "analytics_dedupe_expiry" } },
   ],
   payouts: [
     // #293: monthly-statements.mjs scans all payouts in a date window across
@@ -218,6 +240,10 @@ export const REQUIRED_INDEXES = {
   ],
   // #638: sandboxed preview descriptors, keyed by the original file's content
   // hash. A separate trust domain from the file itself and from `materials`.
+  // #969: review quarantined import rows for one batch, in file order.
+  import_quarantine: [
+    { keys: { importBatchId: 1, row: 1 }, options: { name: "import_quarantine_batch_idx", background: true } },
+  ],
   material_previews: [
     { keys: { contentHash: 1 }, options: { unique: true, name: "material_previews_content_hash_idx", background: true } },
     { keys: { state: 1, updatedAt: 1 }, options: { name: "material_previews_state_idx", background: true } },
@@ -227,6 +253,29 @@ export const REQUIRED_INDEXES = {
   notifications: [
     { keys: { recipient: 1, dedupeKey: 1 }, options: { unique: true, name: "notifications_dedupe_idx" } },
     { keys: { recipient: 1, read: 1, createdAt: -1 }, options: { name: "notifications_inbox_idx" } },
+    // #834: delivery tracking / diagnostics scan a recipient's failed and
+    // exhausted notifications without a collection scan.
+    { keys: { recipient: 1, deliveryStatus: 1, lastAttemptAt: -1 }, options: { name: "notifications_delivery_idx", background: true } },
+  ],
+  // #976: one preference per (recipient, type). Mandatory types never get a row.
+  notification_preferences: [
+    { keys: { recipient: 1, type: 1 }, options: { unique: true, name: "notification_preferences_recipient_type_idx" } },
+  ],
+  // #789: Background worker framework jobs queue indexes
+  background_jobs: [
+    { keys: { jobId: 1 }, options: { unique: true, name: "background_jobs_id_idx" } },
+    { keys: { idempotencyKey: 1 }, options: { unique: true, sparse: true, name: "background_jobs_idempotency_idx" } },
+    { keys: { status: 1, scheduledFor: 1, lockedUntil: 1 }, options: { name: "background_jobs_lease_idx", background: true } },
+    { keys: { name: 1, status: 1 }, options: { name: "background_jobs_name_status_idx", background: true } },
+    { keys: { createdAt: -1 }, options: { name: "background_jobs_created_idx", background: true } },
+  ],
+  // #889: sensitive field access events are looked up by correlation, by actor
+  // window, and by resource, and denials are reviewed by decision/time.
+  sensitive_access_log: [
+    { keys: { correlationId: 1 }, options: { unique: true, name: "sensitive_access_correlation_idx" } },
+    { keys: { actorId: 1, at: -1 }, options: { name: "sensitive_access_actor_idx", background: true } },
+    { keys: { resourceType: 1, resourceId: 1, at: -1 }, options: { name: "sensitive_access_resource_idx", background: true } },
+    { keys: { decision: 1, at: -1 }, options: { name: "sensitive_access_decision_idx", background: true } },
   ],
 };
 

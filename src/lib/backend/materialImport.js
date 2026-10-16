@@ -16,6 +16,29 @@ const OPTIONAL_FIELDS = [
 
 const SUPPORTED_FORMATS = ["csv", "json"];
 
+// #969: storageKeys are later rendered as download/source links, so any scheme
+// outside this list (javascript:, data:, file:, vbscript:, ...) is quarantined
+// instead of written. Bare CIDs and relative paths have no scheme and pass.
+const ALLOWED_STORAGE_SCHEMES = new Set(["ipfs", "https", "http"]);
+const SCHEME_PATTERN = /^([a-z][a-z0-9+.-]*):/i;
+
+/**
+ * Reasons a row must be held out of the write. Quarantined rows never block
+ * the rest of the batch and are never written; they are recorded in
+ * `import_quarantine` so the creator can see and correct them.
+ */
+export function detectQuarantineReasons(storageKey) {
+  const scheme = typeof storageKey === "string" ? storageKey.match(SCHEME_PATTERN) : null;
+  if (scheme && !ALLOWED_STORAGE_SCHEMES.has(scheme[1].toLowerCase())) {
+    return [{
+      code: "unsafe_storage_scheme",
+      field: "storageKey",
+      message: `storageKey scheme "${scheme[1]}:" is not allowed`,
+    }];
+  }
+  return [];
+}
+
 export class ImportValidationError extends Error {
   constructor(message, details = {}) {
     super(message);
@@ -124,6 +147,7 @@ export function validateImportRow(row, index) {
 
   return {
     valid: true,
+    quarantineReasons: detectQuarantineReasons(storageKey),
     data: {
       externalId,
       title,
@@ -192,6 +216,8 @@ function changedFields(existing, record) {
  *   update — externalId matches an existing material and fields differ
  *   skip   — externalId matches with no changes, or storageKey already imported
  *   error  — failed validation, or duplicates an earlier row in the same batch
+ *   quarantine — passed validation but carries an unsafe storageKey (#969);
+ *            held out of the write and never blocks the rest of the batch
  *
  * Rows with an externalId are idempotent: re-running the same file yields all
  * skips. Rows without one can't be matched for updates, so a repeated
@@ -216,6 +242,10 @@ export function planImport(validation, existing = []) {
     }
 
     const record = result.data;
+    if (result.quarantineReasons?.length > 0) {
+      rows.push({ row: result.row, action: "quarantine", externalId: record.externalId, reasons: result.quarantineReasons, record });
+      continue;
+    }
     const duplicateOf = (record.externalId && seenExternalIds.get(record.externalId))
       || seenStorageKeys.get(record.storageKey);
     if (duplicateOf) {
@@ -247,12 +277,16 @@ export function planImport(validation, existing = []) {
     rows.push({ row: result.row, action: "create", externalId: record.externalId, record });
   }
 
-  const summary = { create: 0, update: 0, skip: 0, error: 0 };
+  const summary = { create: 0, update: 0, skip: 0, error: 0, quarantine: 0 };
   for (const r of rows) summary[r.action] += 1;
   return { summary, rows };
 }
 
-/** Plan rows without the internal `record`/`previous` payloads, for API responses. */
+/**
+ * Plan rows without the internal `record`/`previous` payloads, for API responses.
+ * Quarantine rows keep their `reasons` and `externalId`, so the creator can see
+ * why a row was held back.
+ */
 export function publicPlanRows(rows) {
   return rows.map(({ record: _record, previous: _previous, ...rest }) => rest);
 }

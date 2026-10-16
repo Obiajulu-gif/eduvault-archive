@@ -1,4 +1,5 @@
 import { resolveEntitlement, ENTITLEMENT_STATE } from "../entitlement.js";
+import { appendAuditRecord } from "@/lib/backend/auditLedger";
 
 export const COMPLETED_PURCHASE_STATUSES = new Set(["confirmed", "settled", "completed"]);
 export const INCOMPLETE_PURCHASE_STATUSES = new Set(["pending", "indexing", "processing", "requires_payment"]);
@@ -276,6 +277,7 @@ export async function reserveBudget(db, materialId, buyerAddress, price, options
 
   // For a new reservation, we need to verify budget elsewhere (caller responsibility)
   // Mark as reserved and return
+  await appendAuditRecord({ db, operationId: `reserve:${result.reservationId || reservationId}`, actor: buyerAddress, action: 'purchase.reserved', target: { type: 'material', id: materialId }, result: { status: 'reserved' } });
   return {
     success: true,
     reservationId: result.reservationId || reservationId,
@@ -322,6 +324,7 @@ export async function commitReservation(db, materialId, buyerAddress, reservatio
     return { success: false, status: result?.status || "not_found" };
   }
 
+  await appendAuditRecord({ db, operationId: `commit:${reservationId}`, actor: buyerAddress, action: 'purchase.committed', target: { type: 'material', id: materialId }, result: { status: 'committed', purchaseId: result.purchaseId || result._id?.toString() } });
   return {
     success: true,
     status: "committed",
@@ -363,6 +366,7 @@ export async function releaseReservation(db, materialId, buyerAddress, reservati
     return { success: false, status: result?.status || "not_found" };
   }
 
+  await appendAuditRecord({ db, operationId: `release:${reservationId}`, actor: buyerAddress, action: 'purchase.released', target: { type: 'material', id: materialId }, result: { status: 'released' } });
   return { success: true, status: "released" };
 }
 
@@ -400,6 +404,7 @@ export async function expireReservation(db, materialId, buyerAddress, reservatio
     return { success: false, status: result?.status || "not_found" };
   }
 
+  await appendAuditRecord({ db, operationId: `expire:${reservationId}`, actor: 'system', action: 'purchase.expired', target: { type: 'material', id: materialId }, result: { status: 'expired' } });
   return { success: true, status: "expired" };
 }
 
@@ -428,6 +433,17 @@ export async function reconcileAbandonedReservations(db, timeoutMs = 30 * 60 * 1
     },
     { upsert: false }
   );
+
+  if (result.modifiedCount > 0) {
+    await appendAuditRecord({
+      db,
+      operationId: `reconcile:${Date.now()}`,
+      actor: 'system',
+      action: 'purchase.reconciled_abandoned',
+      target: { type: 'system', id: 'purchases' },
+      result: { releasedCount: result.modifiedCount }
+    });
+  }
 
   return { releasedCount: result.modifiedCount };
 }

@@ -1,22 +1,4 @@
-                    <button
-                      className="action-btn deny"
-                      onClick={() => handleAction(itemId, 'propose')}
-                    >
-                      Propose suspension
-                    </button>
-                    <button
-                      className="action-btn suspend"
-                      onClick={() => handleAction(itemId, 'approve')}
-                    >
-                      Approve sanction
-                    </button>
-                    <button
-                      className="action-btn approve"
-                      onClick={() => handleAction(itemId, 'approve')}
-                    >
-                      Approve / sanction
-                    </button>
-"use client";
+'use client';
 
 import React, { useState, useEffect } from 'react';
 import './moderation.css';
@@ -38,6 +20,7 @@ function ModerationDashboard({ user }) {
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [actionError, setActionError] = useState(null);
   const [currentUser, setCurrentUser] = useState(user || null);
   const [authChecked, setAuthChecked] = useState(Boolean(user));
 
@@ -48,15 +31,14 @@ function ModerationDashboard({ user }) {
       return;
     }
 
-    // Check user session from API if not passed via props
-    fetch('/api/profile')
+    // Resolve the current database role; JWT role claims may be stale.
+    fetch('/api/auth/session', { cache: 'no-store' })
       .then((res) => {
         if (!res.ok) throw new Error('Unauthenticated');
         return res.json();
       })
-      .then((data) => {
-        const u = data.user || data;
-        setCurrentUser(u);
+      .then((session) => {
+        setCurrentUser({ role: session.role });
         setAuthChecked(true);
       })
       .catch(() => {
@@ -87,6 +69,7 @@ function ModerationDashboard({ user }) {
   }, [authChecked, currentUser]);
 
   const handleAction = async (id, action) => {
+    setActionError(null);
     try {
       const res = await fetch('/api/admin/moderation', {
         method: 'POST',
@@ -96,12 +79,12 @@ function ModerationDashboard({ user }) {
       if (!res.ok) throw new Error('Failed to perform moderation action');
       setItems((prev) => prev.filter((i) => (i._id || i.id) !== id));
     } catch (e) {
-      alert(`Action failed: ${e.message}`);
+      setActionError(`Action failed for case ${id}: ${e.message}`);
     }
   };
 
   if (!authChecked || loading) {
-    return <p className="loading">Loading flagged content...</p>;
+    return <p className="loading" role="status" aria-live="polite">Loading flagged content...</p>;
   }
 
   if (!isAdmin(currentUser)) {
@@ -118,25 +101,32 @@ function ModerationDashboard({ user }) {
   if (error) {
     return (
       <div className="admin-moderation p-6">
-        <p className="text-red-500 font-medium">Error loading moderation dashboard: {error}</p>
+        <p className="text-red-500 font-medium" role="alert" aria-live="assertive">
+          Error loading moderation dashboard: {error}
+        </p>
       </div>
     );
   }
 
   return (
-    <section className="admin-moderation">
-      <h2 className="title">Content Moderation Dashboard</h2>
+    <section className="admin-moderation" aria-labelledby="moderation-title">
+      <h2 id="moderation-title" className="title">Content Moderation Dashboard</h2>
+      {actionError && (
+        <p className="action-error" role="alert" aria-live="assertive">
+          {actionError}
+        </p>
+      )}
       {items.length === 0 ? (
         <p className="empty">No flagged items at the moment.</p>
       ) : (
         <table className="mod-table">
           <thead>
             <tr>
-              <th>ID</th>
-              <th>Title</th>
-              <th>Reason</th>
-              <th>Reporter</th>
-              <th>Actions</th>
+              <th scope="col">ID</th>
+              <th scope="col">Title</th>
+              <th scope="col">Reason</th>
+              <th scope="col">Reporter</th>
+              <th scope="col">Actions</th>
             </tr>
           </thead>
           <tbody>
@@ -150,14 +140,18 @@ function ModerationDashboard({ user }) {
                   <td>{item.reporter || item.reportedBy || 'Anonymous'}</td>
                   <td className="action-cell">
                     <button
+                      type="button"
                       className="action-btn deny"
                       onClick={() => handleAction(itemId, 'propose')}
+                      aria-label={`Propose suspension for case ${itemId}`}
                     >
                       Propose suspension
                     </button>
                     <button
+                      type="button"
                       className="action-btn suspend"
                       onClick={() => handleAction(itemId, 'approve')}
+                      aria-label={`Approve sanction for case ${itemId}`}
                     >
                       Approve sanction
                     </button>
