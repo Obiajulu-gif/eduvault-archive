@@ -13,6 +13,23 @@ export const DISPUTE_STATUS = {
   EXECUTED: 'executed',
 };
 
+/** Explicit transition matrix. `denied` and `executed` are terminal. */
+export const DISPUTE_TRANSITIONS = Object.freeze({
+  [DISPUTE_STATUS.OPENED]: Object.freeze([DISPUTE_STATUS.REVIEWING]),
+  [DISPUTE_STATUS.REVIEWING]: Object.freeze([DISPUTE_STATUS.APPROVED, DISPUTE_STATUS.DENIED]),
+  [DISPUTE_STATUS.APPROVED]: Object.freeze([DISPUTE_STATUS.EXECUTED]),
+  [DISPUTE_STATUS.DENIED]: Object.freeze([]),
+  [DISPUTE_STATUS.EXECUTED]: Object.freeze([]),
+});
+
+export const DISPUTE_TERMINAL_STATUSES = Object.freeze(
+  Object.keys(DISPUTE_TRANSITIONS).filter((status) => DISPUTE_TRANSITIONS[status].length === 0)
+);
+
+export function isValidDisputeTransition(fromStatus, toStatus) {
+  return Object.hasOwn(DISPUTE_TRANSITIONS, fromStatus) && DISPUTE_TRANSITIONS[fromStatus].includes(toStatus);
+}
+
 async function toObjectId(id) {
   if (!id) return id;
   if (typeof id === 'object') return id;
@@ -165,16 +182,7 @@ export async function transitionDisputeStatus({
 
   const currentStatus = dispute.status;
 
-  // Enforce valid status transition matrix
-  const validTransitions = {
-    [DISPUTE_STATUS.OPENED]: [DISPUTE_STATUS.REVIEWING],
-    [DISPUTE_STATUS.REVIEWING]: [DISPUTE_STATUS.APPROVED, DISPUTE_STATUS.DENIED],
-    [DISPUTE_STATUS.APPROVED]: [DISPUTE_STATUS.EXECUTED],
-    [DISPUTE_STATUS.DENIED]: [],
-    [DISPUTE_STATUS.EXECUTED]: [],
-  };
-
-  if (!validTransitions[currentStatus]?.includes(toStatus)) {
+  if (!isValidDisputeTransition(currentStatus, toStatus)) {
     return {
       success: false,
       reason: 'invalid_status_transition',
