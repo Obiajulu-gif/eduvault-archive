@@ -18,6 +18,7 @@ export default defineConfig({
     include: [
       "src/**/*.{test,spec}.{js,jsx,ts,tsx}",
       "test/integration/**/*.{test,spec}.{js,jsx,ts,tsx}",
+      "test/concurrency/**/*.{test,spec}.{js,jsx,ts,tsx}",
       "tests/components/**/*.{test,spec}.{js,jsx,ts,tsx}",
       // middleware.js (issue #649's nonce-based CSP) has to live at the repo
       // root for Next.js to recognize it as the app's middleware, so its

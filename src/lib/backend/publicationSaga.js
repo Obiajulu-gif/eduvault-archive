@@ -146,13 +146,13 @@ export async function failSagaStep(sagaId, state, errorReason) {
   const db = await getDb();
   const collection = db.collection("publication_sagas");
 
-  // Terminal (complete) and already-failed sagas are left untouched, so a late
-  // or duplicate failure report cannot clobber the original failure point.
+  // Fail only the step the caller actually observed. A late or stale report
+  // (the saga already advanced, completed, or failed) is a no-op, so the
+  // recorded failure point is always the real one and a later retry can never
+  // rewind past a step that already succeeded.
+  if (!Object.hasOwn(STATE_TRANSITIONS, state)) return null;
   return collection.findOneAndUpdate(
-    {
-      _id: new ObjectId(sagaId),
-      state: { $nin: [PUBLICATION_STATES.COMPLETE, PUBLICATION_STATES.FAILED] },
-    },
+    { _id: new ObjectId(sagaId), state },
     {
       $set: {
         state: PUBLICATION_STATES.FAILED,
@@ -257,7 +257,9 @@ export async function retrySagaFromFailure(sagaId) {
   if (!isValidSagaTransition(PUBLICATION_STATES.FAILED, failedAt, { failedAt })) return null;
 
   return collection.findOneAndUpdate(
-    { _id, state: PUBLICATION_STATES.FAILED },
+    // Also match the failure point we validated: if the saga was retried and
+    // failed again meanwhile, this stale retry must not rewind it.
+    { _id, state: PUBLICATION_STATES.FAILED, "lastError.failedAt": failedAt },
     { $set: { state: failedAt, updatedAt: new Date() } },
     { returnDocument: "after" }
   );

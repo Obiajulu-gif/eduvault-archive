@@ -21,8 +21,20 @@ function makeDb() {
       return { insertedId: doc._id };
     },
     deleteOne: async (query) => {
+      const found = records.get(query._id);
+      if (!found || (query.claimId !== undefined && found.claimId !== query.claimId)) {
+        return { deletedCount: 0 };
+      }
       records.delete(query._id);
       return { deletedCount: 1 };
+    },
+    updateOne: async (query, update) => {
+      const found = records.get(query._id);
+      if (!found || (query.claimId !== undefined && found.claimId !== query.claimId)) {
+        return { matchedCount: 0 };
+      }
+      Object.assign(found, update.$set);
+      return { matchedCount: 1 };
     },
   };
   return { collection: () => collection, store: records };

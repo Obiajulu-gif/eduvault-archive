@@ -12,6 +12,7 @@ function toComparable(value) {
 }
 
 function valuesEqual(actual, expected) {
+  if (expected === null) return actual === null || actual === undefined; // Mongo: null matches missing
   if (actual instanceof ObjectId || expected instanceof ObjectId) {
     return String(actual) === String(expected);
   }
@@ -32,7 +33,11 @@ function matchValue(actual, cond) {
     if ('$exists' in cond) return (actual !== undefined) === Boolean(cond.$exists);
     if ('$nin' in cond) return !cond.$nin.some((v) => valuesEqual(actual, v));
     if ('$in' in cond) return cond.$in.some((v) => valuesEqual(actual, v));
-    if ('$ne' in cond) return !valuesEqual(actual, cond.$ne);
+    if ('$ne' in cond) {
+      return Array.isArray(actual)
+        ? !actual.some((v) => valuesEqual(v, cond.$ne))
+        : !valuesEqual(actual, cond.$ne);
+    }
     if ('$lt' in cond) return toComparable(actual) < toComparable(cond.$lt);
     if ('$gt' in cond) return toComparable(actual) > toComparable(cond.$gt);
   }
@@ -42,7 +47,8 @@ function matchValue(actual, cond) {
 function matches(doc, query) {
   return Object.entries(query).every(([key, cond]) => {
     if (key === '$or') return cond.some((sub) => matches(doc, sub));
-    return matchValue(doc[key], cond);
+    const actual = key.includes('.') ? key.split('.').reduce((v, part) => (v == null ? undefined : v[part]), doc) : doc[key];
+    return matchValue(actual, cond);
   });
 }
 
@@ -136,6 +142,12 @@ export function createFakeCollection({ uniqueKey } = {}) {
       if (!doc) return { matchedCount: 0 };
       applyUpdate(doc, update);
       return { matchedCount: 1 };
+    },
+    async deleteOne(query) {
+      const index = docs.findIndex((d) => matches(d, query));
+      if (index === -1) return { deletedCount: 0 };
+      docs.splice(index, 1);
+      return { deletedCount: 1 };
     },
     async findOneAndUpdate(query, update, options = {}) {
       const doc = docs.find((d) => matches(d, query));

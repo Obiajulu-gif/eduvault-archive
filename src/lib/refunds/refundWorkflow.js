@@ -497,8 +497,12 @@ export async function finalizeSettlement({
 
   if (!current.entitlementRevoked) {
     await revokeEntitlementFn(current.materialId, current.buyerAddress);
+    // Exactly-once mirroring: two overlapping finalizers (worker + reconciler,
+    // or two reconciler runs) can both reach this point, so the increment is
+    // gated on this refund not already being recorded on the purchase. Same
+    // single-document atomicity, and a crash-retry stays safe too.
     await db.collection(COLLECTIONS.purchases).updateOne(
-      { _id: new ObjectId(current.purchaseId) },
+      { _id: new ObjectId(current.purchaseId), appliedRefundIds: { $ne: String(refundId) } },
       {
         $set: {
           settlementState: 'Refunded',
@@ -507,6 +511,7 @@ export async function finalizeSettlement({
           updatedAt: new Date(),
         },
         $inc: { refundedAmount: current.amount },
+        $push: { appliedRefundIds: String(refundId) },
       }
     );
     await refundsCollection(db).updateOne(

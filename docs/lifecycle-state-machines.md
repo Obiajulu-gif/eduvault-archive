@@ -105,8 +105,11 @@ Fixes made while formalising it:
 - `transitionSagaState` contained two `$set` keys in one object literal, so the
   first (the `state` advance) was silently discarded and the saga never
   advanced. They are merged into a single `$set`.
-- `failSagaStep` is now a no-op on `complete` or already-`failed` sagas, so a
-  late report cannot clobber the original failure point.
+- `failSagaStep` only fails the step the caller observed (compare-and-set on
+  `state`); a late or stale report on a saga that advanced, completed or
+  already failed is a no-op, so the recorded failure point is always real.
+  `retrySagaFromFailure` also matches that failure point, so a stale retry
+  cannot rewind a saga that failed again.
 - `completeSaga` only promotes an `indexed` saga (previously any state,
   including `failed`).
 - `compensateSaga` refuses a `complete` saga (it used to flip it to `failed`).

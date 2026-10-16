@@ -237,6 +237,7 @@ export async function executeDisputeRefund({
   disputeId,
   actor,
   executeRefundFn,
+  claimLeaseMs = 5 * 60 * 1000,
 }) {
   const disputesCol = db.collection('disputes');
   const queryId = await toObjectId(disputeId);
@@ -254,20 +255,61 @@ export async function executeDisputeRefund({
     };
   }
 
+  // Claim the payout before moving money. Without this, two executors that
+  // both read `approved` would each pay the buyer. The claim is a lease, so a
+  // crashed executor does not block the dispute forever.
+  const claimedAt = new Date();
+  const leaseCutoff = new Date(claimedAt.getTime() - claimLeaseMs);
+  const claimed = await disputesCol.findOneAndUpdate(
+    {
+      _id: queryId,
+      status: DISPUTE_STATUS.APPROVED,
+      $or: [{ executionClaimedAt: null }, { executionClaimedAt: { $lt: leaseCutoff } }],
+    },
+    { $set: { executionClaimedAt: claimedAt, executionClaimedBy: actor || null } },
+    { returnDocument: 'after' }
+  );
+
+  if (!claimed) {
+    const latest = await disputesCol.findOne({ _id: queryId });
+    if (!latest || latest.status !== DISPUTE_STATUS.APPROVED) {
+      return {
+        success: false,
+        reason: 'refund_execution_requires_approved_dispute',
+        currentStatus: latest?.status,
+      };
+    }
+    return { success: false, reason: 'refund_execution_in_progress' };
+  }
+
+  const releaseClaim = () =>
+    disputesCol
+      .findOneAndUpdate(
+        { _id: queryId, executionClaimedAt: claimedAt },
+        { $set: { executionClaimedAt: null, executionClaimedBy: null } }
+      )
+      .catch(() => {});
+
   // Execute refund payment using referenced dispute evidence
   let refundResult;
-  if (typeof executeRefundFn === 'function') {
-    refundResult = await executeRefundFn({
-      purchaseId: dispute.purchaseId,
-      amount: dispute.evidenceBundle.purchaseTransaction.amount,
-      buyerAddress: dispute.buyerAddress,
-      disputeId: String(dispute._id),
-    });
-  } else {
-    refundResult = { success: true, refundId: `ref_disp_${dispute._id}` };
+  try {
+    if (typeof executeRefundFn === 'function') {
+      refundResult = await executeRefundFn({
+        purchaseId: dispute.purchaseId,
+        amount: dispute.evidenceBundle.purchaseTransaction.amount,
+        buyerAddress: dispute.buyerAddress,
+        disputeId: String(dispute._id),
+      });
+    } else {
+      refundResult = { success: true, refundId: `ref_disp_${dispute._id}` };
+    }
+  } catch (error) {
+    await releaseClaim();
+    throw error;
   }
 
   if (!refundResult || refundResult.success === false) {
+    await releaseClaim();
     return {
       success: false,
       reason: refundResult?.reason || 'refund_execution_failed',
