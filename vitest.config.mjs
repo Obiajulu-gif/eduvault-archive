@@ -30,6 +30,9 @@ export default defineConfig({
       // actually ran under any test command; explicitly included here so it
       // executes under `npm test`.
       "tests/backend/outbox.test.js",
+      // Deterministic chaos suite (issue #940) for the same outbox worker,
+      // carved out alongside outbox.test.js for the same reason.
+      "tests/backend/outbox-chaos.test.js",
     ],
     // The rest of tests/backend runs under `node --test` and tests/legacy-evm
     // under hardhat — both use test runner globals incompatible with Vitest,
