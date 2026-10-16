@@ -20,6 +20,7 @@ import NetworkWarning from "./NetworkWarning";
 export default function Navbar() {
 	const [menuOpen, setMenuOpen] = useState(false);
 	const [scrolled, setScrolled] = useState(false);
+	const [sessionRole, setSessionRole] = useState(null);
 	const router = useRouter();
 	const { cartItems, setIsCartOpen } = useCart();
 	const [copied, setCopied] = useState(false);
@@ -48,6 +49,13 @@ export default function Navbar() {
 		};
 		window.addEventListener("scroll", handleScroll);
 		return () => window.removeEventListener("scroll", handleScroll);
+	}, []);
+
+	useEffect(() => {
+		fetch('/api/auth/session', { cache: 'no-store' })
+			.then((response) => response.ok ? response.json() : null)
+			.then((session) => setSessionRole(session?.role || null))
+			.catch(() => setSessionRole(null));
 	}, []);
 
 	return (
@@ -102,6 +110,11 @@ export default function Navbar() {
 					>
 						Docs
 					</Link>
+					{sessionRole === 'admin' && (
+						<Link href="/admin/moderation" className="hover:text-stellar-blue transition-all duration-200">
+							Admin
+						</Link>
+					)}
 				</div>
 
 				{/* Actions */}
@@ -217,6 +230,7 @@ export default function Navbar() {
 						<Link href="/#howitworks" onClick={() => setMenuOpen(false)} className="text-lg font-bold hover:text-stellar-blue transition-colors">How It Works</Link>
 						<Link href="/marketplace" onClick={() => setMenuOpen(false)} className="text-lg font-bold hover:text-stellar-blue transition-colors">Marketplace</Link>
 						<Link href="https://edu-vault.gitbook.io/edu-vault-docs/" onClick={() => setMenuOpen(false)} className="text-lg font-bold hover:text-stellar-blue transition-colors">Docs</Link>
+						{sessionRole === 'admin' && <Link href="/admin/moderation" onClick={() => setMenuOpen(false)} className="text-lg font-bold hover:text-stellar-blue transition-colors">Admin</Link>}
 
 						<div className="w-full px-8 pt-4">
 							<div className="flex justify-center mb-4">

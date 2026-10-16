@@ -1,4 +1,5 @@
 import { logger } from '@/lib/logger'
+import { sanitizeLogFields } from '@/lib/monitoring/telemetry'
 
 export function createRequestLogger(route, method) {
   return {
@@ -8,7 +9,7 @@ export function createRequestLogger(route, method) {
         method,
         level: 'info',
         message,
-        ...context,
+        ...sanitizeLogFields(context),
         timestamp: new Date().toISOString(),
       })
     },
@@ -18,7 +19,7 @@ export function createRequestLogger(route, method) {
         method,
         level: 'warn',
         message,
-        ...context,
+        ...sanitizeLogFields(context),
         timestamp: new Date().toISOString(),
       })
     },
@@ -28,7 +29,7 @@ export function createRequestLogger(route, method) {
         method,
         level: 'error',
         message,
-        ...context,
+        ...sanitizeLogFields(context),
         timestamp: new Date().toISOString(),
       })
     },
@@ -38,7 +39,7 @@ export function createRequestLogger(route, method) {
         method,
         level: 'debug',
         message,
-        ...context,
+        ...sanitizeLogFields(context),
         timestamp: new Date().toISOString(),
       })
     },
@@ -55,9 +56,9 @@ export function logApiRequest(route, method, { status, duration, error, details 
     method,
     status,
     durationMs: duration,
-    error: error ? error.message : undefined,
+    error: error ? sanitizeLogFields({ message: error.message }).message : undefined,
     errorStack: error ? error.stack : undefined,
-    ...details,
+    ...sanitizeLogFields(details),
     timestamp: new Date().toISOString(),
   })
 }
@@ -68,10 +69,10 @@ export function logApiError(route, method, error, { status = 500, details } = {}
     route,
     method,
     status,
-    error: error.message,
+    error: sanitizeLogFields({ message: error.message }).message,
     errorStack: error.stack,
     errorName: error.name,
-    ...details,
+    ...sanitizeLogFields(details),
     timestamp: new Date().toISOString(),
   })
 }

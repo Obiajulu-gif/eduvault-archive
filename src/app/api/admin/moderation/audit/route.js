@@ -2,13 +2,17 @@ import { NextResponse } from 'next/server';
 import { withApiHardening } from '@/lib/api/hardening';
 import { getDb } from '@/lib/mongodb';
 import { auditLog } from '@/lib/api/audit';
+import { requirePermission } from '@/lib/api/auth';
 
 export async function GET(request) {
   return withApiHardening(
     request,
     { route: 'admin-moderation-audit-export' },
-    async (req, res, session) => {
-      // In a real app, verify admin/auditor role here
+    async (req) => {
+      const authorization = await requirePermission(req, 'admin:moderation:audit');
+      if (!authorization.ok) {
+        return NextResponse.json({ error: 'Forbidden' }, { status: authorization.status });
+      }
       try {
         const db = await getDb();
         const cases = db.collection('moderation_cases');
@@ -26,7 +30,7 @@ export async function GET(request) {
           exportedAt: new Date().toISOString()
         };
 
-        auditLog({ event: 'audit_exported', actorId: session?.user?.id || 'admin_user' });
+        auditLog({ event: 'audit_exported', actorId: authorization.user.sub });
 
         return NextResponse.json(exportData);
       } catch (err) {

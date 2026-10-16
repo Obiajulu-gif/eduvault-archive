@@ -1,14 +1,19 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useWallet } from "@/hooks/useWallet";
 import { useUserMaterials, useUpdateMaterial } from "@/hooks/api/useMaterials";
-import { FaEdit, FaSave, FaTimes, FaSpinner, FaCheckCircle, FaExclamationTriangle } from "react-icons/fa";
+import { useQueryClient } from "@tanstack/react-query";
+import { materialService } from "@/services/materialService";
+import { queryKeys } from "@/lib/query/queryKeys";
+import { FaEdit, FaSave, FaTimes, FaSpinner, FaCheckCircle, FaExclamationTriangle, FaSync } from "react-icons/fa";
 import ResourceStatusBadge from "@/components/materials/ResourceStatusBadge";
 import { IMMUTABLE_MATERIAL_FIELDS } from "@/lib/backend/schemaContracts";
 
 function EditModal({ material, isOpen, onClose }) {
   const updateMutation = useUpdateMaterial();
+  const queryClient = useQueryClient();
+  const [currentVersion, setCurrentVersion] = useState(material?.version || 1);
   const [form, setForm] = useState({
     title: material?.title || "",
     description: material?.description || "",
@@ -19,11 +24,61 @@ function EditModal({ material, isOpen, onClose }) {
     changeReason: "",
   });
   const [error, setError] = useState(null);
+  const [conflict, setConflict] = useState(null);
+  const [isReloading, setIsReloading] = useState(false);
+
+  useEffect(() => {
+    if (material) {
+      setCurrentVersion(material.version || 1);
+      setForm({
+        title: material.title || "",
+        description: material.description || "",
+        price: material.price?.toString() || "0",
+        usageRights: material.usageRights || "Standard License (download only)",
+        visibility: material.visibility || "public",
+        thumbnailUrl: material.thumbnailUrl || "",
+        changeReason: "",
+      });
+      setError(null);
+      setConflict(null);
+    }
+  }, [material]);
 
   if (!isOpen) return null;
 
+  const handleReloadLatest = async () => {
+    setIsReloading(true);
+    setError(null);
+    try {
+      await queryClient.invalidateQueries({ queryKey: queryKeys.materials.all });
+      const res = await materialService.getUserMaterials();
+      const fresh = Array.isArray(res) ? res.find(m => String(m._id) === String(material._id)) : null;
+      if (fresh) {
+        setCurrentVersion(fresh.version || 1);
+        setForm({
+          title: fresh.title || "",
+          description: fresh.description || "",
+          price: fresh.price?.toString() || "0",
+          usageRights: fresh.usageRights || "Standard License (download only)",
+          visibility: fresh.visibility || "public",
+          thumbnailUrl: fresh.thumbnailUrl || "",
+          changeReason: "",
+        });
+        setConflict(null);
+        setError(null);
+      } else {
+        setError("Listing not found on reload. It may have been removed.");
+      }
+    } catch (reloadErr) {
+      setError(reloadErr.message || "Failed to reload latest version.");
+    } finally {
+      setIsReloading(false);
+    }
+  };
+
   const handleSave = async () => {
     setError(null);
+    setConflict(null);
     const updates = {};
     if (form.title !== material.title) updates.title = form.title;
     if (form.description !== (material.description || "")) updates.description = form.description;
@@ -38,12 +93,27 @@ function EditModal({ material, isOpen, onClose }) {
     }
 
     updates.changeReason = form.changeReason || null;
+    updates.version = currentVersion;
+    updates.expectedVersion = currentVersion;
 
     try {
       await updateMutation.mutateAsync({ id: material._id, data: updates });
       onClose();
     } catch (err) {
-      setError(err.message || "Update failed. Please try again.");
+      const isConflict =
+        err?.status === 409 ||
+        err?.code === "CONCURRENCY_CONFLICT" ||
+        (err?.message && (err.message.includes("modified by another") || err.message.includes("Conflict")));
+
+      if (isConflict) {
+        setConflict({
+          message:
+            err.message ||
+            "Conflict: This listing was updated in another session. Please reload to review the latest changes.",
+        });
+      } else {
+        setError(err.message || "Update failed. Please try again.");
+      }
     }
   };
 
@@ -51,11 +121,34 @@ function EditModal({ material, isOpen, onClose }) {
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
       <div className="bg-white rounded-2xl shadow-xl w-[90%] max-w-lg p-6 max-h-[90vh] overflow-y-auto">
         <div className="flex justify-between items-start mb-5">
-          <h2 className="text-lg font-semibold text-gray-900">Edit Material</h2>
+          <div>
+            <h2 className="text-lg font-semibold text-gray-900">Edit Material</h2>
+            <span className="text-xs text-gray-400 font-mono">v{currentVersion}</span>
+          </div>
           <button onClick={onClose} className="text-gray-400 hover:text-gray-600">
             <FaTimes />
           </button>
         </div>
+
+        {conflict && (
+          <div className="mb-4 p-4 bg-amber-50 border border-amber-200 rounded-lg flex flex-col gap-2">
+            <div className="flex items-start gap-2">
+              <FaExclamationTriangle className="text-amber-500 mt-0.5 shrink-0" />
+              <div className="text-sm text-amber-800">
+                <p className="font-semibold">Concurrent Edit Detected</p>
+                <p className="text-xs mt-0.5">{conflict.message}</p>
+              </div>
+            </div>
+            <button
+              onClick={handleReloadLatest}
+              disabled={isReloading}
+              className="mt-1 self-start inline-flex items-center gap-1.5 px-3 py-1.5 bg-amber-600 text-white rounded text-xs font-medium hover:bg-amber-700 transition-colors disabled:opacity-50"
+            >
+              <FaSync className={isReloading ? "animate-spin" : ""} />
+              {isReloading ? "Reloading..." : "Reload Latest Listing"}
+            </button>
+          </div>
+        )}
 
         {error && (
           <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-md flex items-start gap-2">

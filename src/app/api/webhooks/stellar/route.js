@@ -26,6 +26,7 @@ import { createEntitlement } from "@/lib/entitlement";
 import { broadcastPurchaseEvent } from "@/lib/webhooks/sender";
 import { sendReceiptIfEligible } from "@/lib/email";
 import { reconcilePendingPurchases } from "@/lib/purchases/paymentReconciler";
+import { auditCrossBoundaryTrustSecrets } from "@/lib/env";
 
 /**
  * Authorize the caller. If STELLAR_WEBHOOK_SECRET (or CRON_SECRET) is set, the
@@ -46,6 +47,15 @@ async function handle(req) {
   if (!isAuthorized(req)) {
     logger.warn("Rejected unauthorized Stellar payment reconciliation request");
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  // Cross-boundary trust finding (issue #939): this route fails open when no
+  // secret is configured. That's an accepted local/dev convenience, but a
+  // production deployment that forgot to set one gets no other signal that
+  // this endpoint is unauthenticated -- log it loudly every time the open
+  // door is actually used, rather than only documenting it.
+  for (const warning of auditCrossBoundaryTrustSecrets()) {
+    logger.warn(warning);
   }
 
   try {

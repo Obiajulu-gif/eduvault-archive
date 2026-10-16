@@ -1,3 +1,4 @@
+import { ObjectId } from "mongodb";
 import { normalizeSubject, normalizeCategory, normalizeLevel } from "./taxonomy.js";
 
 export const LICENSE_OPTIONS = [
@@ -236,6 +237,7 @@ export function buildMarketplaceDiscoveryQuery(searchParams, { now = new Date() 
   const category = normalizedCategory ? normalizedCategory.id : (rawCategory ? rawCategory.toLowerCase() : "");
   const level = normalizedLevel ? normalizedLevel.id : (rawLevel ? rawLevel.toLowerCase() : "");
 
+  const language = sanitizeString(searchParams.get("language"), { maxLength: 80 });
   const creator = sanitizeString(searchParams.get("creator"), { maxLength: 120 });
   const licenseType = getLicenseValue(searchParams.get("licenseType") || searchParams.get("usageRights"));
   const contentTypeQuery = buildContentTypeQuery(searchParams.get("contentType"));
@@ -280,7 +282,9 @@ export function buildMarketplaceDiscoveryQuery(searchParams, { now = new Date() 
   }
 
   if (andClauses.length > 0) {
-    query.$and = andClauses;
+    // Append: the base query already carries an $and (hidden low-relevance
+    // listings); replacing it would leak those whenever any filter is used.
+    query.$and = [...(query.$and || []), ...andClauses];
   }
 
   return query;
@@ -333,10 +337,18 @@ export function buildMarketplaceSort(sortBy) {
   }
 }
 
+function sortSignature(sort) {
+  return Object.keys(sort).join(",");
+}
+
+// Documents lacking a sort field (e.g. no `rating` yet) sort as null. JSON drops
+// `undefined`, which used to make the next-page cursor undecodable, so encode null.
 export function encodeMarketplaceCursor(item, sort) {
-  const data = { _id: String(item._id) };
+  const data = { _id: String(item._id), s: sortSignature(sort) };
   for (const [field] of Object.entries(sort)) {
-    if (field !== "_id") data[field] = item[field] instanceof Date ? item[field].toISOString() : item[field];
+    if (field === "_id") continue;
+    const value = item[field];
+    data[field] = value instanceof Date ? value.toISOString() : (value ?? null);
   }
   return Buffer.from(JSON.stringify(data), "utf8").toString("base64url");
 }
@@ -349,11 +361,27 @@ export function decodeMarketplaceCursor(cursor, sort) {
   } catch {
     throw new Error("Invalid marketplace cursor");
   }
-  if (!data?._id || !ObjectId.isValid(data._id)) throw new Error("Invalid marketplace cursor");
+  if (!data || typeof data !== "object" || !data._id || !ObjectId.isValid(data._id)) {
+    throw new Error("Invalid marketplace cursor");
+  }
+  // A cursor is only meaningful for the sort that produced it.
+  if (data.s !== undefined && data.s !== sortSignature(sort)) throw new Error("Invalid marketplace cursor");
   for (const field of Object.keys(sort)) {
-    if (field !== "_id" && data[field] === undefined) throw new Error("Invalid marketplace cursor");
+    if (field === "_id") continue;
+    const value = data[field];
+    // Primitives only: objects would be interpreted as Mongo operators.
+    if (value === undefined || (value !== null && typeof value === "object")) throw new Error("Invalid marketplace cursor");
+    if (field === "createdAt" && value !== null && Number.isNaN(new Date(value).getTime())) {
+      throw new Error("Invalid marketplace cursor");
+    }
   }
   return data;
+}
+
+function cursorValue(cursorData, field) {
+  if (field === "_id") return new ObjectId(cursorData._id);
+  const value = cursorData[field];
+  return field === "createdAt" && value !== null ? new Date(value) : value;
 }
 
 export function buildMarketplaceCursorClause(cursorData, sort) {
@@ -364,10 +392,22 @@ export function buildMarketplaceCursorClause(cursorData, sort) {
     const prefix = {};
     for (let prior = 0; prior < index; prior += 1) {
       const priorField = fields[prior][0];
-      prefix[priorField] = priorField === "createdAt" ? new Date(cursorData[priorField]) : (priorField === "_id" ? new ObjectId(cursorData._id) : cursorData[priorField]);
+      prefix[priorField] = cursorValue(cursorData, priorField); // null also matches a missing field
     }
-    const value = field === "_id" ? cursorData._id : (field === "createdAt" ? new Date(cursorData[field]) : cursorData[field]);
-    prefix[field] = { [direction === 1 ? "$gt" : "$lt"]: field === "_id" ? new ObjectId(value) : value };
+    const value = cursorValue(cursorData, field);
+    if (value === null) {
+      // Nulls sort lowest: after a null, ascending continues with every non-null
+      // value, while descending has nothing strictly after it (ties fall through
+      // to the next field).
+      if (direction !== 1) continue;
+      prefix[field] = { $ne: null };
+    } else if (direction !== 1 && field !== "_id" && field !== "createdAt") {
+      // Descending: listings with no value for this field sort after every
+      // valued one, but `$lt` never matches a missing field, so include them.
+      prefix.$or = [{ [field]: { $lt: value } }, { [field]: null }];
+    } else {
+      prefix[field] = { [direction === 1 ? "$gt" : "$lt"]: value };
+    }
     clauses.push(prefix);
   }
   return { $or: clauses };

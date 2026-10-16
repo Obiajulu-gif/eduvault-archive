@@ -1,12 +1,16 @@
 import { NextResponse } from "next/server";
 import { getDb } from "@/lib/mongodb";
-import { getUserFromCookie, sanitizeString } from "@/lib/api/auth";
+import { requirePermission, sanitizeString } from "@/lib/api/auth";
 
 export const dynamic = "force-dynamic";
 
 export async function POST(request) {
   try {
-    const user = await getUserFromCookie(request);
+    const authorization = await requirePermission(request, "creator:manage");
+    if (!authorization.ok) {
+      return NextResponse.json({ error: "Forbidden" }, { status: authorization.status });
+    }
+    const user = authorization.user;
     const body = await request.json();
 
     const coverPhoto = body.coverPhoto || body.coverUrl || body.coverImage;
@@ -19,9 +23,9 @@ export async function POST(request) {
     const db = await getDb();
     const users = db.collection("users");
 
-    let query = {};
-    if (user?._id) query._id = user._id;
-    else if (user?.walletAddress) query.walletAddress = user.walletAddress;
+    const query = user?._id
+      ? { _id: user._id }
+      : { walletAddress: user?.walletAddress };
 
     const updateRes = await users.updateOne(
       query,

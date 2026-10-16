@@ -3,11 +3,13 @@ export const dynamic = "force-dynamic";
 import { NextResponse } from "next/server";
 import { auditLog } from "@/lib/api/audit";
 import { withApiHardening } from "@/lib/api/hardening";
-import { getUserFromCookie } from "@/lib/api/auth";
+import { requirePermission } from "@/lib/api/auth";
 import { getDb } from "@/lib/mongodb";
 import { randomUUID } from "node:crypto";
 import { validateImportPayload, planImport, publicPlanRows, ImportValidationError } from "@/lib/backend/materialImport";
-import { buildMaterialHistoryEntry } from "@/lib/backend/schemaContracts";
+import { buildMaterialHistoryEntry, COLLECTIONS } from "@/lib/backend/schemaContracts";
+import { buildImportProvenance, recordProvenanceRevision, TRANSFORM_VERSIONS } from "@/lib/backend/provenance";
+import { sanitizeString } from "@/lib/api/validation";
 import { invalidateCatalogCache } from "@/lib/cache/redis";
 import { notify } from "@/lib/notifications/notifications";
 
@@ -23,11 +25,12 @@ export async function POST(request) {
     { route: "materials-import", rateLimit: { limit: 10, windowMs: 60_000 } },
     async () => {
       try {
-        const user = await getUserFromCookie(request);
-        if (!user) {
-          auditLog({ event: "auth_failed", route: "materials-import", method: "POST", status: 401 });
-          return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+        const authorization = await requirePermission(request, "creator:manage");
+        if (!authorization.ok) {
+          auditLog({ event: "auth_failed", route: "materials-import", method: "POST", status: authorization.status });
+          return NextResponse.json({ error: "Creator access required" }, { status: authorization.status });
         }
+        const user = authorization.user;
 
         let userAddress = user.walletAddress || user.address || null;
         if (!userAddress && user.sub) {
@@ -88,16 +91,48 @@ export async function POST(request) {
           }, { status: 400 });
         }
 
-        const writeRows = plan.rows.filter((r) => r.action === "create" || r.action === "update");
-        if (writeRows.length === 0) {
-          return NextResponse.json({ ...report, imported: 0, created: 0, updated: 0, message: "Nothing to write: every row is already imported" });
-        }
-
         const now = new Date();
         const importBatchId = randomUUID();
+        const writeRows = plan.rows.filter((r) => r.action === "create" || r.action === "update");
+
+        // #969: quarantined rows are recorded for review but never written, and
+        // they don't block the accepted rows around them.
+        const quarantinedRows = plan.rows.filter((r) => r.action === "quarantine");
+        if (quarantinedRows.length > 0) {
+          await db.collection(COLLECTIONS.importQuarantine).insertMany(quarantinedRows.map((r) => ({
+            importBatchId,
+            userAddress,
+            row: r.row,
+            externalId: r.externalId || null,
+            title: r.record?.title || null,
+            storageKey: r.record?.storageKey || null,
+            reasons: r.reasons,
+            status: "quarantined",
+            createdAt: now,
+          })));
+        }
+
+        if (writeRows.length === 0) {
+          return NextResponse.json({
+            ...report,
+            importBatchId,
+            imported: 0,
+            created: 0,
+            updated: 0,
+            quarantined: quarantinedRows.length,
+            message: quarantinedRows.length > 0
+              ? `Nothing written: ${quarantinedRows.length} row(s) quarantined, the rest were already imported`
+              : "Nothing to write: every row is already imported",
+          });
+        }
+
         const quarantineCol = db.collection("quarantine");
 
-        const buildCreateDoc = async (record) => {
+        // A stable human-readable label for the import source, so a maintainer
+        // reading provenance can tell which file/sheet a batch came from.
+        const sourceName = sanitizeString(body?.sourceName || body?.fileName, { maxLength: 256 }) || null;
+
+        const buildCreateDoc = async (record, rowNumber) => {
           const contentHash = record.storageKey || record.fileUrl || record.ipfsCid;
           let quarantineState = "pending";
           let contentManifestHash = null;
@@ -128,10 +163,22 @@ export async function POST(request) {
             }
           }
 
+          const provenance = buildImportProvenance({
+            importBatchId,
+            format: validation.format,
+            sourceName,
+            recordIndex: rowNumber,
+            externalId: record.externalId || null,
+            actorAddress: userAddress,
+            actorUserId: user.sub || null,
+            now,
+          });
+
           const { externalId, ...fields } = record;
           return {
             ...fields,
             ...(externalId ? { externalId } : {}),
+            provenance,
             userAddress,
             importBatchId,
             quarantineState,
@@ -142,14 +189,42 @@ export async function POST(request) {
           };
         };
 
+        // Attach/append provenance once per updated row and reuse it for the
+        // write and the history entry, so both agree exactly.
+        for (const r of writeRows) {
+          if (r.action !== "update") continue;
+          r.nextProvenance = r.previous?.provenance
+            ? recordProvenanceRevision(r.previous.provenance, {
+              actorAddress: userAddress,
+              actorUserId: user.sub || null,
+              importBatchId,
+              changedFields: r.fields,
+              source: "import",
+              now,
+            })
+            // Records created before provenance existed still get an origin
+            // the first time an import touches them, rather than staying dark.
+            : buildImportProvenance({
+              importBatchId,
+              format: validation.format,
+              sourceName,
+              recordIndex: r.row,
+              externalId: r.externalId || null,
+              actorAddress: userAddress,
+              actorUserId: user.sub || null,
+              now,
+            });
+        }
+
         const ops = await Promise.all(writeRows.map(async (r) => (r.action === "create"
-          ? { insertOne: { document: await buildCreateDoc(r.record) } }
+          ? { insertOne: { document: await buildCreateDoc(r.record, r.row) } }
           : {
             updateOne: {
               filter: { userAddress, externalId: r.externalId },
               update: {
                 $set: {
                   ...Object.fromEntries(r.fields.map((f) => [f, r.record[f]])),
+                  provenance: r.nextProvenance,
                   lastImportBatchId: importBatchId,
                   updatedAt: now,
                 },
@@ -192,6 +267,11 @@ export async function POST(request) {
               source: "import",
             }),
             changes: Object.fromEntries(r.fields.map((f) => [f, { from: r.previous[f] ?? null, to: r.record[f] }])),
+            provenance: {
+              kind: "import",
+              importBatchId,
+              transformVersion: TRANSFORM_VERSIONS.import,
+            },
           }));
         if (historyEntries.length > 0) {
           await db.collection("material_history").insertMany(historyEntries);
@@ -230,11 +310,13 @@ export async function POST(request) {
           imported: created + updated,
           created,
           updated,
+          quarantined: quarantinedRows.length,
           failedRows,
           rollback: {
             importBatchId,
             created: `Undo creates by deleting materials with importBatchId "${importBatchId}".`,
             updated: `Prior values of updated materials are in material_history with changeReason "import ${importBatchId}".`,
+            quarantined: `Quarantined rows were not written. Review import_quarantine with importBatchId "${importBatchId}", correct the storageKey, and re-run the same file.`,
             retry: "Fix failedRows and re-run the same file; rows with an externalId that already succeeded are skipped.",
           },
         }, { status: !partial ? 201 : created + updated > 0 ? 207 : 500 });

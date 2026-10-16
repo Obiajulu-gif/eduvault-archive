@@ -5,10 +5,10 @@ import { createHash } from 'node:crypto'
 import { resolveFromGateways } from './pinningService.js'
 
 export const IntegrityStatus = {
-  VERIFIED = 'verified',
-  MISMATCH = 'mismatch',
-  UNREACHABLE = 'unreachable',
-  UNKNOWN = 'unknown',
+  VERIFIED: 'verified',
+  MISMATCH: 'mismatch',
+  UNREACHABLE: 'unreachable',
+  UNKNOWN: 'unknown',
 }
 
 export const HashAlgorithm = {

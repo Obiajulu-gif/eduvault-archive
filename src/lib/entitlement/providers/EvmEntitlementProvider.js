@@ -13,16 +13,20 @@ export class EvmEntitlementProvider extends EntitlementProvider {
 
     if (db) {
       try {
+        const normalisedAddress = String(walletAddress).trim().toLowerCase();
         const purchase = await db.collection('purchases').findOne({
-          buyerAddress: walletAddress.toLowerCase(),
+          buyerAddress: normalisedAddress,
           materialId,
-          status: { $in: ['COMPLETED', 'CONFIRMED', 'paid'] }
+          status: { $in: ['COMPLETED', 'CONFIRMED', 'paid', 'settled', 'completed', 'confirmed'] }
         });
         if (purchase) {
+          if (purchase.settlementState && ['Refunded', 'Disputed', 'Expired'].includes(purchase.settlementState)) {
+            return { hasAccess: false, state: 'REVOKED', source: 'evm-db' };
+          }
           return { hasAccess: true, state: 'FINALIZED', source: 'evm-db' };
         }
       } catch (e) {
-        // Fallback
+        // Fail-safe fall through
       }
     }
 

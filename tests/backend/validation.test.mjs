@@ -59,6 +59,24 @@ test("validateMaterialPayload preserves preview fields", () => {
   assert.equal(material.fileUrl, "ipfs://file");
 });
 
+test("validateMaterialPayload normalizes derivedFrom (#888)", () => {
+  const fromId = validateMaterialPayload({ title: "Notes", fileUrl: "ipfs://file", derivedFrom: "66f000000000000000000000" });
+  assert.deepEqual(fromId.derivedFrom, { materialId: "66f000000000000000000000", externalId: null, relation: null });
+
+  const fromObject = validateMaterialPayload({
+    title: "Notes",
+    fileUrl: "ipfs://file",
+    derivedFrom: { externalId: "sis-1", relation: " adaptation " },
+  });
+  assert.deepEqual(fromObject.derivedFrom, { materialId: null, externalId: "sis-1", relation: "adaptation" });
+
+  assert.throws(
+    () => validateMaterialPayload({ title: "Notes", fileUrl: "ipfs://file", derivedFrom: {} }),
+    /derivedFrom requires/
+  );
+  assert.equal(validateMaterialPayload({ title: "Notes", fileUrl: "ipfs://file" }).derivedFrom, null);
+});
+
 test("sanitizeObject strips control characters from stored metadata", () => {
   assert.deepEqual(sanitizeObject({ title: "  Math\u0000 Notes " }), { title: "Math Notes" });
 });

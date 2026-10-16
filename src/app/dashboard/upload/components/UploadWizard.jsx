@@ -16,7 +16,8 @@ import {
   FaExclamationTriangle,
 } from "react-icons/fa";
 import { useAccount, useWriteContract, useWaitForTransactionReceipt, useSwitchChain } from "wagmi";
-import { isChainSupported } from "@/lib/web3/chains";
+import { celoSepolia } from "wagmi/chains";
+import { isChainSupported, isUploadChain, UPLOAD_CHAIN } from "@/lib/web3/chains";
 
 import { useWallet } from "@/hooks/useWallet";
 import { validateThumbnail } from "@/lib/upload/validateThumbnail";
@@ -62,6 +63,9 @@ export default function UploadWizard() {
   const [errorType, setErrorType] = useState(null);
   const [publishResult, setPublishResult] = useState(null);
   const [uploadProgress, setUploadProgress] = useState(0);
+  const [switchingChain, setSwitchingChain] = useState(false);
+
+  const chainMismatch = address && chainId && !isUploadChain(chainId);
 
   const uploadFileMutation = useUploadFile();
   const createMaterialMutation = useCreateMaterial();
@@ -267,6 +271,12 @@ export default function UploadWizard() {
       return;
     }
 
+
+    if (chainMismatch) {
+      setError(`Please switch to ${celoSepolia.name} before publishing. Use the network switch button above.`);
+      setErrorType("chain");
+      return;
+    }
 
     setWorkflowState("uploading");
     setUploadProgress(0);

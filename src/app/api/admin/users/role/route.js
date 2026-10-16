@@ -81,6 +81,16 @@ export async function POST(request) {
       return NextResponse.json({ error: 'userId and a valid role are required.' }, { status: 400 })
     }
 
+    const actor = admin.walletAddress || admin.sub
+    const validation = validateApproval({
+      approval,
+      requiredScope: APPROVAL_SCOPES.USER_ROLE_CHANGE,
+      actor,
+    })
+    if (!validation.valid) {
+      return NextResponse.json({ error: validation.code }, { status: 403 })
+    }
+
     const db = await getDb()
     const users = db.collection('users')
     const target = await users.findOne({ _id: new ObjectId(userId) })
@@ -110,6 +120,27 @@ export async function POST(request) {
       )
     }
 
+const diff = computePermissionDiff({
+      actor: target.walletAddress || target.email || userId,
+      fromRole: target.role,
+      toRole: role,
+    })
+
+    // Broad changes (sensitive permissions or many permissions) must be
+    // explicitly confirmed by the caller.
+    try {
+      assertConfirmation(diff, confirm)
+    } catch (confirmError) {
+      return NextResponse.json(
+        {
+          error: confirmError.message,
+          code: confirmError.code,
+          diff,
+        },
+        { status: confirmError.status || 428 },
+      )
+    }
+
     const actor = admin.walletAddress || admin.sub
     await users.updateOne(
       { _id: new ObjectId(userId), role: target.role },
@@ -119,7 +150,7 @@ export async function POST(request) {
     await appendAuditRecord({
       db,
       operationId: request.headers.get('x-idempotency-key') || `role:${userId}:${target.role}:${role}:${actor}`,
-      actor,
+      actor: actor,
       action: 'user.role_changed',
       target: { type: 'user', id: userId },
       intent: {
@@ -133,6 +164,7 @@ export async function POST(request) {
         diffReport: transition.diffReport,
       },
       reason,
+      approval: validation.approval,
     })
 
     return NextResponse.json({
