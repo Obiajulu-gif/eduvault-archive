@@ -1,7 +1,11 @@
 import { describe, it, expect } from "vitest";
 import {
+  applyMarketplaceRelevanceRanking,
   applyOwnershipRanking,
+  buildMarketplaceFacetPipeline,
   buildMarketplaceDiscoveryQuery,
+  buildMarketplaceSearchClause,
+  scoreMarketplaceItem,
 } from "./marketplaceDiscovery";
 
 describe("applyOwnershipRanking (#707)", () => {
@@ -78,5 +82,49 @@ describe("buildMarketplaceDiscoveryQuery filters (#707)", () => {
     expect(query.language).toBeInstanceOf(RegExp);
     expect(query.language.test("spanish")).toBe(true);
     expect(query.price).toEqual({ $gte: 5, $lte: 50 });
+  });
+});
+
+describe("marketplace search and relevance (#767, #766)", () => {
+  it("requires every search token while allowing a one-character near match", () => {
+    const clause = buildMarketplaceSearchClause("calculus lesson");
+    expect(clause.$and).toHaveLength(2);
+    expect(clause.$and[0].$or.some((condition) => condition.title)).toBe(true);
+    expect(clause.$and[0].$or[0].title.test("calclus")).toBe(true);
+  });
+
+  it("keeps a fresh complete listing competitive with a popular older listing", () => {
+    const now = new Date("2026-09-25T00:00:00.000Z");
+    const popularOld = {
+      title: "calculus",
+      description: "lesson",
+      likes: 1000,
+      rating: 5,
+      createdAt: new Date("2024-01-01T00:00:00.000Z"),
+    };
+    const freshComplete = {
+      title: "calculus lesson",
+      description: "A complete guide",
+      shortSummary: "Practice problems",
+      thumbnailUrl: "ipfs://thumb",
+      likes: 10,
+      rating: 4,
+      createdAt: new Date("2026-09-01T00:00:00.000Z"),
+    };
+
+    expect(scoreMarketplaceItem(freshComplete, "calculus lesson", { now }))
+      .toBeGreaterThan(scoreMarketplaceItem(popularOld, "calculus lesson", { now }));
+    expect(applyMarketplaceRelevanceRanking([popularOld, freshComplete], "calculus lesson", { now })[0])
+      .toEqual(expect.objectContaining({ title: "calculus lesson" }));
+  });
+
+  it("builds facet counts from the same filtered query", () => {
+    const pipeline = buildMarketplaceFacetPipeline({ category: "Science" });
+    expect(pipeline[0]).toEqual({ $match: { category: "Science" } });
+    expect(pipeline[1].$facet.category).toEqual([
+      { $match: { category: { $nin: [null, ""] } } },
+      { $sortByCount: "$category" },
+      { $limit: 50 },
+    ]);
   });
 });

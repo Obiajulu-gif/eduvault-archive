@@ -620,6 +620,14 @@ export default function OnboardingPage() {
                 Every material you upload to EduVault is permanently linked to
                 your identity through your wallet address and display name.
               </p>
+              {accountType !== "institution" && (
+                <p className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-left text-sm text-amber-900">
+                  Wallet access is required to manage your creator profile. You
+                  may register an optional verified recovery contact in account
+                  settings; without one, losing your wallet may permanently
+                  prevent access to your profile and earnings history.
+                </p>
+              )}
             </div>
 
             <div className="bg-white/80 border border-gray-100 rounded-xl p-6 shadow-sm space-y-5 text-left">

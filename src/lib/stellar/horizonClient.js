@@ -1,6 +1,7 @@
 import { Horizon } from '@stellar/stellar-sdk';
 import { HORIZON_URL, isMainnet } from '@/lib/config/chain';
 import logger from '@/lib/logger';
+import { getSandboxTransactionStatus, getSandboxTrustline, isSandboxMode } from '@/lib/sandbox/adapters';
 
 // Primary URL from config; fallback list ordered by preference.
 const PRIMARY_URL = HORIZON_URL;
@@ -139,6 +140,7 @@ export async function fetchFeeStats() {
  *   - 'not_found'  no hash supplied
  */
 export async function getTransactionStatus(hash) {
+  if (isSandboxMode()) return getSandboxTransactionStatus(hash);
   if (!hash) return 'not_found';
 
   try {
@@ -314,6 +316,22 @@ export function resolveAssetIssuer(assetCode, issuerAddress) {
   );
 }
 
+export function buildTrustlineInstructions(assetCode, issuer) {
+  return {
+    message: `Your wallet does not have an active trustline for ${assetCode}.`,
+    steps: [
+      `Open your Stellar wallet and add ${assetCode} as a trusted asset before retrying checkout.`,
+      `Issuer: ${issuer}`,
+      'After the trustline is active, return to EduVault and submit the payment again.',
+    ],
+    assetCode,
+    issuer,
+    helpUrl: isMainnet
+      ? 'https://accountviewer.stellar.org/'
+      : 'https://laboratory.stellar.org/',
+  };
+}
+
 /**
  * Check whether an account holds an active trustline for the specified asset.
  * Returns { hasTrustline, balance?, issuer? } on success.
@@ -324,6 +342,7 @@ export function resolveAssetIssuer(assetCode, issuerAddress) {
  * @returns {Promise<{ hasTrustline: boolean, balance?: string, issuer?: string }>}
  */
 export async function checkBuyerTrustline(publicKey, assetCode, issuerAddress) {
+  if (isSandboxMode()) return getSandboxTrustline(assetCode, issuerAddress);
   if (assetCode === 'XLM') {
     const account = await loadAccount(publicKey);
     const nativeBalance = account.balances.find((b) => b.asset_type === 'native');
@@ -345,17 +364,7 @@ export async function checkBuyerTrustline(publicKey, assetCode, issuerAddress) {
     return {
       hasTrustline: false,
       issuer,
-      instructions: {
-        message: `Your wallet does not have an active trustline for ${assetCode}.`,
-        steps: [
-          `Use the Stellar Laboratory or your wallet to establish a trustline for ${assetCode} issued by ${issuer}.`,
-          'Or run the following in the Stellar CLI:',
-          `  stellar-cli asset add-Trust ${issuer}:${assetCode}`,
-          `Trustline URL: ${isMainnet
-            ? 'https://accountviewer.stellar.org/'
-            : 'https://laboratory.stellar.org/'}`,
-        ],
-      },
+      instructions: buildTrustlineInstructions(assetCode, issuer),
     };
   }
 

@@ -12,6 +12,9 @@ import {
 import { broadcastPurchaseEvent } from '@/lib/webhooks/sender';
 import { sendReceiptIfEligible } from '@/lib/email';
 import { createCheckoutQuote, consumeCheckoutQuote } from '@/lib/checkout/quotes';
+import { buildAnalyticsEvent, recordServerAnalyticsEvent } from '@/lib/backend/analyticsEvents';
+import { appendCriticalMutation } from '@/lib/backend/auditLedger';
+import { withTelemetryRoute, ACTOR_TYPES } from '@/lib/monitoring/telemetry';
 
 function duplicateKey(error) {
   return error?.code === 11000;
@@ -21,6 +24,22 @@ function duplicateKey(error) {
 // post-insert race path (a concurrent request won the unique-index race),
 // so side effects (entitlement/receipt/webhook) fire exactly once per
 // actual purchase regardless of which path resolves it.
+/**
+ * Fire a server-confirmed purchase analytics event. This is a fire-and-forget
+ * call — it MUST NOT throw and block the purchase response.
+ */
+function recordPurchaseAnalytics(db, { materialId, buyerAddress }) {
+  const event = buildAnalyticsEvent({
+    materialId: String(materialId),
+    eventType: 'purchase',
+    viewerId: buyerAddress,
+    source: 'server-confirmed',
+  });
+  recordServerAnalyticsEvent(db, event).catch(err =>
+    console.error('[purchase] analytics recording failed (non-fatal):', err)
+  );
+}
+
 async function respondForExistingPurchase(db, existing, { materialId, buyerAddress, paymentCompleted, transactionHash, signedXdr, amount, asset, email }) {
   if (isCompletedPurchaseStatus(existing.status)) {
     await createEntitlement(materialId, buyerAddress, {
@@ -28,6 +47,9 @@ async function respondForExistingPurchase(db, existing, { materialId, buyerAddre
       transactionHash: existing.transactionHash,
     });
     const access = await getMaterialAccessStatus(db, materialId, buyerAddress);
+    // Server-confirmed event: purchase was already finalized, buyer is re-accessing.
+    // We still record to deduplicate in the time window — duplicate within window is a no-op.
+    recordPurchaseAnalytics(db, { materialId, buyerAddress });
     return NextResponse.json(
       { message: 'Already purchased', purchase: existing, access, transactionHash: existing.transactionHash },
       { status: 200 }
@@ -61,9 +83,22 @@ async function respondForExistingPurchase(db, existing, { materialId, buyerAddre
   );
 
   const purchase = await db.collection('purchases').findOne({ _id: existing._id });
+  await appendCriticalMutation({
+    db,
+    operationId: `purchase.confirmed:${String(existing._id)}`,
+    actor: buyerAddress,
+    action: 'purchase.payment_confirmed',
+    target: { type: 'purchase', id: String(existing._id) },
+    reason: 'Confirmed checkout payment',
+    before: { status: existing.status, amount: existing.amount ?? null, asset: existing.asset ?? null },
+    after: { status: purchase.status, amount: purchase.amount ?? null, asset: purchase.asset ?? null, materialId: purchase.materialId },
+    intent: { materialId, paymentCompleted: true },
+  });
   const access = await getMaterialAccessStatus(db, materialId, buyerAddress);
 
   sendReceiptIfEligible(db, existing._id).catch(err => console.error(err));
+  // Fire server-confirmed purchase analytics — authoritative, immune to ad blockers.
+  recordPurchaseAnalytics(db, { materialId, buyerAddress });
   // Fire webhook asynchronously
   broadcastPurchaseEvent(materialId, {
     buyerAddress,
@@ -101,7 +136,7 @@ export async function GET(req) {
   }
 }
 
-export async function POST(req) {
+async function handlePost(req) {
   try {
     const user = await getUserFromCookie(req);
     const db = await getDb();
@@ -190,12 +225,30 @@ export async function POST(req) {
     const access = await getMaterialAccessStatus(db, materialId, buyerAddress);
 
     if (paymentCompleted) {
+      await appendCriticalMutation({
+        db,
+        operationId: `purchase.confirmed:${String(result.insertedId)}`,
+        actor: buyerAddress,
+        action: 'purchase.payment_confirmed',
+        target: { type: 'purchase', id: String(result.insertedId) },
+        reason: 'Confirmed checkout payment',
+        before: { status: null },
+        after: { status: purchaseRecord.status, amount: purchaseRecord.amount, asset: purchaseRecord.asset, materialId },
+        intent: { materialId, paymentCompleted: true, quoteId: quote?.quoteId || null },
+      });
+    }
+
+    if (paymentCompleted) {
       await createEntitlement(materialId, buyerAddress, {
         purchaseId: String(result.insertedId),
         transactionHash: transactionHash || null,
       });
 
       sendReceiptIfEligible(db, result.insertedId).catch(err => console.error(err));
+      // Server-confirmed purchase analytics — written immediately without the
+      // outbox queue so they survive even if the client page is closed right
+      // after payment. Never allowed to throw and disrupt the purchase response.
+      recordPurchaseAnalytics(db, { materialId, buyerAddress });
 
       // Fire webhook asynchronously
       broadcastPurchaseEvent(materialId, purchaseRecord);
@@ -210,3 +263,5 @@ export async function POST(req) {
     return NextResponse.json({ error: "Server error" }, { status: 500 });
   }
 }
+
+export const POST = withTelemetryRoute('purchase.complete', ACTOR_TYPES.USER, handlePost);

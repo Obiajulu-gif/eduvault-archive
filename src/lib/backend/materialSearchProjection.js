@@ -191,7 +191,7 @@ export async function applyMaterialSearchProjection(db, payload, { now = new Dat
   return { action: result.upsertedCount ? "inserted" : "updated", reason: null, materialId, version };
 }
 
-function diffForMaterial(material, projection) {
+export function diffForMaterial(material, projection) {
   const access = evaluateMaterialSearchAccess(material);
   const version = getMaterialSearchVersion(material);
   if (!access.searchable) {

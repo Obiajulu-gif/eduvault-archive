@@ -1,6 +1,10 @@
+// @ts-nocheck
 "use client";
 
+// @ts-nocheck
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
+import { useEffect, useRef } from "react";
 import {
   FaCheckCircle,
   FaCloudDownloadAlt,
@@ -8,9 +12,11 @@ import {
   FaExternalLinkAlt,
   FaLockOpen,
   FaReceipt,
+  FaShieldAlt,
   FaSpinner,
   FaTimes,
 } from "react-icons/fa";
+import { useCallback, useId } from "react";
 
 const STATE_COPY = {
   signing: {
@@ -70,6 +76,63 @@ const toneClasses = {
   },
 };
 
+const RECEIPT_SCHEMA_VERSION = "eduvault.receipt.v1";
+
+function stableStringify(value) {
+  if (value === null || typeof value !== "object") {
+    return JSON.stringify(value);
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map((entry) => stableStringify(entry)).join(",")}]`;
+  }
+  const keys = Object.keys(value).sort();
+  return `{${keys
+    .map((key) => `${JSON.stringify(key)}:${stableStringify(value[key])}`)
+    .join(",")}}`;
+}
+
+function canonicalizeReceiptPayload(payload) {
+  return stableStringify({
+    schema: RECEIPT_SCHEMA_VERSION,
+    operation: payload.operation,
+    actor: payload.actor,
+    issuedAt: payload.issuedAt,
+    status: payload.status,
+    references: {
+      itemId: payload.references?.itemId ?? null,
+      transactionHash: payload.references?.transactionHash ?? null,
+      explorerUrl: payload.references?.explorerUrl ?? null,
+    },
+    amounts: {
+      totalAmount: payload.amounts?.totalAmount ?? null,
+      totalFee: payload.amounts?.totalFee ?? null,
+      currency: payload.amounts?.currency ?? null,
+    },
+  });
+}
+
+async function computeReceiptDigest(canonicalPayload) {
+  if (typeof globalThis !== "undefined" && globalThis.crypto?.subtle?.digest) {
+    const encoded = new TextEncoder().encode(canonicalPayload);
+    const digest = await globalThis.crypto.subtle.digest("SHA-256", encoded);
+    return Array.from(new Uint8Array(digest))
+      .map((byte) => byte.toString(16).padStart(2, "0"))
+      .join("");
+  }
+  // Deterministic fallback for environments without SubtleCrypto (e.g. jsdom).
+  let hash = 0;
+  for (let index = 0; index < canonicalPayload.length; index += 1) {
+    hash = (hash * 31 + canonicalPayload.charCodeAt(index)) >>> 0;
+  }
+  return `fallback-${hash.toString(16).padStart(8, "0")}`;
+}
+
+function shortenDigest(digest) {
+  if (!digest) return "Pending signature";
+  if (digest.length <= 20) return digest;
+  return `${digest.slice(0, 12)}…${digest.slice(-8)}`;
+}
+
 function shortenHash(hash) {
   if (!hash) return "Pending Stellar hash";
   if (hash.length <= 18) return hash;
@@ -98,6 +161,7 @@ export default function CheckoutReceiptModal({
   currency = "XLM",
   purchasedAt,
   errorMessage,
+  actor,
   onClose,
   onRetry,
   onDownload,
@@ -110,6 +174,48 @@ export default function CheckoutReceiptModal({
   const isBusy = status === "signing" || status === "confirming";
   const isSuccess = status === "success";
   const isError = status === "error";
+const errorId = "checkout-receipt-error";
+  const dialogRef = useRef(null);
+  const previouslyFocusedRef = useRef(null);
+  const titleId = useId();
+  const descriptionId = useId();
+
+  const [receiptState, setReceiptState] = useState({
+    digest: null,
+    canonical: null,
+    verified: null,
+    error: null,
+  });
+
+  const receiptPayload = useMemo(
+    () => ({
+      operation: "checkout.purchase",
+      actor: actor || "anonymous",
+      issuedAt: purchasedAt || new Date().toISOString(),
+      status,
+      references: {
+        itemId: itemName || null,
+        transactionHash: transactionHash || null,
+        explorerUrl: explorerUrl || null,
+      },
+      amounts: {
+        totalAmount: totalAmount ?? null,
+        totalFee: totalFee ?? null,
+        currency: currency || null,
+      },
+    }),
+    [
+      actor,
+      currency,
+      explorerUrl,
+      itemName,
+      purchasedAt,
+      status,
+      totalAmount,
+      totalFee,
+      transactionHash,
+    ],
+  );
   const formattedDate = purchasedAt
     ? new Intl.DateTimeFormat("en", {
         dateStyle: "medium",
@@ -117,6 +223,109 @@ export default function CheckoutReceiptModal({
       }).format(new Date(purchasedAt))
     : "Just now";
 
+const canonicalReceipt = useMemo(
+    () => canonicalizeReceiptPayload(receiptPayload),
+    [receiptPayload],
+  );
+
+  const handleSignReceipt = async () => {
+    try {
+      const digest = await computeReceiptDigest(canonicalReceipt);
+      setReceiptState({
+        digest,
+        canonical: canonicalReceipt,
+        verified: true,
+        error: null,
+      });
+    } catch (signError) {
+      setReceiptState({
+        digest: null,
+        canonical: canonicalReceipt,
+        verified: false,
+        error: signError?.message || "Unable to sign receipt",
+      });
+    }
+  };
+
+  const handleVerifyReceipt = async () => {
+    if (!receiptState.digest || !receiptState.canonical) {
+      setReceiptState((previous) => ({
+        ...previous,
+        verified: false,
+        error: "No signed receipt available to verify",
+      }));
+      return;
+    }
+    const recomputed = await computeReceiptDigest(receiptState.canonical);
+    setReceiptState((previous) => ({
+      ...previous,
+      verified: recomputed === previous.digest,
+      error: recomputed === previous.digest ? null : "Receipt digest mismatch detected",
+    }));
+  };
+
+  const getFocusable = useCallback((node) => {
+    if (!node) return [];
+    return Array.from(
+      node.querySelectorAll(
+        'button:not([disabled]), [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
+      )
+    ).filter((el) => el.offsetParent !== null || el === document.activeElement);
+  }, []);
+
+  useEffect(() => {
+    if (!isOpen) return undefined;
+
+    previouslyFocusedRef.current =
+      typeof document !== "undefined" ? document.activeElement : null;
+
+    const focusTimer = window.setTimeout(() => {
+      const node = dialogRef.current;
+      if (!node) return;
+      const focusable = getFocusable(node);
+      if (focusable.length > 0) {
+        focusable[0].focus();
+      } else {
+        node.focus();
+      }
+    }, 0);
+
+    const handleKeyDown = (event) => {
+      if (event.key === "Escape" && !isBusy) {
+        event.stopPropagation();
+        onClose?.();
+        return;
+      }
+      if (event.key !== "Tab") return;
+      const node = dialogRef.current;
+      if (!node) return;
+      const focusable = getFocusable(node);
+      if (focusable.length === 0) {
+        event.preventDefault();
+        node.focus();
+        return;
+      }
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.clearTimeout(focusTimer);
+      document.removeEventListener("keydown", handleKeyDown);
+      const previous = previouslyFocusedRef.current;
+      if (previous && typeof previous.focus === "function") {
+        previous.focus();
+      }
+    };
+  }, [isOpen, isBusy, onClose, getFocusable]);
   return (
     <AnimatePresence>
       {isOpen ? (
@@ -137,14 +346,15 @@ export default function CheckoutReceiptModal({
             transition={{ type: "spring", damping: 24, stiffness: 260 }}
             role="dialog"
             aria-modal="true"
-            aria-labelledby="checkout-receipt-title"
+            aria-describedby={descriptionId}
+            aria-labelledby={titleId}
           >
             <div className="relative max-h-[92vh] w-full max-w-2xl overflow-y-auto rounded-t-[2rem] border border-white/70 bg-white shadow-2xl shadow-slate-950/20 sm:rounded-[2rem]">
               <div className={`absolute inset-x-0 top-0 h-40 bg-gradient-to-br ${classes.ring}`} />
               <div className="absolute -right-16 -top-20 h-48 w-48 rounded-full bg-white/40 blur-3xl" />
               <div className="absolute -left-20 top-16 h-56 w-56 rounded-full bg-blue-100/40 blur-3xl" />
 
-              <div className="relative p-5 sm:p-8">
+              <div ref={dialogRef} tabIndex={-1} className="relative p-5 sm:p-8 focus:outline-none">
                 <div className="mb-6 flex items-start justify-between gap-4">
                   <div className="flex items-center gap-3">
                     <div className={`flex h-14 w-14 items-center justify-center rounded-2xl shadow-lg ${classes.icon}`}>
@@ -154,7 +364,7 @@ export default function CheckoutReceiptModal({
                       <span className={`inline-flex rounded-full border px-3 py-1 text-xs font-bold uppercase tracking-[0.2em] ${classes.badge}`}>
                         {copy.eyebrow}
                       </span>
-                      <h2 id="checkout-receipt-title" className="mt-2 text-2xl font-black tracking-tight text-slate-950 sm:text-3xl">
+                      <h2 id={titleId} className="mt-2 text-2xl font-black tracking-tight text-slate-950 sm:text-3xl">
                         {copy.title}
                       </h2>
                     </div>
@@ -172,7 +382,10 @@ export default function CheckoutReceiptModal({
                   ) : null}
                 </div>
 
-                <p className="max-w-xl text-sm leading-6 text-slate-600 sm:text-base">
+                <p
+                  id={descriptionId}
+                  className="max-w-xl text-sm leading-6 text-slate-600 sm:text-base"
+                >
                   {copy.message}
                 </p>
 
@@ -182,7 +395,12 @@ export default function CheckoutReceiptModal({
                     const isActiveStep = index <= activeIndex && !isError;
 
                     return (
-                      <div key={step}>
+                      <div
+                        key={step}
+                        role="group"
+                        aria-label={`Step ${index + 1} of 3: ${step}${isActiveStep ? " (current)" : ""}`}
+                        aria-current={isActiveStep ? "step" : undefined}
+                      >
                         <div className={`h-2 rounded-full ${isActiveStep ? classes.progress : "bg-slate-200"}`} />
                         <p className={`mt-2 text-center text-[11px] font-bold uppercase tracking-[0.18em] ${isActiveStep ? "text-slate-800" : "text-slate-400"}`}>
                           {step}
@@ -222,15 +440,72 @@ export default function CheckoutReceiptModal({
                   </div>
                 </div>
 
+                <div className="mt-5 rounded-[1.5rem] border border-slate-200 bg-white/90 p-3 shadow-inner shadow-slate-200/70 sm:p-4">
+                  <div className="mb-3 flex items-center justify-between gap-2 px-1">
+                    <div className="flex items-center gap-2 text-sm font-bold text-slate-900">
+                      <FaShieldAlt className="text-emerald-600" /> Signed activity receipt
+                    </div>
+                    <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 font-mono text-[10px] uppercase tracking-[0.18em] text-slate-500">
+                      {RECEIPT_SCHEMA_VERSION}
+                    </span>
+                  </div>
+                  <div className="space-y-3">
+                    <ReceiptRow label="Operation">{receiptPayload.operation}</ReceiptRow>
+                    <ReceiptRow label="Actor">{receiptPayload.actor}</ReceiptRow>
+                    <ReceiptRow label="Issued at">{receiptPayload.issuedAt}</ReceiptRow>
+                    <ReceiptRow label="Status">{receiptPayload.status}</ReceiptRow>
+                    <ReceiptRow label="Digest">
+                      <span className="font-mono text-xs text-slate-700">
+                        {shortenDigest(receiptState.digest)}
+                      </span>
+                    </ReceiptRow>
+                  </div>
+                  <div className="mt-3 flex flex-col gap-2 sm:flex-row">
+                    <button
+                      type="button"
+                      onClick={handleSignReceipt}
+                      className="inline-flex flex-1 items-center justify-center gap-2 rounded-2xl bg-emerald-600 px-4 py-2.5 text-xs font-bold uppercase tracking-[0.18em] text-white shadow-lg shadow-emerald-500/20 transition hover:-translate-y-0.5 hover:bg-emerald-700"
+                    >
+                      Sign receipt
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleVerifyReceipt}
+                      className="inline-flex flex-1 items-center justify-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 py-2.5 text-xs font-bold uppercase tracking-[0.18em] text-slate-700 transition hover:-translate-y-0.5 hover:border-slate-300"
+                    >
+                      Verify receipt
+                    </button>
+                  </div>
+                  {receiptState.error ? (
+                    <p className="mt-3 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-semibold text-rose-700">
+                      {receiptState.error}
+                    </p>
+                  ) : null}
+                  {receiptState.verified === true && !receiptState.error ? (
+                    <p className="mt-3 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-700">
+                      Receipt verified against canonical payload.
+                    </p>
+                  ) : null}
+                </div>
+
                 {isError ? (
-                  <div className="mt-5 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800">
+                  <div
+                    id={errorId}
+                    role="alert"
+                    aria-live="assertive"
+                    className="mt-5 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800"
+                  >
                     <p className="font-bold">Checkout error</p>
                     <p className="mt-1 leading-6">{errorMessage || "The checkout could not be confirmed."}</p>
                   </div>
                 ) : null}
 
                 {downloadError ? (
-                  <div className="mt-5 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+                  <div
+                    role="alert"
+                    aria-live="polite"
+                    className="mt-5 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800"
+                  >
                     <p className="font-bold">Download request failed</p>
                     <p className="mt-1 leading-6">{downloadError}</p>
                   </div>
@@ -242,6 +517,8 @@ export default function CheckoutReceiptModal({
                       type="button"
                       onClick={onDownload}
                       disabled={isDownloading}
+                      aria-busy={isDownloading}
+                      aria-describedby={downloadError ? "checkout-receipt-download-error" : undefined}
                       className="inline-flex flex-1 items-center justify-center gap-3 rounded-2xl bg-slate-950 px-5 py-3.5 text-sm font-bold text-white shadow-xl shadow-slate-950/20 transition hover:-translate-y-0.5 hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
                     >
                       {isDownloading ? <FaSpinner className="animate-spin" /> : <FaCloudDownloadAlt />}
@@ -253,13 +530,17 @@ export default function CheckoutReceiptModal({
                     <button
                       type="button"
                       onClick={onRetry}
+                      aria-describedby={errorId}
                       className="inline-flex flex-1 items-center justify-center gap-3 rounded-2xl bg-blue-600 px-5 py-3.5 text-sm font-bold text-white shadow-xl shadow-blue-500/20 transition hover:-translate-y-0.5 hover:bg-blue-700"
                     >
                       Retry checkout
                     </button>
                   ) : null}
 
-                  <div className="inline-flex flex-1 items-center justify-center gap-2 rounded-2xl border border-slate-200 bg-white px-5 py-3 text-center text-sm font-semibold text-slate-600">
+                  <div
+                    role="note"
+                    className="inline-flex flex-1 items-center justify-center gap-2 rounded-2xl border border-slate-200 bg-white px-5 py-3 text-center text-sm font-semibold text-slate-600"
+                  >
                     <FaLockOpen className="text-emerald-500" /> Entitlement-backed file decryption
                   </div>
                 </div>

@@ -1427,3 +1427,395 @@ fn upgrade_requires_admin_auth() {
     let result = client.try_upgrade(&admin, &fake_wasm_hash);
     assert!(result.is_err());
 }
+
+// ============================================================
+// Property / Invariant Tests (Issue: fuzz/property test suite)
+// ============================================================
+//
+// These tests verify registry invariants across randomised material
+// registrations, quote configurations, payout-share structures, and status
+// transitions.  "Randomness" is deterministic: a u8 seed drives every
+// parameter so any failure can be reproduced by re-running at the same seed.
+//
+// Invariant catalogue:
+//   R1 – a freshly registered material is always Active and unpaused.
+//   R2 – payout shares always sum to exactly 10_000 bps after registration.
+//   R3 – each registered material receives a unique material_id.
+//   R4 – creator nonce increments monotonically; no two nonces collide for
+//        the same creator in the same contract instance.
+//   R5 – update_sale_terms never changes immutable fields (creator, hashes,
+//        created_ledger).
+//   R6 – toggling pause is an involution: double-toggle returns to the
+//        original state.
+//   R7 – set_material_status to Archived is idempotent (calling it twice
+//        leaves status unchanged and emits no duplicate transition).
+//   R8 – quote lookup returns the registered amount verbatim (no
+//        rounding/mutation).
+//   R9 – asset allowlist: disabling an asset blocks registration regardless
+//        of the material's position in the sequence.
+//  R10 – sale-terms version increments by exactly 1 on each update.
+
+fn sweep(mut f: impl FnMut(u8)) {
+    for seed in 0u8..=255 {
+        f(seed);
+    }
+}
+
+/// Build a payout-share vec that sums to 10_000 bps: one entry with
+/// `share_bps` and a remainder entry.  `share_bps` is clamped to [1, 9_999].
+fn valid_payout_pair(env: &Env, first_bps: u32) -> Vec<PayoutShare> {
+    let first_bps = first_bps.clamp(1, 9_999);
+    vec![
+        env,
+        PayoutShare { recipient: Address::generate(env), share_bps: first_bps },
+        PayoutShare { recipient: Address::generate(env), share_bps: 10_000 - first_bps },
+    ]
+}
+
+// ── R1: freshly registered material is always Active and unpaused ──────────
+#[test]
+fn property_r1_fresh_material_is_active_and_unpaused() {
+    let env = Env::default();
+    let (_, client, admin) = install_contract(&env);
+    env.mock_all_auths();
+
+    sweep(|seed| {
+        let creator = Address::generate(&env);
+        let quotes = default_quotes(&env, &client, &admin);
+        let first_bps: u32 = 1 + (seed as u32 * 39).min(9_998);
+        let payouts = valid_payout_pair(&env, first_bps);
+
+        let material_id = client.register_material(
+            &creator,
+            &metadata_uri(&env),
+            &bytes32(&env, seed),
+            &bytes32(&env, seed.wrapping_add(1)),
+            &quotes,
+            &payouts,
+        );
+
+        let record = client.get_material(&material_id);
+        assert_eq!(
+            record.status, MaterialStatus::Active,
+            "seed={seed}: expected Active, got {:?}", record.status
+        );
+        assert!(
+            !record.paused,
+            "seed={seed}: freshly registered material should not be paused"
+        );
+    });
+}
+
+// ── R2: payout shares sum to exactly 10_000 bps ───────────────────────────
+#[test]
+fn property_r2_payout_shares_sum_to_basis_points() {
+    let env = Env::default();
+    let (_, client, admin) = install_contract(&env);
+    env.mock_all_auths();
+
+    sweep(|seed| {
+        let creator = Address::generate(&env);
+        let quotes = default_quotes(&env, &client, &admin);
+        let first_bps: u32 = 1 + (seed as u32 * 39).min(9_998);
+        let payouts = valid_payout_pair(&env, first_bps);
+
+        let material_id = client.register_material(
+            &creator,
+            &metadata_uri(&env),
+            &bytes32(&env, seed),
+            &bytes32(&env, seed.wrapping_add(128)),
+            &quotes,
+            &payouts,
+        );
+
+        let record = client.get_material(&material_id);
+        let total_bps: u32 = {
+            let mut sum = 0u32;
+            let mut i = 0u32;
+            while i < record.payout_shares.len() {
+                sum += record.payout_shares.get_unchecked(i).share_bps;
+                i += 1;
+            }
+            sum
+        };
+        assert_eq!(
+            total_bps, 10_000,
+            "seed={seed}: payout shares sum to {total_bps}, expected 10_000"
+        );
+    });
+}
+
+// ── R3: each registration produces a distinct material_id ─────────────────
+#[test]
+fn property_r3_material_ids_are_unique_across_creators() {
+    // Register 16 materials across 16 distinct creators and verify all IDs
+    // are pairwise distinct.
+    let env = Env::default();
+    let (_, client, admin) = install_contract(&env);
+    env.mock_all_auths();
+
+    let quotes = default_quotes(&env, &client, &admin);
+    let mut ids = soroban_sdk::Vec::new(&env);
+
+    for seed in 0u8..16 {
+        let creator = Address::generate(&env);
+        let payouts = valid_payout_pair(&env, 5_000);
+        let mid = client.register_material(
+            &creator,
+            &metadata_uri(&env),
+            &bytes32(&env, seed),
+            &bytes32(&env, seed.wrapping_add(64)),
+            &quotes,
+            &payouts,
+        );
+        // Each new id must not already be in the collected list.
+        let mut j = 0u32;
+        while j < ids.len() {
+            assert_ne!(
+                ids.get_unchecked(j), mid,
+                "seed={seed}: duplicate material_id detected at index {j}"
+            );
+            j += 1;
+        }
+        ids.push_back(mid);
+    }
+}
+
+// ── R4: creator nonce increments monotonically ────────────────────────────
+#[test]
+fn property_r4_creator_nonce_increases_per_registration() {
+    let env = Env::default();
+    let (contract_id, client, admin) = install_contract(&env);
+    env.mock_all_auths();
+
+    let creator = Address::generate(&env);
+    let quotes = default_quotes(&env, &client, &admin);
+
+    for seq in 0u8..8 {
+        let nonce_before = get_creator_nonce(&env, &creator);
+        let payouts = valid_payout_pair(&env, 5_000);
+        client.register_material(
+            &creator,
+            &metadata_uri(&env),
+            &bytes32(&env, seq),
+            &bytes32(&env, seq.wrapping_add(32)),
+            &quotes,
+            &payouts,
+        );
+        let nonce_after = env.as_contract(&contract_id, || get_creator_nonce(&env, &creator));
+        assert_eq!(
+            nonce_after,
+            nonce_before + 1,
+            "seq={seq}: nonce did not increment by exactly 1"
+        );
+    }
+}
+
+// ── R5: update_sale_terms preserves immutable fields ─────────────────────
+#[test]
+fn property_r5_update_sale_terms_does_not_change_immutable_fields() {
+    let env = Env::default();
+    let (_, client, admin) = install_contract(&env);
+    env.mock_all_auths();
+
+    sweep(|seed| {
+        let creator = Address::generate(&env);
+        let quotes = default_quotes(&env, &client, &admin);
+        let payouts = valid_payout_pair(&env, 6_000);
+        let orig_hash = bytes32(&env, seed);
+        let orig_rights = bytes32(&env, seed.wrapping_add(77));
+
+        let material_id = client.register_material(
+            &creator,
+            &metadata_uri(&env),
+            &orig_hash,
+            &orig_rights,
+            &quotes,
+            &payouts,
+        );
+
+        let before = client.get_material(&material_id);
+        let new_quotes = replacement_quotes(&env, &client, &admin);
+        let new_payouts = replacement_payout_shares(&env);
+        client.update_sale_terms(&material_id, &new_quotes, &new_payouts);
+        let after = client.get_material(&material_id);
+
+        assert_eq!(after.creator, before.creator, "seed={seed}: creator changed");
+        assert_eq!(after.metadata_hash, before.metadata_hash, "seed={seed}: metadata_hash changed");
+        assert_eq!(after.rights_hash, before.rights_hash, "seed={seed}: rights_hash changed");
+        assert_eq!(after.created_ledger, before.created_ledger, "seed={seed}: created_ledger changed");
+        assert_eq!(after.metadata_uri, before.metadata_uri, "seed={seed}: metadata_uri changed");
+    });
+}
+
+// ── R6: double-toggle returns to original pause state ─────────────────────
+#[test]
+fn property_r6_double_toggle_is_identity() {
+    let env = Env::default();
+    let (_, client, admin) = install_contract(&env);
+    env.mock_all_auths();
+
+    // Register one material and toggle it an even number of times; each pair
+    // of toggles must leave the state unchanged.
+    let creator = Address::generate(&env);
+    let quotes = default_quotes(&env, &client, &admin);
+    let payouts = valid_payout_pair(&env, 7_000);
+    let material_id = client.register_material(
+        &creator,
+        &metadata_uri(&env),
+        &bytes32(&env, 10),
+        &bytes32(&env, 11),
+        &quotes,
+        &payouts,
+    );
+
+    sweep(|seed| {
+        // Even seeds: start from current state, toggle twice.
+        let before = client.is_material_paused(&material_id);
+        if seed % 2 == 0 {
+            client.toggle_material_paused(&creator, &material_id);
+            client.toggle_material_paused(&creator, &material_id);
+            let after = client.is_material_paused(&material_id);
+            assert_eq!(
+                after, before,
+                "seed={seed}: double-toggle changed paused state from {before} to {after}"
+            );
+        }
+    });
+}
+
+// ── R7: archiving is idempotent ───────────────────────────────────────────
+#[test]
+fn property_r7_archiving_is_idempotent() {
+    let env = Env::default();
+    let (_, client, admin) = install_contract(&env);
+    env.mock_all_auths();
+
+    let creator = Address::generate(&env);
+    let quotes = default_quotes(&env, &client, &admin);
+    let payouts = valid_payout_pair(&env, 5_000);
+    let material_id = client.register_material(
+        &creator,
+        &metadata_uri(&env),
+        &bytes32(&env, 20),
+        &bytes32(&env, 21),
+        &quotes,
+        &payouts,
+    );
+
+    // First archive
+    client.set_material_status(&creator, &material_id, &MaterialStatus::Archived);
+    assert_eq!(client.get_material(&material_id).status, MaterialStatus::Archived);
+
+    // Second archive — must succeed without error and status remains Archived.
+    client.set_material_status(&creator, &material_id, &MaterialStatus::Archived);
+    assert_eq!(client.get_material(&material_id).status, MaterialStatus::Archived,
+        "second archive call changed the status");
+}
+
+// ── R8: quote lookup returns registered amount verbatim ───────────────────
+#[test]
+fn property_r8_quote_lookup_returns_exact_registered_amount() {
+    let env = Env::default();
+    let (_, client, admin) = install_contract(&env);
+    env.mock_all_auths();
+
+    sweep(|seed| {
+        let creator = Address::generate(&env);
+        let asset = Address::generate(&env);
+        // Use amount derived from seed to cover a wide value range.
+        let amount: i128 = 1 + seed as i128 * 100_000;
+        client.set_asset_allowed(&admin, &asset, &AssetKind::Token, &true);
+        let quotes = soroban_sdk::vec![&env, AssetQuote { asset: asset.clone(), amount }];
+        let payouts = valid_payout_pair(&env, 5_000);
+
+        let material_id = client.register_material(
+            &creator,
+            &metadata_uri(&env),
+            &bytes32(&env, seed),
+            &bytes32(&env, seed.wrapping_add(3)),
+            &quotes,
+            &payouts,
+        );
+
+        let found = client.get_quote(&material_id, &asset)
+            .expect("quote not found after registration");
+        assert_eq!(
+            found.amount, amount,
+            "seed={seed}: quote amount {amount} was mutated to {}", found.amount
+        );
+    });
+}
+
+// ── R9: disabling an asset blocks registration ────────────────────────────
+#[test]
+fn property_r9_disabled_asset_always_blocks_registration() {
+    let env = Env::default();
+    let (_, client, admin) = install_contract(&env);
+    env.mock_all_auths();
+
+    sweep(|seed| {
+        let creator = Address::generate(&env);
+        let asset = Address::generate(&env);
+        // First enable, then immediately disable.
+        client.set_asset_allowed(&admin, &asset, &AssetKind::Token, &true);
+        client.set_asset_allowed(&admin, &asset, &AssetKind::Token, &false);
+
+        let bad_quotes = soroban_sdk::vec![
+            &env,
+            AssetQuote { asset: asset.clone(), amount: 1 + seed as i128 * 1_000 },
+        ];
+        let payouts = valid_payout_pair(&env, 5_000);
+
+        let result = client.try_register_material(
+            &creator,
+            &metadata_uri(&env),
+            &bytes32(&env, seed),
+            &bytes32(&env, seed.wrapping_add(200)),
+            &bad_quotes,
+            &payouts,
+        );
+        assert_eq!(
+            result,
+            Err(Ok(RegistryError::UnapprovedAsset)),
+            "seed={seed}: expected UnapprovedAsset, got {result:?}"
+        );
+    });
+}
+
+// ── R10: sale-terms version increments by exactly 1 per update ───────────
+#[test]
+fn property_r10_sale_terms_version_increments_by_one() {
+    let env = Env::default();
+    let (_, client, admin) = install_contract(&env);
+    env.mock_all_auths();
+
+    let creator = Address::generate(&env);
+    let quotes = default_quotes(&env, &client, &admin);
+    let payouts = valid_payout_pair(&env, 5_000);
+    let material_id = client.register_material(
+        &creator,
+        &metadata_uri(&env),
+        &bytes32(&env, 50),
+        &bytes32(&env, 51),
+        &quotes,
+        &payouts,
+    );
+
+    let mut expected_version: u32 = 1; // starts at 1 after registration
+    for _ in 0..8u8 {
+        let before = client.get_sale_terms_version(&material_id);
+        assert_eq!(before, expected_version, "version before update mismatch");
+
+        let new_quotes = replacement_quotes(&env, &client, &admin);
+        let new_payouts = replacement_payout_shares(&env);
+        client.update_sale_terms(&material_id, &new_quotes, &new_payouts);
+        expected_version += 1;
+
+        let after = client.get_sale_terms_version(&material_id);
+        assert_eq!(
+            after, expected_version,
+            "version after update should be {expected_version}, got {after}"
+        );
+    }
+}

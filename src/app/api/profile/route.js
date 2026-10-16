@@ -10,6 +10,7 @@ import {
   normalizeWalletAddress,
   validateProfilePayload,
   validatePayoutSettingsPayload,
+  validateOptionalUrl,
 } from "@/lib/api/validation";
 import { getUserFromCookie, sanitizeString } from "@/lib/api/auth";
 import { verifySessionWalletAddress } from "@/lib/auth/sessionVerification";
@@ -148,15 +149,15 @@ export async function PATCH(request) {
         }
 
         if (profileData.twitterUrl && typeof profileData.twitterUrl === 'string') {
-          updateFields.twitterUrl = sanitizeString(profileData.twitterUrl, { maxLength: 256 });
+          updateFields.twitterUrl = validateOptionalUrl(profileData.twitterUrl, "twitterUrl", { maxLength: 256 });
         }
 
         if (profileData.githubUrl && typeof profileData.githubUrl === 'string') {
-          updateFields.githubUrl = sanitizeString(profileData.githubUrl, { maxLength: 256 });
+          updateFields.githubUrl = validateOptionalUrl(profileData.githubUrl, "githubUrl", { maxLength: 256 });
         }
 
         if (profileData.websiteUrl && typeof profileData.websiteUrl === 'string') {
-          updateFields.websiteUrl = sanitizeString(profileData.websiteUrl, { maxLength: 256 });
+          updateFields.websiteUrl = validateOptionalUrl(profileData.websiteUrl, "websiteUrl", { maxLength: 256 });
         }
 
         if (profileData.coverPhoto && typeof profileData.coverPhoto === 'string') {

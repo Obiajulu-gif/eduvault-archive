@@ -10,6 +10,7 @@ import {
 } from '@/lib/stellar/refundService';
 import { deriveRefundTerms } from './refundPolicy';
 import { recordRefundAuditEvent } from './refundAudit';
+import { notifyWalletRecipient } from '@/lib/notifications/notifications';
 import logger from '@/lib/logger';
 
 /**
@@ -147,6 +148,18 @@ export async function requestRefund({ db, purchaseId, buyerAddress, actor, reaso
     reason,
   });
 
+  // #776: tell the buyer their claim was received. Dedupe key is scoped to the
+  // claim, so a retried request (same purchase) never notifies twice. Gated
+  // behind the critical-lifecycle flag; failures never block the refund.
+  notifyWalletRecipient(db, {
+    walletAddress: purchase.buyerAddress,
+    type: 'refund_requested',
+    dedupeKey: `refund:requested:${refundId}`,
+    title: 'Refund requested',
+    message: `Your refund claim for this purchase was received and is awaiting review.`,
+    link: '/dashboard/purchases',
+  }).catch((e) => logger.warn({ err: e?.message, refundId: String(refundId) }, 'refund notification failed'));
+
   return { success: true, refund: { ...doc, _id: refundId }, alreadyExists: false };
 }
 
@@ -253,6 +266,18 @@ async function retryOrFail(db, refund, failureReason, detail, actor, fromStatuse
       newStatus: REFUND_STATUS.FAILED,
       reason: failureReason,
     });
+    // #776: the refund exhausted its retries — the buyer has to act (or wait
+    // for an admin retry), so this is exactly the recovery event that needs a
+    // notification. Dedupe key is scoped to the claim so the automatic-retry
+    // path can't notify more than once per failed attempt.
+    notifyWalletRecipient(db, {
+      walletAddress: refund.buyerAddress,
+      type: 'refund_failed',
+      dedupeKey: `refund:failed:${refund._id}`,
+      title: 'Refund needs attention',
+      message: `We couldn't complete your refund automatically (${failureReason}). Our team has been notified and will follow up.`,
+      link: '/dashboard/purchases',
+    }).catch((e) => logger.warn({ err: e?.message, refundId: String(refund._id) }, 'refund notification failed'));
     return { outcome: 'failed', refund: failed };
   }
 
@@ -449,6 +474,18 @@ export async function finalizeSettlement({
     });
     current = { ...current, entitlementRevoked: true };
   }
+
+  // #776: the money is back with the buyer — notify once per claim. The dedupe
+  // key makes this idempotent across the reconciliation retries that call
+  // finalizeSettlement repeatedly for the same settled refund.
+  notifyWalletRecipient(db, {
+    walletAddress: current.buyerAddress,
+    type: 'refund_settled',
+    dedupeKey: `refund:settled:${refundId}`,
+    title: 'Refund completed',
+    message: `Your refund of ${current.amount} ${current.assetCode} was completed and your access to the material was revoked.`,
+    link: '/dashboard/purchases',
+  }).catch((e) => logger.warn({ err: e?.message, refundId: String(refundId) }, 'refund notification failed'));
 
   return { outcome: 'settled', refund: current };
 }

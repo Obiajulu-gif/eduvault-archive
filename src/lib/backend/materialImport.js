@@ -1,4 +1,6 @@
 import { sanitizeString, normalizeStringList } from "../api/validation.js";
+import { isSafeUrl } from "../api/safeUrl.js";
+import { sanitizeRichText } from "../api/contentSanitizer.js";
 import {
   normalizeSubject,
   normalizeCategory,
@@ -7,12 +9,35 @@ import {
 
 const REQUIRED_FIELDS = ["title", "storageKey"];
 const OPTIONAL_FIELDS = [
-  "description", "shortSummary", "price", "usageRights", "visibility",
+  "externalId", "description", "shortSummary", "price", "usageRights", "visibility",
   "coverImageUrl", "thumbnailUrl", "category", "subject", "level",
   "learningOutcomes", "tableOfContents", "sampleNotes",
 ];
 
 const SUPPORTED_FORMATS = ["csv", "json"];
+
+// #969: storageKeys are later rendered as download/source links, so any scheme
+// outside this list (javascript:, data:, file:, vbscript:, ...) is quarantined
+// instead of written. Bare CIDs and relative paths have no scheme and pass.
+const ALLOWED_STORAGE_SCHEMES = new Set(["ipfs", "https", "http"]);
+const SCHEME_PATTERN = /^([a-z][a-z0-9+.-]*):/i;
+
+/**
+ * Reasons a row must be held out of the write. Quarantined rows never block
+ * the rest of the batch and are never written; they are recorded in
+ * `import_quarantine` so the creator can see and correct them.
+ */
+export function detectQuarantineReasons(storageKey) {
+  const scheme = typeof storageKey === "string" ? storageKey.match(SCHEME_PATTERN) : null;
+  if (scheme && !ALLOWED_STORAGE_SCHEMES.has(scheme[1].toLowerCase())) {
+    return [{
+      code: "unsafe_storage_scheme",
+      field: "storageKey",
+      message: `storageKey scheme "${scheme[1]}:" is not allowed`,
+    }];
+  }
+  return [];
+}
 
 export class ImportValidationError extends Error {
   constructor(message, details = {}) {
@@ -61,6 +86,15 @@ export function validateImportRow(row, index) {
   const storageKey = sanitizeString(row?.storageKey || row?.fileUrl, { maxLength: 2048 });
   if (!storageKey) {
     errors.push({ field: "storageKey", message: "storageKey or fileUrl is required" });
+  }
+
+  const externalId = sanitizeString(row?.externalId, { maxLength: 128 }) || null;
+
+  for (const field of ["coverImageUrl", "thumbnailUrl"]) {
+    const url = sanitizeString(row?.[field], { maxLength: 2048 });
+    if (url && !isSafeUrl(url)) {
+      errors.push({ field, message: `Unsafe or invalid URL for ${field}` });
+    }
   }
 
   let price = 0;
@@ -113,9 +147,11 @@ export function validateImportRow(row, index) {
 
   return {
     valid: true,
+    quarantineReasons: detectQuarantineReasons(storageKey),
     data: {
+      externalId,
       title,
-      description: sanitizeString(row?.description, { maxLength: 5000 }) || "",
+      description: sanitizeRichText(sanitizeString(row?.description, { maxLength: 5000 })),
       shortSummary: sanitizeString(row?.shortSummary, { maxLength: 280 }) || "",
       price,
       usageRights: sanitizeString(row?.usageRights, { maxLength: 1000 }) || "",
@@ -154,5 +190,103 @@ export function validateImportPayload(body) {
     invalid: invalidRows.length,
     validRecords,
     invalidRows,
+    results,
   };
+}
+
+// Fields an import may overwrite on a material it already created. Ownership,
+// quarantine, and on-chain fields are never touched by a re-import.
+const IMPORT_UPDATABLE_FIELDS = [
+  "title", "description", "shortSummary", "price", "usageRights", "visibility",
+  "coverImageUrl", "thumbnailUrl", "category", "subject", "level",
+  "learningOutcomes", "tableOfContents", "sampleNotes",
+];
+
+function changedFields(existing, record) {
+  return IMPORT_UPDATABLE_FIELDS.filter(
+    (field) => JSON.stringify(existing[field] ?? null) !== JSON.stringify(record[field] ?? null)
+  );
+}
+
+/**
+ * Decide what each row would do, without touching the database. `existing` is
+ * the caller's materials matching the batch's externalIds or storageKeys.
+ *
+ *   create — new material
+ *   update — externalId matches an existing material and fields differ
+ *   skip   — externalId matches with no changes, or storageKey already imported
+ *   error  — failed validation, or duplicates an earlier row in the same batch
+ *   quarantine — passed validation but carries an unsafe storageKey (#969);
+ *            held out of the write and never blocks the rest of the batch
+ *
+ * Rows with an externalId are idempotent: re-running the same file yields all
+ * skips. Rows without one can't be matched for updates, so a repeated
+ * storageKey is skipped rather than creating a second copy.
+ */
+export function planImport(validation, existing = []) {
+  const byExternalId = new Map();
+  const byStorageKey = new Map();
+  for (const doc of existing) {
+    if (doc.externalId) byExternalId.set(doc.externalId, doc);
+    if (doc.storageKey) byStorageKey.set(doc.storageKey, doc);
+  }
+
+  const seenExternalIds = new Map();
+  const seenStorageKeys = new Map();
+  const rows = [];
+
+  for (const result of validation.results) {
+    if (!result.valid) {
+      rows.push({ row: result.row, action: "error", errors: result.errors });
+      continue;
+    }
+
+    const record = result.data;
+    if (result.quarantineReasons?.length > 0) {
+      rows.push({ row: result.row, action: "quarantine", externalId: record.externalId, reasons: result.quarantineReasons, record });
+      continue;
+    }
+    const duplicateOf = (record.externalId && seenExternalIds.get(record.externalId))
+      || seenStorageKeys.get(record.storageKey);
+    if (duplicateOf) {
+      rows.push({
+        row: result.row,
+        action: "error",
+        errors: [{ field: record.externalId ? "externalId" : "storageKey", message: `Duplicate of row ${duplicateOf} in this batch` }],
+      });
+      continue;
+    }
+    if (record.externalId) seenExternalIds.set(record.externalId, result.row);
+    seenStorageKeys.set(record.storageKey, result.row);
+
+    const match = record.externalId ? byExternalId.get(record.externalId) : null;
+    if (match) {
+      const fields = changedFields(match, record);
+      rows.push(fields.length > 0
+        ? { row: result.row, action: "update", externalId: record.externalId, materialId: String(match._id), fields, record, previous: match }
+        : { row: result.row, action: "skip", externalId: record.externalId, materialId: String(match._id), reason: "No changes" });
+      continue;
+    }
+
+    const sameFile = byStorageKey.get(record.storageKey);
+    if (sameFile) {
+      rows.push({ row: result.row, action: "skip", externalId: record.externalId, materialId: String(sameFile._id), reason: "storageKey already imported" });
+      continue;
+    }
+
+    rows.push({ row: result.row, action: "create", externalId: record.externalId, record });
+  }
+
+  const summary = { create: 0, update: 0, skip: 0, error: 0, quarantine: 0 };
+  for (const r of rows) summary[r.action] += 1;
+  return { summary, rows };
+}
+
+/**
+ * Plan rows without the internal `record`/`previous` payloads, for API responses.
+ * Quarantine rows keep their `reasons` and `externalId`, so the creator can see
+ * why a row was held back.
+ */
+export function publicPlanRows(rows) {
+  return rows.map(({ record: _record, previous: _previous, ...rest }) => rest);
 }

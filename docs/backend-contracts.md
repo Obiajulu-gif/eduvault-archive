@@ -1,8 +1,20 @@
 # Backend Schemas and API Contracts
 
+
 This document defines the canonical backend shapes for EduVault contributors. MongoDB keeps application metadata and query models, while Soroban and Stellar events remain the source of truth for payment and entitlement state once the Stellar milestone is active.
 
-The canonical Soroban storage boundary, normalized event names, and entitlement query rules are defined in [`docs/soroban-contract-architecture.md`](soroban-contract-architecture.md).
+The canonical Soroban storage boundary, normalized event names, and entitlement query rules are defined in [`docs/soroban-contract-architecture.md](soroban-contract-architecture.md).
+
+The **Stable error-code taxonomy** for all failure paths (purchase, refund,
+entitlement, download, storage, indexer, webhook, auth, contract, and input
+validation) is defined in [`docs/API_REFERENCE.md](API_REFERENCE.md).
+Clients and frontends must use these codes rather than parsing prose error
+messages. Webhook signature verification and retry semantics are described
+in [`docs/webhook-signatures.md`](webhook-signatures.md).
+
+Canonical serialization and strict input normalization rules for signed,
+hashed, compared, or settled payloads are defined in
+[`docs/canonical-serialization.md`](canonical-serialization.md).
 
 ## Collections
 
@@ -14,7 +26,7 @@ Required fields:
 
 - `fullName`: display name.
 - `email`: lowercase unique email address.
-- `createdAt` / `updatedAt`: timestamps.
+- `createdAt / updatedAt`: timestamps.
 
 Optional fields:
 
@@ -42,7 +54,7 @@ Required fields:
 
 - `userAddress`: creator wallet address.
 - `title`, `storageKey` (or legacy `fileUrl`), `visibility`, `price`.
-- `createdAt` / `updatedAt`.
+- `createdAt / updatedAt`: timestamps.
 
 Optional fields:
 
@@ -71,7 +83,7 @@ Derived cache of settled on-chain purchase events.
 Required fields:
 
 - `materialId`, `buyerAddress`, `status`.
-- `createdAt` / `updatedAt`.
+- `createdAt / updatedAt`: timestamps.
 
 Optional fields:
 
@@ -90,7 +102,7 @@ Derived query cache used by API and frontend flows to check access quickly.
 Required fields:
 
 - `materialId`, `buyerAddress`, `active`, `source`.
-- `createdAt` / `updatedAt`.
+- `createdAt / updatedAt`: timestamps.
 
 Indexes:
 
@@ -104,7 +116,7 @@ Durable indexer checkpoint state.
 Required fields:
 
 - `_id`: source key, for example `stellar:events`.
-- `source`, `cursor`, `lastLedger`, `updatedAt`.
+- `source`, `cursor`, lastLedge`, `updatedAt`.
 
 ### `sync_events`
 
@@ -114,6 +126,80 @@ Required fields:
 
 - `_id`: stable event id.
 - `type`, `source`, `raw`, `createdAt`.
+
+### `search_index`
+
+Permission-aware search and discovery index. One document per indexable
+record (material), keyed by the source record id and a normalized visibility
+scope. The index is derived from `materials` and `entitlement_cache` and must
+never be treated as the source of truth for access control.
+
+{
+  "notifications": [
+    { "id": "66f…", "type": "import_partial_failure", "severity": "error", "title": "Import partially failed",
+      "message": "1 created, 0 updated, 0 skipped, 1 failed.", "link": "/dashboard/my-materials",
+      "read": false, "createdAt": "2026-09-26T09:00:00.000Z" }
+  ],
+  "unreadCount": 1
+}
+
+- `_id`: stable index key, for example `material:<materialId>`.
+- `sourceType`: always `material` today; reserved for future indexable types.
+- `sourceId`: the `materials` document `id` or `materialId`.
+- `visibility`: normalized visibility scope: `public`, `unlisted`, or `private`.
+- `authorAddress`: normalized lowercase creator wallet address.
+- `indexedAt: timestamp of the last index write.
+- `updatedAt`: timestamp of the last index mutation.
+
+Optional fields:
+
+- `title`, `shortSummary`, `description`, `tags`, `learningOutcomes`,
+  `tableOfContents`, `coverImageUrl`, `thumbnailUrl`: denormalized copy of the
+  searchable material fields.
+- `price`, `usageRights`, `updatedAt`: copied for display and sorting.
+- `entitlementAddresses`: sorted array of lowercase buyer addresses with an
+  `active` entitlement. Present only for non-`public` visibility scopes.
+- `stale`: boolean flag set by the repair job when the index entry no longer
+  matches the source record or its effective visibility.
+- `staleReason`: machine-readable reason code such as `missing_source`,
+  `visibility_changed`, `orphaned_entitlement`, or `missing_index`.
+
+Indexes:
+
+- unique `_id`.
+- `{ visibility: 1, updatedAt: -1 }` for public discovery reads.
+- `{ authorAddress: 1, updatedAt: -1 }` for creator-scoped reads.
+- `{ entitlementAddresses: 1, updatedAt: -1 }` for permission-filtered reads.
+- `{ stale: 1, updatedAt: -1 }` for the repair job.
+
+Visibility constraints:
+
+- `public`: visible to any authenticated or anonymous search caller.
+- `unlisted`: excluded from discovery listings but returned to the author
+  and to callers with an active entitlement.
+- `private`: returned only to the author and to callers with an active
+  entitlement.
+- A caller must never receive a private or unlisted record without either
+  authorship or an active entitlement. The query layer applies this filter before
+  results leave the process.
+
+### `search_index_repair`_log`
+
+Audit trail for the stale-index repair job.
+
+`signedXdr` and any other signed or settled payloads are canonicalized before
+verification and settlement. Non-canonical input is normalized or rejected
+consistently, and legacy records are handled via the compatibility rules in
+[`docs/canonical-serialization.md`](canonical-serialization.md).
+
+### `GET /api/entitlements`
+
+Required fields:
+
+- `_id`: stable run id.
+- `startedAt` / `completedAt`: timestamps.
+- `scanned`, `repaired`, `removed`, `skipped`: counters.
+- `repairs`: array of `{ indexId, reason, action }` detailing each mutation.
 
 ## API Contracts
 
@@ -130,132 +216,25 @@ Response:
 
 - `success`, `user`, `emailSent`.
 
-### `PATCH /api/profile`
+{
+  "error": {
+    "code": "EVT_PURCHASE_007",
+    "message": "Human-readable description (informational only).",
+    "retryable": true,
+    "supportAction": "refresh_quote"
+  }
+}
 
-Request:
+The complete taxonomy of stable codes is in
+[`docs/API_REFERENCE.md`](API_REFERENCE.md). The quick-reference mapping
+below summarises the namespace-to-subsystem relationship:
 
-- `displayName`, `bio`, `avatarUrl`, `institution`, `country`, `twitterUrl`, `githubUrl`, `websiteUrl`: optional profile fields.
-- `payoutWalletAddress`: optional wallet address for settlement routing.
-- `preferredPayoutCurrency`: optional uppercase currency code such as `XLM`, `USD`, or `USDC`.
-- `payoutNotes`: optional plain-text payout notes.
-
-Response:
-
-- `success`, `user`.
-
-### `GET /api/profile?address=...`
-
-Request:
-
-- `address`: required wallet address.
-
-Response:
-
-- `exists`, `user`.
-
-### `POST /api/materials`
-
-Request:
-
-- `title`: required string.
-- `storageKey`: required string for new uploads.
-- `fileUrl`: accepted as a legacy alias for `storageKey`.
-- `price`: optional non-negative number.
-- `visibility`: `private`, `public`, or `unlisted`.
-- `description`, `usageRights`, `thumbnailUrl`: optional strings.
-- `coverImageUrl`, `shortSummary`, `learningOutcomes`, `tableOfContents`, `sampleNotes`: optional preview metadata fields.
-
-Response:
-
-- inserted material record with `id`.
-
-### `POST /api/materials/import`
-
-Request:
-
-- `format`: `json` or `csv`.
-- `dryRun`: boolean flag. When `true`, the API validates without saving.
-- `records` or `items`: array of material records.
-
-Response:
-
-- `dryRun`, `total`, `valid`, `invalid`, `invalidRows`.
-- `imported` when the import is committed.
-
-### `GET /api/materials`
-
-Response:
-
-- authenticated creator materials sorted newest first.
-
-### `GET /api/purchase`
-
-Response:
-
-- current purchase history for the authenticated account.
-
-### `POST /api/purchase`
-
-Request:
-
-- `materialId`: required material identifier.
-- `signedXdr`: optional signed transaction payload.
-- `email`: optional buyer email used for record enrichment.
-
-Response:
-
-- persisted purchase record or an existing confirmed purchase when the buyer already owns the item.
-
-### `GET /api/entitlements`
-
-Response:
-
-- list of active entitlement records for the authenticated account.
-
-### `GET /api/market-materials`
-
-Request:
-
-- `page`: optional positive number.
-- `pageSize`: optional positive number capped at 50.
-
-Response:
-
-- `{ items, page, pageSize, total, totalPages }`.
-
-### `GET /api/creator/payouts`
-
-Aggregates and reports the authenticated creator's earnings from sales, distinct
-from `GET /api/creator/analytics` which covers broader dashboard metrics.
-
-Request:
-
-- `from`, `to`: optional ISO date strings bounding the reporting window (default:
-  trailing 30 days). Rejected with `400` when unparsable, when `from` is after
-  `to`, or when the range exceeds 366 days.
-
-Response:
-
-- `creatorAddress`, `dateRange: { from, to }`.
-- `earnings`: `grossRevenue`, `salesCount` (all-time, completed purchases only),
-  `windowRevenue`, `windowSalesCount` (within `dateRange`), `pendingRevenue`,
-  `pendingCount`, `refundedAmount`, `refundedCount`.
-- `payouts`: `totalPaidOut`, `totalPending`, `lastPayoutAt` derived from the
-  `payouts` collection.
-- `outstandingBalance`: `max(grossRevenue - totalPaidOut, 0)`.
-- `byMaterial`: per-material `{ materialId, title, salesCount, grossRevenue }`,
-  sorted by revenue descending.
-
-## Schema Change Rules
-
-- Add fields as optional first, then backfill, then make route-level validation stricter.
-- Keep on-chain fields separate from off-chain metadata.
-- Treat `purchases` and `entitlement_cache` as derived from chain events.
-- Do not delete or repurpose fields without a migration note.
-
-## API Hardening Expectations
-
-- Validate and sanitize all route input before persistence or logs.
-- Apply rate limits to public and sensitive route families.
-- Emit structured audit logs for validation failures, rate-limit blocks, upload failures, auth failures, purchase sync, and indexer anomalies.
-- Add focused tests for validation, rate limiting, and indexer idempotency when changing backend behavior.
+| Namespace prefix    | Subsystem                         |
+| ------------------- | --------------------------------- |
+| `EVT_PURCHASE_`     | Purchase flow                     |
+| `EVT_ENTITLEMENT_`  | Entitlement / access-check        |
+| `EVT_DOWNLOAD_`      | Download capability tokens        |
+| `EVT_REFUND_`        | Refund flow                       |
+| `ST_STORAGE_`        | IPFS / Pinata storage             |
+| `EVT_INDEXER_`       | Stellar event indexer             |
+| `EVT_WEBHOOK_`       | Webhook delivery                    |

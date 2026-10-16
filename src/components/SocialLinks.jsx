@@ -1,6 +1,7 @@
 "use client";
 
 import { FaTwitter, FaGithub, FaGlobe, FaDiscord, FaTelegram } from "react-icons/fa";
+import { safeExternalLinkProps } from "@/lib/api/safeUrl";
 
 const SOCIAL_CONFIG = [
   { key: "twitterUrl", icon: FaTwitter, label: "Twitter", pattern: /^https?:\/\/(www\.)?(twitter\.com|x\.com)\/.+/ },
@@ -12,7 +13,7 @@ const SOCIAL_CONFIG = [
 
 export function isValidSocialUrl(url, pattern) {
   if (!url || !url.trim()) return false;
-  return pattern.test(url.trim());
+  return pattern.test(url.trim()) && safeExternalLinkProps(url) !== null;
 }
 
 export default function SocialLinks({ profile, className = "" }) {
@@ -27,10 +28,8 @@ export default function SocialLinks({ profile, className = "" }) {
       {links.map(({ key, icon: Icon, label }) => (
         <a
           key={key}
-          href={profile[key]}
-          target="_blank"
-          rel="noopener noreferrer"
-          title={label}
+          {...safeExternalLinkProps(profile[key])}
+          title={`${label}: ${new URL(profile[key].trim()).hostname}`}
           className="text-gray-500 hover:text-stellar-blue transition-colors"
         >
           <Icon size={18} />
