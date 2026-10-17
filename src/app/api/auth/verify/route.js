@@ -59,7 +59,7 @@ export async function POST(request) {
           });
           return errorResponse({
             status: 400,
-            detail: normalized.reason,
+            detail: "The signed wallet request could not be validated.",
             instance: "/api/auth/verify",
           });
         }
@@ -84,7 +84,7 @@ export async function POST(request) {
           });
           return errorResponse({
             status: 401,
-            detail: result.reason,
+            detail: "The wallet signature could not be verified.",
             instance: "/api/auth/verify",
           });
         }

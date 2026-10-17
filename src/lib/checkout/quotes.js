@@ -1,12 +1,14 @@
 import crypto from 'node:crypto'
 import { ObjectId } from 'mongodb'
+import { AppError } from '../errors/AppError.js'
 
 export const QUOTE_TTL_MS = 10 * 60 * 1000
 
 export async function createCheckoutQuote(db, { materialId, buyerAddress, now = new Date(), ttlMs = QUOTE_TTL_MS }) {
   const query = ObjectId.isValid(materialId) ? { _id: new ObjectId(materialId) } : { materialId }
   const material = await db.collection('materials').findOne(query)
-  if (!material || material.isDeleted || material.archived || material.visibility !== 'public') throw new Error('Material is not available for checkout.')
+  if (material?.archived) throw new AppError('MATERIAL_ARCHIVED')
+  if (!material || material.isDeleted || material.visibility !== 'public') throw new AppError('NOT_FOUND')
   const quote = {
     quoteId: crypto.randomUUID(), materialId: String(materialId), materialDocumentId: String(material._id ?? material.materialId), buyerAddress,
     terms: { price: material.price, asset: material.asset || material.assetCode || 'XLM', creatorAddress: material.userAddress || null, materialVersion: material.version || 1 },

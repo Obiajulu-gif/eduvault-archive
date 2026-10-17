@@ -27,8 +27,10 @@ export async function POST(request, context) {
         auditLog({ event: "auth_failed", route: "creator/materials/[id]/archive", method: "POST", status: authorization.status });
         return errorResponse({
           status: authorization.status,
+          code: authorization.status === 401 ? "AUTH_UNAUTHENTICATED" : "AUTH_FORBIDDEN",
           detail: authorization.status === 401 ? "Authentication required." : "Creator access required.",
           instance: "/api/creator/materials/[id]/archive",
+          request,
         });
       }
       const user = authorization.user;
@@ -40,8 +42,10 @@ export async function POST(request, context) {
       if (!id) {
         return errorResponse({
           status: 400,
+          code: "VALIDATION_FIELD",
           detail: "Missing material ID.",
           instance: "/api/creator/materials/[id]/archive",
+          request,
         });
       }
 
@@ -53,8 +57,10 @@ export async function POST(request, context) {
         if (!material) {
           return errorResponse({
             status: 404,
+            code: "NOT_FOUND",
             detail: "Material not found.",
             instance: `/api/creator/materials/${id}/archive`,
+            request,
           });
         }
 
@@ -75,8 +81,10 @@ export async function POST(request, context) {
           });
           return errorResponse({
             status: 403,
+            code: "AUTH_FORBIDDEN",
             detail: "Forbidden: only the material owner can archive or restore this resource.",
             instance: `/api/creator/materials/${id}/archive`,
+            request,
           });
         }
 
@@ -142,8 +150,10 @@ export async function POST(request, context) {
         });
         return errorResponse({
           status: 500,
+          code: "INTERNAL",
           detail: "Failed to update material archive state.",
           instance: `/api/creator/materials/${id}/archive`,
+          request,
         });
       }
     }

@@ -23,13 +23,77 @@ components:
 
   schemas:
     Error:
+      description: Problem Details response schema (legacy name retained for references).
+      allOf:
+        - $ref: "#/components/schemas/ProblemDetails"
+
+    ProblemDetails:
       type: object
+      required: [type, title, status, detail, instance, code, retryable, recovery, correlationId]
       properties:
+        type:
+          type: string
+          format: uri
+        title:
+          type: string
+        status:
+          type: integer
+          minimum: 400
+          maximum: 599
+        detail:
+          type: string
+          description: Safe occurrence summary or remediation guidance. Never includes internal exception details.
+        instance:
+          type: string
+          description: Request path without query parameters.
+        code:
+          type: string
+          enum:
+            - VALIDATION_FAILED
+            - VALIDATION_FIELD
+            - VALIDATION_FILE_TYPE
+            - VALIDATION_FILE_SIZE
+            - VALIDATION_UPLOAD_TOO_LARGE
+            - VALIDATION_RANGE_TOO_LARGE
+            - AUTH_UNAUTHENTICATED
+            - AUTH_SESSION_EXPIRED
+            - AUTH_FORBIDDEN
+            - AUTH_SUSPENDED
+            - ENTITLEMENT_REQUIRED
+            - ENTITLEMENT_PURCHASE_REQUIRED
+            - ENTITLEMENT_UNAVAILABLE
+            - MATERIAL_ARCHIVED
+            - NOT_FOUND
+            - CONFLICT_DUPLICATE
+            - CONFLICT_IDEMPOTENCY_KEY
+            - CONFLICT_STATE
+            - SETTLEMENT_QUOTE_EXPIRED
+            - SETTLEMENT_INSUFFICIENT_FUNDS
+            - SETTLEMENT_TX_FAILED
+            - SETTLEMENT_TIMEOUT
+            - SETTLEMENT_UNAVAILABLE
+            - PAYOUT_PROFILE_INCOMPLETE
+            - PAYOUT_UNAVAILABLE
+            - STORAGE_UPLOAD_FAILED
+            - STORAGE_NOT_FOUND
+            - STORAGE_UNAVAILABLE
+            - STORAGE_QUARANTINED
+            - RATE_LIMITED
+            - INTERNAL
+        retryable:
+          type: boolean
+        recovery:
+          type: string
+        correlationId:
+          type: string
         error:
           type: string
-        details:
-          type: object
-      required: [error]
+          deprecated: true
+          description: Compatibility alias for older clients; migrate to code and detail.
+        retryAfter:
+          type: integer
+          minimum: 0
+          description: Present on rate-limit responses.
 
     Material:
       type: object
@@ -134,6 +198,32 @@ components:
           type: string
           format: date-time
 
+  responses:
+    Unauthorized:
+      description: Not authenticated
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/ProblemDetails"
+    BadRequest:
+      description: Validation error
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/ProblemDetails"
+    RateLimited:
+      description: Too many requests
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/ProblemDetails"
+    Problem:
+      description: RFC 9457 Problem Details error with a stable EduVault code
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/ProblemDetails"
+
 security:
   - cookieAuth: []
 
@@ -158,15 +248,15 @@ paths:
         "401":
           description: Not authenticated
           content:
-            application/json:
+            application/problem+json:
               schema:
-                $ref: "#/components/schemas/Error"
+                $ref: "#/components/schemas/ProblemDetails"
         "429":
           description: Rate limited
           content:
-            application/json:
+            application/problem+json:
               schema:
-                $ref: "#/components/schemas/Error"
+                $ref: "#/components/schemas/ProblemDetails"
 
     post:
       summary: Create a new material listing
@@ -188,9 +278,9 @@ paths:
         "400":
           description: Validation error
           content:
-            application/json:
+            application/problem+json:
               schema:
-                $ref: "#/components/schemas/Error"
+                $ref: "#/components/schemas/ProblemDetails"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "429":
@@ -308,6 +398,12 @@ paths:
           $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/Problem"
+        "410":
+          $ref: "#/components/responses/Problem"
+        "503":
+          $ref: "#/components/responses/Problem"
 
   /api/transactions/history:
     get:
@@ -359,20 +455,166 @@ paths:
   # ---------------------------------------------------------------------------
   /api/entitlements:
     get:
-      summary: List materials the authenticated user is entitled to download
-      operationId: listEntitlements
+      summary: Verify access for a buyer and material pair
+      operationId: verifyEntitlement
       tags: [Entitlements]
+      security: []
+      parameters:
+        - name: buyerAddress
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: materialId
+          in: query
+          required: true
+          schema:
+            type: string
       responses:
         "200":
-          description: List of entitlements
+          description: Entitlement decision
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: "#/components/schemas/Entitlement"
+                type: object
+                required: [hasAccess, source]
+                properties:
+                  hasAccess:
+                    type: boolean
+                  source:
+                    type: string
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "503":
+          $ref: "#/components/responses/Problem"
+
+  /api/download:
+    get:
+      summary: Issue a short-lived capability for entitled material
+      operationId: issueDownloadCapability
+      tags: [Entitlements]
+      parameters:
+        - name: materialId
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: buyerAddress
+          in: query
+          schema:
+            type: string
+        - name: range
+          in: query
+          schema:
+            type: string
+            example: "0-1023"
+      responses:
+        "200":
+          description: Capability URL and non-secret capability metadata
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok, materialId, fileUrl, capability]
+                properties:
+                  ok:
+                    type: boolean
+                  materialId:
+                    type: string
+                  fileUrl:
+                    type: string
+                    format: uri
+                  capability:
+                    type: object
+        "400":
+          $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "402":
+          $ref: "#/components/responses/Problem"
+        "403":
+          $ref: "#/components/responses/Problem"
+        "404":
+          $ref: "#/components/responses/Problem"
+        "413":
+          $ref: "#/components/responses/Problem"
+        "503":
+          $ref: "#/components/responses/Problem"
+
+  /api/creator/payouts:
+    get:
+      summary: Read creator earnings and payout summary
+      operationId: getCreatorPayoutSummary
+      tags: [Creator]
+      responses:
+        "200":
+          description: Creator earnings and payout summary
+          content:
+            application/json:
+              schema:
+                type: object
+        "400":
+          $ref: "#/components/responses/Problem"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Problem"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "503":
+          $ref: "#/components/responses/Problem"
+
+  /api/creator/materials/{id}/archive:
+    post:
+      summary: Archive or restore a creator-owned material
+      operationId: updateMaterialArchiveState
+      tags: [Creator]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                archived:
+                  type: boolean
+                action:
+                  type: string
+                  enum: [archive, restore]
+      responses:
+        "200":
+          description: Updated archive state
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [success, materialId, archived, archivedAt]
+                properties:
+                  success:
+                    type: boolean
+                  materialId:
+                    type: string
+                  archived:
+                    type: boolean
+                  archivedAt:
+                    type: [string, "null"]
+                    format: date-time
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Problem"
+        "404":
+          $ref: "#/components/responses/Problem"
+        "500":
+          $ref: "#/components/responses/Problem"
 
   # ---------------------------------------------------------------------------
   # User profile
@@ -420,23 +662,3 @@ paths:
           $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
-
-  responses:
-    Unauthorized:
-      description: Not authenticated
-      content:
-        application/json:
-          schema:
-            $ref: "#/components/schemas/Error"
-    BadRequest:
-      description: Validation error
-      content:
-        application/json:
-          schema:
-            $ref: "#/components/schemas/Error"
-    RateLimited:
-      description: Too many requests
-      content:
-        application/json:
-          schema:
-            $ref: "#/components/schemas/Error"

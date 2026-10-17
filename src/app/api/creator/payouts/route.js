@@ -3,6 +3,7 @@ import { getDb } from "@/lib/mongodb";
 import { requirePermission } from "@/lib/api/auth";
 import { withApiHardening } from "@/lib/api/hardening";
 import { validateDateRangeQuery } from "@/lib/api/validation";
+import { renderProblemResponse } from "@/lib/errors/renderErrorResponse.js";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -71,17 +72,21 @@ function emptyReport(creatorAddress, from, to) {
 export async function GET(request) {
   return withApiHardening(
     request,
-    { route: "creator-payouts", rateLimit: { limit: 60, windowMs: 60_000 } },
+    { route: "creator-payouts", rateLimit: { limit: 60, windowMs: 60_000 }, errorCode: "PAYOUT_UNAVAILABLE" },
     async () => {
       const authorization = await requirePermission(request, "creator:payouts:manage");
       if (!authorization.ok) {
-        return NextResponse.json({ error: "Forbidden" }, { status: authorization.status });
+        return renderProblemResponse(
+          authorization.status === 401 ? "AUTH_UNAUTHENTICATED" : "AUTH_FORBIDDEN",
+          request,
+          "Forbidden"
+        );
       }
       const user = authorization.user;
 
       const creatorAddress = user.walletAddress || user.address || user.id;
       if (!creatorAddress) {
-        return NextResponse.json({ error: "No wallet address on account" }, { status: 400 });
+        return renderProblemResponse("PAYOUT_PROFILE_INCOMPLETE", request, "No wallet address on account");
       }
 
       const url = new URL(request.url);

@@ -18,6 +18,17 @@ vi.mock('@/lib/api/auth', () => ({ getUserFromCookie: mockGetUserFromCookie }));
 vi.mock('@/lib/entitlement', () => ({ authorizeMaterialAccess: mockAuthorizeMaterialAccess }));
 vi.mock('@/lib/mongodb', () => ({ getDb: mockGetDb }));
 vi.mock('@/lib/downloads/accessLog', () => ({ recordDownloadAccess: mockRecordDownloadAccess }));
+vi.mock('@/lib/backend/analyticsEvents', () => ({
+  buildAnalyticsEvent: vi.fn(() => ({ eventType: 'download' })),
+  enqueueAnalyticsEvent: vi.fn(async () => {}),
+}));
+vi.mock('@/lib/storage/pinningService', async (importOriginal) => {
+  const actual = await importOriginal();
+  return {
+    ...actual,
+    resolveFromGateways: vi.fn(async (cid) => ({ url: `https://gateway.example/ipfs/${cid}` })),
+  };
+});
 
 const BUYER = 'gbuyer123';
 const MATERIAL_ID = 'material-1';
@@ -63,6 +74,8 @@ describe('GET /api/download (#675)', () => {
     mockGetUserFromCookie.mockResolvedValue(null);
     const res = await GET(makeRequest());
     expect(res.status).toBe(401);
+    expect(res.headers.get('content-type')).toBe('application/problem+json');
+    expect((await res.json()).code).toBe('AUTH_UNAUTHENTICATED');
   });
 
   it('returns 400 when materialId is missing', async () => {
@@ -86,6 +99,24 @@ describe('GET /api/download (#675)', () => {
     expect(entry.event).toBe('access_denied');
     expect(entry.denialReason).toBe('not_entitled');
     expect(entry.buyerAddress).toBe(BUYER);
+  });
+
+  it('returns safe structured entitlement errors without exposing verification internals', async () => {
+    mockAuthorizeMaterialAccess.mockResolvedValue({
+      allowed: false,
+      state: 'unavailable',
+      httpStatus: 503,
+      internalMessage: 'MongoDB connection string',
+    });
+
+    const res = await GET(makeRequest());
+    const body = await res.json();
+
+    expect(res.status).toBe(503);
+    expect(body.code).toBe('ENTITLEMENT_UNAVAILABLE');
+    expect(body.retryable).toBe(true);
+    expect(body.recovery).toMatch(/Do not repeat a payment/);
+    expect(JSON.stringify(body)).not.toContain('MongoDB connection string');
   });
 
   it('issues a verifiable, signed capability URL and logs the issuance', async () => {

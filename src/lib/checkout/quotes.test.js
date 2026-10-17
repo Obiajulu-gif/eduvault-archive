@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { consumeCheckoutQuote } from './quotes'
+import { consumeCheckoutQuote, createCheckoutQuote } from './quotes'
 
 describe('checkout quote concurrency', () => {
   it('lets exactly one concurrent confirmation consume a live price snapshot', async () => {
@@ -25,5 +25,17 @@ describe('checkout quote concurrency', () => {
     const expired = { quoteId: 'q1', expiresAt: new Date('2020-01-01') }
     const db = { collection: () => ({ findOneAndUpdate: async () => null, findOne: async () => expired }) }
     await expect(consumeCheckoutQuote(db, { quoteId: 'q1', materialId: 'm1', buyerAddress: 'buyer', now: new Date('2021-01-01') })).rejects.toMatchObject({ code: 'QUOTE_EXPIRED' })
+  })
+
+  it('returns a stable not-found error for unavailable material', async () => {
+    const db = { collection: () => ({ findOne: async () => null }) }
+    await expect(createCheckoutQuote(db, { materialId: 'm1', buyerAddress: 'buyer' }))
+      .rejects.toMatchObject({ code: 'NOT_FOUND', status: 404 })
+  })
+
+  it('blocks checkout for archived material with a stable archived code', async () => {
+    const db = { collection: () => ({ findOne: async () => ({ _id: 'm1', archived: true }) }) }
+    await expect(createCheckoutQuote(db, { materialId: 'm1', buyerAddress: 'buyer' }))
+      .rejects.toMatchObject({ code: 'MATERIAL_ARCHIVED', status: 410 })
   })
 })

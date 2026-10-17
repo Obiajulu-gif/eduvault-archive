@@ -2,6 +2,8 @@ export const dynamic = "force-dynamic";
 
 import { NextResponse } from 'next/server'
 import { verifyEntitlement } from '@/lib/entitlement'
+import { renderProblemResponse } from '@/lib/errors/renderErrorResponse.js'
+import { captureException } from '@/lib/sentry'
 
 export async function GET(req) {
   try {
@@ -10,10 +12,7 @@ export async function GET(req) {
     const materialId = searchParams.get('materialId')
 
     if (!buyerAddress || !materialId) {
-      return NextResponse.json(
-        { error: 'Missing buyerAddress or materialId' },
-        { status: 400 }
-      )
+      return renderProblemResponse("VALIDATION_FIELD", req, "Missing buyerAddress or materialId")
     }
 
     const { hasAccess, source } = await verifyEntitlement(materialId, buyerAddress)
@@ -23,10 +22,7 @@ export async function GET(req) {
       { status: 200 }
     )
   } catch (error) {
-    console.error('Entitlement Check Error:', error)
-    return NextResponse.json(
-      { error: 'Internal Server Error' },
-      { status: 500 }
-    )
+    captureException(error, { route: "entitlements", method: "GET" })
+    return renderProblemResponse("ENTITLEMENT_UNAVAILABLE", req, "Entitlement verification unavailable")
   }
 }
