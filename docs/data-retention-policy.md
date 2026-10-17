@@ -31,6 +31,19 @@ These records have indefinite retention due to financial, legal, or audit requir
 | `search_analytics` | 365 days | None |
 | `entitlement_cache` | 90 days of inactivity | Protected while active and not expired |
 | `quarantine` | 30 days after resolution | Protected while status is quarantined/scanning/pending_review |
+| `sensitive_access_log` | 180 days | None beyond generic hold markers |
+| `download_access_log` | 180 days | None beyond generic hold markers |
+
+### Database-Enforced Retention (TTL Index, Not This Script)
+
+These collections self-expire via a MongoDB TTL index declared in
+`REQUIRED_INDEXES` (`src/lib/backend/schemaContracts.js`) and are therefore
+intentionally absent from `RETENTION_POLICIES` above:
+
+| Collection | Expiry Field | Rationale |
+|------------|-------------|-----------|
+| `idempotency_keys` | `expiresAt` | Replay guard; stale claims are meaningless once expired |
+| `material_analytics_dedupe` | `expiresAt` | Opaque one-hour dedupe key, never queried after its window |
 
 ## Protection Rules
 
@@ -220,9 +233,29 @@ Retention periods are set to the minimum required for:
 - Protected record violation detected
 - Unexpected spike in deleted records (>10x average)
 
+## Data Minimization Review
+
+Retention controls *how long* a record is kept; it says nothing about
+*what fields* ended up in it. `scripts/data-minimization-review.mjs` is the
+companion check: it samples each operational metadata collection and flags
+any top-level field its own writer module does not produce (see the
+allowlist registry in `src/lib/privacy/dataMinimizationReview.js`). It never
+writes to the database.
+
+```bash
+node scripts/data-minimization-review.mjs
+node scripts/data-minimization-review.mjs --report-json ./minimization-review.json
+```
+
+Exit code is non-zero when any reviewed collection has an unexpected field —
+treat that as a signal that a caller started persisting more than the
+collection was designed to hold, not as a reason to delete data (that's what
+retention is for).
+
 ## References
 
 - Implementation: `scripts/data-retention-cleanup.mjs`
 - Tests: `tests/backend/data-retention-cleanup.test.mjs`
+- Minimization review: `scripts/data-minimization-review.mjs`, `src/lib/privacy/dataMinimizationReview.js`
 - Privacy policy: `docs/data-retention-and-privacy.md`
 - Backup verification: `docs/disaster-recovery.md`

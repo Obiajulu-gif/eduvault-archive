@@ -2,6 +2,9 @@ import {
   ADMIN_AUDIT_COLLECTION,
   ADMIN_AUDIT_INDEXES,
 } from "../db/schemas/auditLog.js";
+import { SENSITIVE_ACCESS_COLLECTION } from "../security/sensitiveAccessLog.js";
+import { DOWNLOAD_ACCESS_LOG_COLLECTION } from "../downloads/accessLog.js";
+import { IDEMPOTENCY_KEYS_COLLECTION } from "./idempotency.js";
 
 export const COLLECTIONS = {
   users: "users",
@@ -44,6 +47,12 @@ export const COLLECTIONS = {
   // Time-bounded maintainer impersonation / support access (see
   // src/lib/auth/supportAccess.js). Immutable audit lives in audit_ledger.
   supportSessions: "support_sessions",
+  // Operational metadata collections covered by the data minimization review
+  // and retention enforcement (#954). Field names only here — see
+  // src/lib/privacy/dataMinimizationReview.js for the allowed-field registry.
+  sensitiveAccessLog: SENSITIVE_ACCESS_COLLECTION,
+  downloadAccessLog: DOWNLOAD_ACCESS_LOG_COLLECTION,
+  idempotencyKeys: IDEMPOTENCY_KEYS_COLLECTION,
 };
 
 export const REQUIRED_INDEXES = {
@@ -255,6 +264,22 @@ export const REQUIRED_INDEXES = {
     { keys: { actorId: 1, createdAt: -1 }, options: { name: "support_sessions_actor_idx" } },
     // Scheduled expiry sweep (scripts/expire-support-sessions.mjs).
     { keys: { status: 1, expiresAt: 1 }, options: { name: "support_sessions_expiry_idx" } },
+  ],
+  // #954: previously undeclared despite docs/sensitive-field-access-logging.md
+  // documenting these as the expected shape.
+  [SENSITIVE_ACCESS_COLLECTION]: [
+    { keys: { correlationId: 1 }, options: { unique: true, name: "sensitive_access_correlation_idx" } },
+    { keys: { actorId: 1, at: 1 }, options: { name: "sensitive_access_actor_idx" } },
+    { keys: { resourceType: 1, resourceId: 1, at: 1 }, options: { name: "sensitive_access_resource_idx" } },
+    { keys: { decision: 1, at: 1 }, options: { name: "sensitive_access_decision_idx" } },
+  ],
+  [DOWNLOAD_ACCESS_LOG_COLLECTION]: [
+    { keys: { materialId: 1, timestamp: -1 }, options: { name: "download_access_log_material_idx" } },
+    { keys: { buyerAddress: 1, timestamp: -1 }, options: { name: "download_access_log_buyer_idx" } },
+    { keys: { capabilityId: 1 }, options: { sparse: true, name: "download_access_log_capability_idx" } },
+  ],
+  [IDEMPOTENCY_KEYS_COLLECTION]: [
+    { keys: { expiresAt: 1 }, options: { expireAfterSeconds: 0, name: "idempotency_keys_expiry_idx" } },
   ],
 };
 
