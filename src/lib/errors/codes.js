@@ -8,7 +8,7 @@
  */
 
 export const ERROR_CODES = {
-  // --- Validation (400) ---
+  // --- Validation (400/413) ---
   VALIDATION_FAILED: {
     code: "VALIDATION_FAILED",
     status: 400,
@@ -36,6 +36,20 @@ export const ERROR_CODES = {
     retryable: false,
     userMessage: "The uploaded file exceeds the size limit.",
     recovery: "Compress the file or split it into smaller parts and try again.",
+  },
+  VALIDATION_UPLOAD_TOO_LARGE: {
+    code: "VALIDATION_UPLOAD_TOO_LARGE",
+    status: 413,
+    retryable: false,
+    userMessage: "The uploaded request exceeds the size limit.",
+    recovery: "Reduce the upload size and try again.",
+  },
+  VALIDATION_RANGE_TOO_LARGE: {
+    code: "VALIDATION_RANGE_TOO_LARGE",
+    status: 413,
+    retryable: false,
+    userMessage: "The requested download range is too large.",
+    recovery: "Request a smaller byte range and try again.",
   },
 
   // --- Authentication & authorization (401/403) ---
@@ -66,6 +80,36 @@ export const ERROR_CODES = {
     retryable: false,
     userMessage: "Your account has been suspended.",
     recovery: "Contact support to appeal the suspension.",
+  },
+
+  // --- Entitlements and protected content ---
+  ENTITLEMENT_REQUIRED: {
+    code: "ENTITLEMENT_REQUIRED",
+    status: 403,
+    retryable: false,
+    userMessage: "You do not have access to this learning material.",
+    recovery: "Check that you are signed into the purchasing account or purchase the material.",
+  },
+  ENTITLEMENT_PURCHASE_REQUIRED: {
+    code: "ENTITLEMENT_PURCHASE_REQUIRED",
+    status: 402,
+    retryable: false,
+    userMessage: "A purchase is required to access this learning material.",
+    recovery: "Review the listing and complete checkout to receive access.",
+  },
+  ENTITLEMENT_UNAVAILABLE: {
+    code: "ENTITLEMENT_UNAVAILABLE",
+    status: 503,
+    retryable: true,
+    userMessage: "Access could not be verified right now.",
+    recovery: "Wait briefly and check again. Do not repeat a payment while its status is uncertain.",
+  },
+  MATERIAL_ARCHIVED: {
+    code: "MATERIAL_ARCHIVED",
+    status: 410,
+    retryable: false,
+    userMessage: "This material is no longer available for purchase.",
+    recovery: "Contact the creator if you believe the material should be available.",
   },
 
   // --- Not found (404) ---
@@ -106,6 +150,13 @@ export const ERROR_CODES = {
     userMessage: "This action cannot be performed in the current state.",
     recovery: "Refresh the page to see the latest state and try again.",
   },
+  SETTLEMENT_QUOTE_EXPIRED: {
+    code: "SETTLEMENT_QUOTE_EXPIRED",
+    status: 409,
+    retryable: false,
+    userMessage: "The checkout quote has expired.",
+    recovery: "Refresh the listing to obtain a current quote before paying.",
+  },
 
   // --- Settlement (402/409/502) ---
   SETTLEMENT_INSUFFICIENT_FUNDS: {
@@ -137,6 +188,22 @@ export const ERROR_CODES = {
     recovery: "Try again in a few minutes.",
   },
 
+  // --- Creator payout reporting ---
+  PAYOUT_PROFILE_INCOMPLETE: {
+    code: "PAYOUT_PROFILE_INCOMPLETE",
+    status: 400,
+    retryable: false,
+    userMessage: "A creator payout wallet is not available for this account.",
+    recovery: "Add or verify your payout wallet in creator settings.",
+  },
+  PAYOUT_UNAVAILABLE: {
+    code: "PAYOUT_UNAVAILABLE",
+    status: 503,
+    retryable: true,
+    userMessage: "Creator payout information is temporarily unavailable.",
+    recovery: "Retry this report shortly. Reconcile payout records if the reported totals remain inconsistent.",
+  },
+
   // --- Storage workflows (400/404/502) ---
   STORAGE_UPLOAD_FAILED: {
     code: "STORAGE_UPLOAD_FAILED",
@@ -151,6 +218,13 @@ export const ERROR_CODES = {
     retryable: false,
     userMessage: "The stored file could not be found.",
     recovery: "The file may have been removed. Contact support if you purchased this content.",
+  },
+  STORAGE_UNAVAILABLE: {
+    code: "STORAGE_UNAVAILABLE",
+    status: 503,
+    retryable: true,
+    userMessage: "The content delivery service is temporarily unavailable.",
+    recovery: "Wait briefly and retry the download. Do not share or reuse an expired capability URL.",
   },
   STORAGE_QUARANTINED: {
     code: "STORAGE_QUARANTINED",
@@ -180,5 +254,5 @@ export const ERROR_CODES = {
 };
 
 export function getErrorCode(code) {
-  return ERROR_CODES[code] || ERROR_CODES.INTERNAL;
+  return Object.hasOwn(ERROR_CODES, code) ? ERROR_CODES[code] : ERROR_CODES.INTERNAL;
 }

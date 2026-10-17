@@ -1,18 +1,29 @@
+import crypto from "node:crypto";
 import { NextResponse } from "next/server";
+import { getErrorCode } from "../errors/codes.js";
+import { getCorrelationId } from "../errors/correlation.js";
+
+const STATUS_CODES = {
+  400: "VALIDATION_FAILED",
+  401: "AUTH_UNAUTHENTICATED",
+  402: "SETTLEMENT_INSUFFICIENT_FUNDS",
+  403: "AUTH_FORBIDDEN",
+  404: "NOT_FOUND",
+  409: "CONFLICT_STATE",
+  410: "MATERIAL_ARCHIVED",
+  413: "VALIDATION_UPLOAD_TOO_LARGE",
+  422: "VALIDATION_FIELD",
+  429: "RATE_LIMITED",
+  502: "SETTLEMENT_TX_FAILED",
+  503: "SETTLEMENT_UNAVAILABLE",
+  504: "SETTLEMENT_TIMEOUT",
+  500: "INTERNAL",
+};
 
 /**
- * RFC 7807 Problem Details error response helper.
- *
- * Returns a NextResponse with Content-Type: application/problem+json and a
- * standardized JSON body containing type, title, status, detail, and instance.
- *
- * @param {Object} options
- * @param {number}  options.status   HTTP status code (default 500)
- * @param {string}  options.title    Short, human-readable summary of the problem
- * @param {string}  options.detail   Human-readable explanation of this occurrence
- * @param {string}  options.instance URI that identifies the specific occurrence
- * @param {string}  options.type     URI that identifies the problem type (default "about:blank")
- * @returns {NextResponse}
+ * Backward-compatible RFC 9457 Problem Details response helper.
+ * Existing callers may supply occurrence-specific detail; stable codes and
+ * remediation hints always come from the shared taxonomy.
  */
 export function errorResponse({
   status = 500,
@@ -20,29 +31,34 @@ export function errorResponse({
   detail = "",
   instance = "",
   type = "about:blank",
+  request,
+  code,
 } = {}) {
-  const defaultTitles = {
-    400: "Bad Request",
-    401: "Unauthorized",
-    403: "Forbidden",
-    404: "Not Found",
-    409: "Conflict",
-    422: "Unprocessable Entity",
-    429: "Too Many Requests",
-    500: "Internal Server Error",
+  const requestedDefinition = code ? getErrorCode(code) : null;
+  const definition = requestedDefinition && requestedDefinition.code === code && requestedDefinition.status === status
+    ? requestedDefinition
+    : getErrorCode(STATUS_CODES[status] || "INTERNAL");
+  const correlationId = request ? getCorrelationId(request) : crypto.randomUUID();
+  const resolvedInstance = instance || (request ? new URL(request.url).pathname : "");
+  const body = {
+    type: type === "about:blank"
+      ? `https://eduvault.dev/problems/${definition.code.toLowerCase()}`
+      : type,
+    title: title || definition.userMessage,
+    status,
+    detail: detail || definition.recovery,
+    instance: resolvedInstance,
+    code: definition.code,
+    retryable: definition.retryable,
+    recovery: definition.recovery,
+    correlationId,
   };
 
-  return NextResponse.json(
-    {
-      type,
-      title: title || defaultTitles[status] || "Error",
-      status,
-      detail,
-      instance,
+  return NextResponse.json(body, {
+    status,
+    headers: {
+      "Content-Type": "application/problem+json",
+      "X-Correlation-Id": correlationId,
     },
-    {
-      status,
-      headers: { "Content-Type": "application/problem+json" },
-    }
-  );
+  });
 }

@@ -23,13 +23,87 @@ components:
 
   schemas:
     Error:
+      description: Problem Details response schema (legacy name retained for references).
+      allOf:
+        - $ref: "#/components/schemas/ProblemDetails"
+
+    LegacyError:
       type: object
+      description: Legacy JSON error envelope retained for endpoints not yet migrated.
       properties:
         error:
           type: string
         details:
           type: object
       required: [error]
+
+    ProblemDetails:
+      type: object
+      required: [type, title, status, detail, instance, code, retryable, recovery, correlationId]
+      properties:
+        type:
+          type: string
+          format: uri
+        title:
+          type: string
+        status:
+          type: integer
+          minimum: 400
+          maximum: 599
+        detail:
+          type: string
+          description: Safe occurrence summary or remediation guidance. Never includes internal exception details.
+        instance:
+          type: string
+          description: Request path without query parameters.
+        code:
+          type: string
+          enum:
+            - VALIDATION_FAILED
+            - VALIDATION_FIELD
+            - VALIDATION_FILE_TYPE
+            - VALIDATION_FILE_SIZE
+            - VALIDATION_UPLOAD_TOO_LARGE
+            - VALIDATION_RANGE_TOO_LARGE
+            - AUTH_UNAUTHENTICATED
+            - AUTH_SESSION_EXPIRED
+            - AUTH_FORBIDDEN
+            - AUTH_SUSPENDED
+            - ENTITLEMENT_REQUIRED
+            - ENTITLEMENT_PURCHASE_REQUIRED
+            - ENTITLEMENT_UNAVAILABLE
+            - MATERIAL_ARCHIVED
+            - NOT_FOUND
+            - CONFLICT_DUPLICATE
+            - CONFLICT_IDEMPOTENCY_KEY
+            - CONFLICT_STATE
+            - SETTLEMENT_QUOTE_EXPIRED
+            - SETTLEMENT_INSUFFICIENT_FUNDS
+            - SETTLEMENT_TX_FAILED
+            - SETTLEMENT_TIMEOUT
+            - SETTLEMENT_UNAVAILABLE
+            - PAYOUT_PROFILE_INCOMPLETE
+            - PAYOUT_UNAVAILABLE
+            - STORAGE_UPLOAD_FAILED
+            - STORAGE_NOT_FOUND
+            - STORAGE_UNAVAILABLE
+            - STORAGE_QUARANTINED
+            - RATE_LIMITED
+            - INTERNAL
+        retryable:
+          type: boolean
+        recovery:
+          type: string
+        correlationId:
+          type: string
+        error:
+          type: string
+          deprecated: true
+          description: Compatibility alias for older clients; migrate to code and detail.
+        retryAfter:
+          type: integer
+          minimum: 0
+          description: Present on rate-limit responses.
 
     Material:
       type: object
@@ -349,7 +423,7 @@ components:
           type: string
           format: date-time
 
-IncidentInput:
+    IncidentInput:
       type: object
       description: Inputs for the incident impact calculator.
       required: [incidentId, window]
@@ -559,21 +633,21 @@ IncidentInput:
     Unauthorized:
       description: Not authenticated
       content:
-        application/json:
+        application/problem+json:
           schema:
-            $ref: "#/components/schemas/Error"
+            $ref: "#/components/schemas/ProblemDetails"
     BadRequest:
       description: Validation error
       content:
-        application/json:
+        application/problem+json:
           schema:
-            $ref: "#/components/schemas/Error"
+            $ref: "#/components/schemas/ProblemDetails"
     RateLimited:
       description: Toot many requests
       content:
-        application/json:
+        application/problem+json:
           schema:
-            $ref: "#/components/schemas/Error"
+            $ref: "#/components/schemas/ProblemDetails"
 
 security:
   - cookieAuth: []
@@ -596,18 +670,18 @@ paths:
                 type: array
                 items:
                   $ref: "#/components/schemas/Material"
-"401":
+        "401":
           description: Not authenticated
           content:
-            application/json:
+            application/problem+json:
               schema:
-                $ref: "#/components/schemas/Error"
+                $ref: "#/components/schemas/ProblemDetails"
         "429":
           description: Rate limited
           content:
-            application/json:
+            application/problem+json:
               schema:
-                $ref: "#/components/schemas/Error"
+                $ref: "#/components/schemas/ProblemDetails"
 
     post:
       summary: Create a new material listing
@@ -629,9 +703,9 @@ paths:
         "400":
           description: Validation error
           content:
-            application/json:
+            application/problem+json:
               schema:
-                $ref: "#/components/schemas/Error"
+                $ref: "#/components/schemas/ProblemDetails"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "429":
@@ -688,7 +762,7 @@ paths:
               schema:
                 oneOf:
                   - $ref: "#/components/schemas/MaterialImportResponse"
-                  - $ref: "#/components/schemas/Error"
+                  - $ref: "#/components/schemas/LegacyError"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "429":

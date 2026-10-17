@@ -1,18 +1,21 @@
 # EduVault API Error Code Reference
 
-This document defines the **stable error-code taxonomy** for every major
-failure path in the EduVault system: purchase, entitlement, download,
-refund, storage, indexer, webhook, and activity receipts.
+This document contains the event/integration error registry for purchase,
+entitlement, download, refund, storage, indexer, webhook, and activity
+receipts. It is not the canonical HTTP API response schema.
 
-Clients and frontends **must** use these codes rather than parsing prose
-error messages. Prose descriptions are informational only and may change
-without notice; codes are semver-stable within a major version.
+The current HTTP Problem Details schema, route coverage, operational
+remediation, and stable API error codes are documented in
+[API Problem Details and Error Codes](./api-problem-details.md). In
+particular, `EVT_*` registry identifiers below are not aliases for the HTTP
+`code` field.
 
 ---
 
-## Format
+## Event / integration registry format
 
-Every API error response has the shape:
+The following envelope describes the event/integration registry only; HTTP API
+errors use the RFC 9457 envelope in the linked API documentation:
 
 ```json
 {

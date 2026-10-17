@@ -15,6 +15,8 @@ import { createCheckoutQuote, consumeCheckoutQuote } from '@/lib/checkout/quotes
 import { buildAnalyticsEvent, recordServerAnalyticsEvent } from '@/lib/backend/analyticsEvents';
 import { appendCriticalMutation } from '@/lib/backend/auditLedger';
 import { withTelemetryRoute, ACTOR_TYPES } from '@/lib/monitoring/telemetry';
+import { AppError, isAppError } from '@/lib/errors/AppError.js';
+import { renderErrorResponse, renderProblemResponse } from '@/lib/errors/renderErrorResponse.js';
 
 function duplicateKey(error) {
   return error?.code === 11000;
@@ -117,7 +119,7 @@ export async function GET(req) {
   try {
     const user = await getUserFromCookie(req);
     if (!user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+      return renderProblemResponse("AUTH_UNAUTHENTICATED", req, "Unauthorized");
     }
 
     const db = await getDb();
@@ -132,7 +134,7 @@ export async function GET(req) {
     return NextResponse.json(purchases);
   } catch (err) {
     console.error("GET /api/purchase error:", err);
-    return NextResponse.json({ error: "Server error" }, { status: 500 });
+    return renderErrorResponse(err, { request: req, legacyError: "Server error" });
   }
 }
 
@@ -149,11 +151,15 @@ async function handlePost(req) {
     const paymentCompleted = Boolean(transactionHash || signedXdr);
 
     if (!materialId) {
-      return NextResponse.json({ error: "Missing materialId" }, { status: 400 });
+      return renderProblemResponse("VALIDATION_FIELD", req, "Missing materialId");
     }
 
     if (!buyerAddress) {
-      return NextResponse.json({ error: user ? "Missing buyer address" : "Unauthorized" }, { status: user ? 400 : 401 });
+      return renderProblemResponse(
+        user ? "VALIDATION_FIELD" : "AUTH_UNAUTHENTICATED",
+        req,
+        user ? "Missing buyer address" : "Unauthorized"
+      );
     }
 
     if (action === 'quote') {
@@ -167,7 +173,11 @@ async function handlePost(req) {
     }
 
     if (paymentCompleted && !quoteId) {
-      return NextResponse.json({ error: 'A valid checkout quote is required. Refresh the listing and try again.' }, { status: 409 });
+      return renderProblemResponse(
+        "CONFLICT_STATE",
+        req,
+        "A valid checkout quote is required. Refresh the listing and try again."
+      );
     }
 
     let quote = null;
@@ -175,7 +185,16 @@ async function handlePost(req) {
       try {
         quote = await consumeCheckoutQuote(db, { quoteId, materialId, buyerAddress });
       } catch (error) {
-        return NextResponse.json({ error: error.message, code: error.code }, { status: 409 });
+        const code = error?.code === "QUOTE_EXPIRED"
+          ? "SETTLEMENT_QUOTE_EXPIRED"
+          : "CONFLICT_STATE";
+        return renderProblemResponse(
+          code,
+          req,
+          code === "SETTLEMENT_QUOTE_EXPIRED"
+            ? "Checkout quote expired. Refresh the listing to get a new quote."
+            : "Checkout quote is invalid or already used."
+        );
       }
     }
 
@@ -260,7 +279,12 @@ async function handlePost(req) {
     );
   } catch (err) {
     console.error("POST /api/purchase error:", err);
-    return NextResponse.json({ error: "Server error" }, { status: 500 });
+    return renderErrorResponse(
+      isAppError(err)
+        ? err
+        : new AppError("INTERNAL", { cause: err }),
+      { request: req, legacyError: "Server error" }
+    );
   }
 }
 

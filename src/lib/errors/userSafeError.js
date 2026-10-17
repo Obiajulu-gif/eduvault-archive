@@ -27,9 +27,9 @@ export function toUserSafeError(error) {
       code: definition.code,
       status: definition.status,
       retryable: definition.retryable,
-      userMessage: error.message || definition.userMessage,
+      userMessage: definition.userMessage,
       recovery: definition.recovery,
-      details: error.details || {},
+      details: {},
     };
   }
 
@@ -71,7 +71,7 @@ export function toUserSafeError(error) {
 }
 
 /**
- * Renders a user-safe error body (RFC 7807 Problem Details) with a correlation
+ * Renders a user-safe error body (RFC 9457 Problem Details) with a correlation
  * ID support can use to find the matching server-side logs.
  */
 export function renderUserSafeErrorBody(error, { correlationId, instance = "" } = {}) {
@@ -79,9 +79,11 @@ export function renderUserSafeErrorBody(error, { correlationId, instance = "" } 
   return {
     type: `https://eduvault.dev/problems/${safe.code.toLowerCase()}`,
     title: safe.userMessage,
+    error: safe.userMessage,
     status: safe.status,
     code: safe.code,
     detail: safe.recovery,
+    recovery: safe.recovery,
     retryable: safe.retryable,
     correlationId: correlationId || null,
     instance,
