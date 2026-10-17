@@ -48,6 +48,51 @@ export const REFUND_STATUS = {
   REJECTED: 'rejected',
 };
 
+/**
+ * Explicit transition matrix. Every `transition()` call is checked against it,
+ * so an illegal edge is a deterministic programmer error rather than a silent
+ * no-op. Recovery edges are `submitting|pending -> approved` (automatic retry)
+ * and `failed -> approved` (admin retry); `pending -> pending` is the
+ * idempotent re-poll. `settled` and `rejected` are terminal.
+ */
+export const REFUND_TRANSITIONS = Object.freeze({
+  [REFUND_STATUS.REQUESTED]: Object.freeze([REFUND_STATUS.APPROVED, REFUND_STATUS.REJECTED]),
+  [REFUND_STATUS.APPROVED]: Object.freeze([REFUND_STATUS.SUBMITTING]),
+  [REFUND_STATUS.SUBMITTING]: Object.freeze([
+    REFUND_STATUS.PENDING,
+    REFUND_STATUS.SETTLED,
+    REFUND_STATUS.FAILED,
+    REFUND_STATUS.APPROVED,
+  ]),
+  [REFUND_STATUS.PENDING]: Object.freeze([
+    REFUND_STATUS.PENDING,
+    REFUND_STATUS.SETTLED,
+    REFUND_STATUS.FAILED,
+    REFUND_STATUS.APPROVED,
+  ]),
+  [REFUND_STATUS.FAILED]: Object.freeze([REFUND_STATUS.APPROVED, REFUND_STATUS.REJECTED]),
+  [REFUND_STATUS.SETTLED]: Object.freeze([]),
+  [REFUND_STATUS.REJECTED]: Object.freeze([]),
+});
+
+export const REFUND_TERMINAL_STATUSES = Object.freeze(
+  Object.keys(REFUND_TRANSITIONS).filter((status) => REFUND_TRANSITIONS[status].length === 0)
+);
+
+export function isValidRefundTransition(fromStatus, toStatus) {
+  return Object.hasOwn(REFUND_TRANSITIONS, fromStatus) && REFUND_TRANSITIONS[fromStatus].includes(toStatus);
+}
+
+export class InvalidRefundTransitionError extends Error {
+  constructor(fromStatus, toStatus) {
+    super(`Invalid refund transition from ${fromStatus} to ${toStatus}`);
+    this.name = 'InvalidRefundTransitionError';
+    this.code = 'INVALID_REFUND_TRANSITION';
+    this.fromStatus = fromStatus;
+    this.toStatus = toStatus;
+  }
+}
+
 const MAX_SUBMIT_RETRIES = Number(process.env.REFUND_MAX_RETRY_ATTEMPTS || 5);
 const STUCK_SUBMITTING_MS = Number(process.env.REFUND_STUCK_SUBMITTING_MS || 5 * 60 * 1000);
 // A submitted transaction's own time-bounds (see buildRefundTransaction's
@@ -62,6 +107,11 @@ function refundsCollection(db) {
 
 async function transition(db, refundId, fromStatuses, toStatus, extraSet = {}) {
   const from = Array.isArray(fromStatuses) ? fromStatuses : [fromStatuses];
+  for (const status of from) {
+    if (!isValidRefundTransition(status, toStatus)) {
+      throw new InvalidRefundTransitionError(status, toStatus);
+    }
+  }
   return refundsCollection(db).findOneAndUpdate(
     { _id: refundId, status: { $in: from } },
     { $set: { status: toStatus, updatedAt: new Date(), ...extraSet } },
@@ -447,8 +497,12 @@ export async function finalizeSettlement({
 
   if (!current.entitlementRevoked) {
     await revokeEntitlementFn(current.materialId, current.buyerAddress);
+    // Exactly-once mirroring: two overlapping finalizers (worker + reconciler,
+    // or two reconciler runs) can both reach this point, so the increment is
+    // gated on this refund not already being recorded on the purchase. Same
+    // single-document atomicity, and a crash-retry stays safe too.
     await db.collection(COLLECTIONS.purchases).updateOne(
-      { _id: new ObjectId(current.purchaseId) },
+      { _id: new ObjectId(current.purchaseId), appliedRefundIds: { $ne: String(refundId) } },
       {
         $set: {
           settlementState: 'Refunded',
@@ -457,6 +511,7 @@ export async function finalizeSettlement({
           updatedAt: new Date(),
         },
         $inc: { refundedAmount: current.amount },
+        $push: { appliedRefundIds: String(refundId) },
       }
     );
     await refundsCollection(db).updateOne(

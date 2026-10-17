@@ -185,6 +185,62 @@ const loadNextPage = async (cursor) => {
 
 **Backward compatibility**: Legacy clients using `page` parameter will continue to receive offset-based responses until the deprecation deadline.
 
+## Stability under inserts, deletes and permission changes
+
+Executable checks: `src/lib/backend/marketplaceKeysetStability.test.js` (in-memory,
+no Mongo). It runs the real discovery query and cursor clause through the same
+page loop as `/api/market-materials`, including randomised churn
+(`npx vitest run src/lib/backend/marketplaceKeysetStability.test.js`).
+
+Guarantees (immutable sort keys such as `newest`):
+
+- **Inserts:** a listing sorting before the cursor is not shown until the next
+  fresh load; one sorting after it appears exactly once. Nothing is duplicated
+  or shifted.
+- **Deletes:** the cursor stores sort *values*, not a reference, so deleting the
+  last listing of a page (or any listing ahead) cannot break or skip the walk.
+- **Permission changes:** visibility/moderation/suspension/quarantine filters
+  are re-applied on **every** request, and the cursor carries only sort keys
+  (`_id`, `createdAt`, price/rating/likes) plus a sort signature, never content
+  or permission state. A listing that becomes forbidden between pages is never
+  returned afterwards, and `hasNextPage` is recomputed from what is still visible.
+
+Fixes made while formalising this:
+
+- `ObjectId` was never imported in `marketplaceDiscovery.js` and `language` was
+  never defined in `buildMarketplaceDiscoveryQuery`, so every discovery query and
+  cursor decode threw. Both fixed.
+- Applying any search/content filter **replaced** the base `$and`, dropping the
+  low-relevance exclusion and leaking hidden listings. It is now appended.
+- Listings with no `rating`/`likes` made the next cursor undecodable (JSON drops
+  `undefined`) and, on descending sorts, were skipped (`$lt` never matches a
+  missing field). Missing values are encoded as `null` and admitted explicitly.
+- Cursors are validated: primitives only (no Mongo operator injection), valid
+  dates, and the sort signature must match the request's sort.
+- The route now uses `encodeMarketplaceCursor` instead of a duplicate inline encoder.
+
+### Edge cases and failure modes
+
+- **Mutable sort keys** (`price`, `rating`, `likes`): if a listing's value changes
+  between pages it can be seen twice or missed. This is inherent to keyset
+  pagination; `newest` (immutable `createdAt` + `_id`) is exact.
+- **Trailing empty page:** if everything after the cursor is hidden between
+  requests, the next page is empty with `hasNextPage: false`.
+- **Newer listings are not injected** into an in-progress walk; refresh to see them.
+- **Changing the sort mid-walk** with an old cursor returns 400 `Invalid cursor`
+  (signature mismatch). Cursors issued before this change (no signature) are
+  still accepted.
+- **Cursor fields missing on old tokens** (e.g. a `rating` cursor from before the
+  null encoding) return 400; the client should restart from the first page.
+- **Relevance sort** reorders within a page only; the cursor still follows
+  `createdAt, _id`.
+
+### Rollback and recovery
+
+No data or index changes. Reverting the commit restores the previous behaviour
+(including the crashes noted above). Clients receiving 400 `Invalid cursor`
+should drop the cursor and reload page 1; no server-side state needs repair.
+
 ## References
 
 - Implementation: `src/lib/backend/marketplaceDiscovery.js`

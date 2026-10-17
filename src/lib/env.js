@@ -199,3 +199,41 @@ export function assertRuntimeEnv() {
     throw new Error(`Invalid deployment environment:\n- ${errors.join("\n- ")}`);
   }
 }
+
+/**
+ * Warns (does not throw/block startup) when a cross-boundary trust decision
+ * identified in docs/threat-model-cross-boundary-trust.md relies on a
+ * secret that is unset in production.
+ *
+ * This is intentionally separate from `validateRuntimeEnv`/`assertRuntimeEnv`:
+ * those gate the Stellar webhook secret requirement on `webhooksEnabled`
+ * (outbound webhooks configured via WEBHOOK_URL or the secret itself being
+ * set), by design -- see the existing "does not require a webhook secret in
+ * production when webhooks are disabled" test in `env.test.js`. But
+ * `POST /api/webhooks/stellar` (the inbound Stellar payment reconciliation
+ * poll) is reachable independently of whether outbound webhooks are
+ * configured, and its own authorization
+ * (`src/app/api/webhooks/stellar/route.js`'s `isAuthorized`) intentionally
+ * fails OPEN when neither `STELLAR_WEBHOOK_SECRET` nor `CRON_SECRET` is set,
+ * as a local/dev convenience. A production deployment that never opts into
+ * outbound webhooks gets no signal from `validateRuntimeEnv` that this
+ * inbound route is open to any caller.
+ *
+ * Returns an array of warning strings (empty when nothing is flagged) so
+ * callers can log them without changing deploy-blocking behavior.
+ */
+export function auditCrossBoundaryTrustSecrets() {
+  if (process.env.NODE_ENV !== "production") return [];
+
+  const warnings = [];
+  const webhookSecret = process.env.STELLAR_WEBHOOK_SECRET || process.env.CRON_SECRET;
+  if (isPlaceholder(webhookSecret)) {
+    warnings.push(
+      "STELLAR_WEBHOOK_SECRET (or CRON_SECRET) is unset in production: POST /api/webhooks/stellar " +
+        "will accept reconciliation requests from any caller, not just your scheduler. Set one of " +
+        "these env vars to close this inbound trust boundary (see docs/threat-model-cross-boundary-trust.md)."
+    );
+  }
+
+  return warnings;
+}

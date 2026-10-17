@@ -85,6 +85,13 @@ export const ERROR_CODES = {
     userMessage: "A record with these details already exists.",
     recovery: "Review the existing record or update it instead of creating a new one.",
   },
+  CONFLICT_IN_PROGRESS: {
+    code: "CONFLICT_IN_PROGRESS",
+    status: 409,
+    retryable: true,
+    userMessage: "An identical request is already being processed.",
+    recovery: "Wait a moment and resend the same request with the same idempotency key to get the result.",
+  },
   CONFLICT_IDEMPOTENCY_KEY: {
     code: "CONFLICT_IDEMPOTENCY_KEY",
     status: 409,

@@ -1,48 +1,61 @@
-# Release readiness gate
+# Release Readiness Engine: Migrations, Smoke Tests & Rollback Rehearsal
 
-Issue #978. A release is blocked until its evidence file proves every gate
-passed for the exact commit being released. The gate reads evidence only. It
-doesn't run migrations, deploy, or change data.
+## Overview
+The **Release Readiness Engine** (`src/lib/release/releaseReadiness.js` and `scripts/release-readiness.mjs`) automates pre-release verification across four pillars before any code or database migration is shipped to staging or production:
+1. **Deployment Authorization**: Ensures only authorized release operators (`admin`, `deployer`, `release_engineer`, or tokens with `system:release` / `system:migrate`) can promote releases.
+2. **Migration & Schema Safety**: Inspects registered database migrations, verifies schema completeness across core collections, and blocks any pending migrations lacking down-migration / rollback capability.
+3. **Transient-Resilient Smoke Tests**: Performs synthetic write/read/delete canary transactions against the database with configurable exponential-backoff retries.
+4. **Rollback Rehearsal & Snapshot Freshness**: Validates that backup snapshots exist, are fresh (<24 hours), and that rollback procedures have been rehearsed.
 
-## How it runs
+## CLI Usage
 
-- **Locally:** `npm run release:readiness` reads `release/readiness.json`.
-  Use `-- --evidence <path>` and `-- --commit <sha>` to override the defaults.
-- **In CI:** `.github/workflows/release-readiness.yml` runs on every `v*` tag
-  push. It also runs on a PR that changes `release/readiness.json`. It passes
-  `GITHUB_SHA`, so evidence for another commit is rejected.
-- **Exit code:** `0` only when all gates pass. A missing file exits `1`.
+Run standard pre-flight verification:
+```bash
+npm run release:readiness
+# or
+node scripts/release-readiness.mjs
+```
 
-Start from [`release/readiness.example.json`](../release/readiness.example.json).
-Copy it to `release/readiness.json`, fill it in for the release commit, and commit it.
+Run in strict mode (fails on warnings as well as errors) with output reporting:
+```bash
+npm run release:readiness:strict -- --actor=devops-lead --out=release-readiness-report.json
+```
 
-## Gates
+For offline or CI dry-run checks:
+```bash
+node scripts/release-readiness.mjs --dry-run --skip-db
+```
 
-| Gate | Passes when |
-| ---- | ----------- |
-| `evidence` | `release`, `commit`, and `generatedAt` are present. `commit` matches the release commit. `generatedAt` is within 14 days. |
-| `migrations` | Every entry is `applied` (with `dryRunPassed` and `rollbackDocumented` both `true`) or `not_required`. `pending` blocks. `[]` means no migrations this release. A missing field blocks. |
-| `security_checks` | `securityChecks.dependencyAudit` and `securityChecks.secretScan` are both `passed`. These match the `security.yml` jobs (`npm run audit:deps`, `npm run scan:secrets`). |
-| `smoke_tests` | `smokeTests.status` is `passed` (for example, `npm run smoke:local` against the candidate). |
-| `rollback_rehearsal` | `rollbackRehearsal.status` is `passed`, `restoredToCommit` names the known-good commit, and `rehearsedAt` is within 30 days. |
+## Readiness Pillars & Decision Matrix
 
-Every failing gate is reported in one run, so a maintainer sees the full list
-at once.
+| Pillar | Passing Criteria | Warning Condition | Blocking Failure |
+| :--- | :--- | :--- | :--- |
+| **Authorization** | Role is `admin`, `deployer`, `release_engineer` or has `system:release` | N/A | Missing actor or unpermitted role (e.g. `guest`, `learner`) |
+| **Environment** | `JWT_SECRET` and `NEXT_PUBLIC_STELLAR_NETWORK` present | Non-standard network name | Missing required secret keys |
+| **Migrations** | All collections present, all pending migrations reversible | Pending migrations ready to apply | Irreversible migrations pending; missing schema |
+| **Smoke Tests** | Synthetic write-read-delete cycle succeeds within timeout | Transient retry succeeded | Database offline or read-after-write consistency failure |
+| **Rollback** | Snapshot timestamp <24h old and rehearsal documented | Snapshot between 24h–48h old | No verified snapshot found; invalid timestamp |
 
-## Edge cases and failure modes
+### Decision Outcomes
+- **`PROCEED`**: All 5 checks passed. Release pipeline advances.
+- **`REQUIRES_APPROVAL`**: Warnings present (e.g., pending migrations ready to apply). Permitted in standard mode; blocked in strict mode.
+- **`BLOCKED`**: One or more critical failures. Process exits with code `1` immediately halting CI/CD.
 
-- **Evidence was copied from an earlier release.** The commit check and the
-  14-day window stop it. Regenerate the file.
-- **Rehearsal is too old.** Re-run the restore into a staging environment and
-  update `rehearsedAt`.
-- **A migration was run in production but not dry-run first.** Record it as
-  `applied` only with `dryRunPassed: true`, or the gate blocks. Real runs should
-  always have a dry run.
-- **Tag pushed before evidence was committed.** The tag workflow fails. Delete
-  the tag, commit the evidence, and re-tag. Don't force-push over a published release.
+## Rollback & Emergency Recovery Procedures
 
-## Rollback
+### 1. Pre-Deployment Snapshot
+Before triggering production deployment:
+```bash
+# Capture snapshot timestamp in environment
+export LAST_BACKUP_TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+```
 
-The gate is read-only. Revert the commit that added the workflow or the script
-to remove it. A release that already shipped isn't affected. The rollback
-procedure itself is the one named in `rollbackRehearsal.restoredToCommit`.
+### 2. Rollback Execution
+If post-release monitoring detects anomalous error rates:
+1. Revert application code container to previous release tag.
+2. Execute migration rollback (down-migration) using the corresponding rollback script:
+   ```bash
+   node scripts/migrations/<migration-name>.mjs --rollback
+   ```
+3. If database inconsistency is detected, restore from the verified snapshot captured in `LAST_BACKUP_TIMESTAMP`.
+4. Rerun `npm run release:readiness:strict` to verify cluster stability after rollback.

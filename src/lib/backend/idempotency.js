@@ -55,16 +55,31 @@ function idempotencyCollection(db) {
   return db.collection("idempotency_keys");
 }
 
+const DEFAULT_LOCK_MS = 2 * 60 * 1000; // how long an in-flight claim blocks duplicates
+const MAX_CLAIM_ATTEMPTS = 5;
+
+function isDuplicateKeyError(error) {
+  return error?.code === 11000;
+}
+
 /**
  * Executes a high-risk write with idempotency protection.
  *
- * - First call with a key runs the handler and persists the outcome.
- * - Duplicate calls with the same key and same payload return the stored
- *   response without re-executing side effects.
- * - Duplicate calls with the same key but a different payload are rejected
- *   with CONFLICT_IDEMPOTENCY_KEY.
+ * - The first caller atomically claims the key (insert of an `in_progress`
+ *   record; the unique `_id` makes exactly one concurrent claim win), runs the
+ *   handler once, and persists the outcome.
+ * - Duplicate calls with the same key and payload after completion return the
+ *   stored response without re-executing side effects.
+ * - Duplicate calls while the first is still running are rejected with the
+ *   retryable CONFLICT_IN_PROGRESS instead of running the handler a second time.
+ * - Same key with a different payload is rejected with CONFLICT_IDEMPOTENCY_KEY.
  * - Failed outcomes can be retried with the same key.
- * - Expired keys (past TTL) are treated as absent so clients can reuse them.
+ * - Expired keys (past TTL) and abandoned claims (owner crashed, lock expired)
+ *   are taken over; the stale record is removed with a conditional delete so a
+ *   slow actor can never delete a newer actor's claim.
+ *
+ * Trade-off: if a handler outlives `lockMs` another caller may take over and
+ * run it again. Set `lockMs` above the handler's worst-case duration.
  *
  * @param {object} db - Database handle
  * @param {string} key - Idempotency key
@@ -72,9 +87,17 @@ function idempotencyCollection(db) {
  * @param {Function} handler - Async function performing the write
  * @param {object} [options]
  * @param {number} [options.ttlMs] - Key retention window (default 24h)
+ * @param {number} [options.lockMs] - In-flight claim lifetime (default 2m)
+ * @param {() => Date} [options.clock] - Time source (tests)
  * @returns {Promise<{result: object, replayed: boolean}>}
  */
-export async function withIdempotency(db, key, payload, handler, { ttlMs = DEFAULT_TTL_MS } = {}) {
+export async function withIdempotency(
+  db,
+  key,
+  payload,
+  handler,
+  { ttlMs = DEFAULT_TTL_MS, lockMs = DEFAULT_LOCK_MS, clock = () => new Date() } = {}
+) {
   if (!key) {
     const result = await handler();
     return { result, replayed: false };
@@ -82,59 +105,75 @@ export async function withIdempotency(db, key, payload, handler, { ttlMs = DEFAU
 
   const collection = idempotencyCollection(db);
   const payloadHash = hashPayload(payload);
-  const now = new Date();
-  const expiresAt = new Date(now.getTime() + ttlMs);
+  const claimId = crypto.randomUUID();
 
-  const existing = await collection.findOne({ _id: key });
+  for (let attempt = 0; attempt < MAX_CLAIM_ATTEMPTS; attempt += 1) {
+    const now = clock();
+    try {
+      await collection.insertOne({
+        _id: key,
+        claimId,
+        status: "in_progress",
+        payloadHash,
+        createdAt: now,
+        lockExpiresAt: new Date(now.getTime() + lockMs),
+        expiresAt: new Date(now.getTime() + ttlMs),
+      });
+    } catch (error) {
+      if (!isDuplicateKeyError(error)) throw error;
 
-  if (existing) {
-    // Expired key — safe to reuse
-    if (existing.expiresAt && existing.expiresAt < now) {
-      await collection.deleteOne({ _id: key });
-    } else {
-      // Key collision: same key, different payload
-      if (existing.payloadHash !== payloadHash) {
-        throw new AppError("CONFLICT_IDEMPOTENCY_KEY", {
-          details: { idempotencyKey: key },
-        });
+      const existing = await collection.findOne({ _id: key });
+      if (!existing) continue; // released between our insert and read; claim again
+
+      const removeStale = () => collection.deleteOne({ _id: key, claimId: existing.claimId });
+
+      if (existing.expiresAt && existing.expiresAt < now) {
+        await removeStale();
+        continue;
       }
-
-      // Replay successful outcome
+      if (existing.payloadHash !== payloadHash) {
+        throw new AppError("CONFLICT_IDEMPOTENCY_KEY", { details: { idempotencyKey: key } });
+      }
       if (existing.status === "completed") {
         return { result: existing.response, replayed: true };
       }
-
-      // Failed outcome — allow retry by removing the stale record
       if (existing.status === "failed") {
-        await collection.deleteOne({ _id: key });
+        await removeStale();
+        continue;
       }
+      if (existing.status === "in_progress" && existing.lockExpiresAt && existing.lockExpiresAt < now) {
+        await removeStale(); // owner abandoned the claim
+        continue;
+      }
+      throw new AppError("CONFLICT_IN_PROGRESS", { details: { idempotencyKey: key } });
     }
+
+    // We own the claim.
+    let result;
+    try {
+      result = await handler();
+    } catch (error) {
+      try {
+        await collection.updateOne(
+          { _id: key, claimId },
+          { $set: { status: "failed", error: error.message?.slice(0, 500), failedAt: new Date() } }
+        );
+      } catch {
+        // Bookkeeping must never mask the handler's own error; the lock
+        // expiry will release the key.
+      }
+      throw error;
+    }
+
+    await collection.updateOne(
+      { _id: key, claimId },
+      { $set: { status: "completed", response: result, completedAt: new Date() } }
+    );
+    return { result, replayed: false };
   }
 
-  try {
-    const result = await handler();
-    const response = result;
-    await collection.insertOne({
-      _id: key,
-      status: "completed",
-      payloadHash,
-      response,
-      createdAt: now,
-      completedAt: new Date(),
-      expiresAt,
-    });
-    return { result, replayed: false };
-  } catch (error) {
-    await collection.insertOne({
-      _id: key,
-      status: "failed",
-      payloadHash,
-      error: error.message?.slice(0, 500),
-      createdAt: now,
-      expiresAt,
-    });
-    throw error;
-  }
+  // Could not claim or observe a stable record: treat as contention.
+  throw new AppError("CONFLICT_IN_PROGRESS", { details: { idempotencyKey: key } });
 }
 
 /**

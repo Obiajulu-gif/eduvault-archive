@@ -1,99 +1,220 @@
-import assert from "node:assert/strict";
-import { test, describe } from "node:test";
+import assert from 'node:assert/strict';
+import { test, describe } from 'node:test';
+import {
+  CheckStatus,
+  ReleaseDecision,
+  checkDeploymentAuthorization,
+  checkEnvironmentReadiness,
+  checkMigrationReadiness,
+  runReleaseSmokeTests,
+  checkRollbackReadiness,
+  evaluateReleaseReadiness,
+} from '../../src/lib/release/releaseReadiness.js';
 
-import { evaluateReleaseReadiness } from "../../src/lib/release/readiness.js";
+describe('Release Readiness Checks (Issue #1022)', () => {
+  describe('Deployment Authorization Path', () => {
+    test('authorizes admin and deployer roles', () => {
+      const resAdmin = checkDeploymentAuthorization({ id: 'alice', role: 'admin' });
+      assert.equal(resAdmin.status, CheckStatus.PASSED);
 
-const NOW = new Date("2026-10-15T12:00:00Z");
-const COMMIT = "a".repeat(40);
+      const resDeployer = checkDeploymentAuthorization({ id: 'bob', role: 'deployer' });
+      assert.equal(resDeployer.status, CheckStatus.PASSED);
 
-const passingEvidence = (overrides = {}) => ({
-  release: "v0.2.0",
-  commit: COMMIT,
-  generatedAt: "2026-10-14T10:00:00Z",
-  migrations: [{ id: "add_notification_preferences_001", status: "applied", dryRunPassed: true, rollbackDocumented: true }],
-  securityChecks: { dependencyAudit: "passed", secretScan: "passed" },
-  smokeTests: { status: "passed" },
-  rollbackRehearsal: { status: "passed", rehearsedAt: "2026-10-10T16:00:00Z", restoredToCommit: "b".repeat(40) },
-  ...overrides,
-});
+      const resPerm = checkDeploymentAuthorization({ id: 'carol', role: 'engineer', permissions: ['system:release'] });
+      assert.equal(resPerm.status, CheckStatus.PASSED);
+    });
 
-const evaluate = (evidence, options = {}) => evaluateReleaseReadiness(evidence, { now: NOW, expectedCommit: COMMIT, ...options });
-const blockedGates = (result) => result.blockers.map((b) => b.gate);
+    test('rejects unauthorized roles or missing actors', () => {
+      const resAnon = checkDeploymentAuthorization(null);
+      assert.equal(resAnon.status, CheckStatus.FAILED);
 
-describe("evaluateReleaseReadiness", () => {
-  test("ready when every gate passes for this commit", () => {
-    const result = evaluate(passingEvidence());
-    assert.equal(result.ready, true);
-    assert.deepEqual(result.blockers, []);
-    assert.deepEqual(result.passed, ["evidence", "migrations", "security_checks", "smoke_tests", "rollback_rehearsal"]);
+      const resLearner = checkDeploymentAuthorization({ id: 'dan', role: 'learner' });
+      assert.equal(resLearner.status, CheckStatus.FAILED);
+      assert.ok(resLearner.message.includes('not authorized'));
+    });
   });
 
-  test("missing evidence blocks the release", () => {
-    const result = evaluate(null);
-    assert.equal(result.ready, false);
-    assert.deepEqual(blockedGates(result), ["evidence"]);
+  describe('Environment Readiness Path', () => {
+    test('passes when all required env vars are present', () => {
+      const env = {
+        JWT_SECRET: 'super-secret-key-1234567890',
+        NEXT_PUBLIC_STELLAR_NETWORK: 'TESTNET',
+      };
+      const res = checkEnvironmentReadiness(env);
+      assert.equal(res.status, CheckStatus.PASSED);
+    });
+
+    test('fails when required secrets are missing', () => {
+      const env = {
+        NEXT_PUBLIC_STELLAR_NETWORK: 'TESTNET',
+      };
+      const res = checkEnvironmentReadiness(env);
+      assert.equal(res.status, CheckStatus.FAILED);
+      assert.ok(res.message.includes('JWT_SECRET'));
+    });
   });
 
-  test("evidence for a different commit blocks the release", () => {
-    const result = evaluate(passingEvidence({ commit: "c".repeat(40) }));
-    assert.equal(result.ready, false);
-    assert.match(result.blockers[0].message, /is for commit/);
+  describe('Migration Readiness Path', () => {
+    test('passes when all required collections and reversible migrations are present', async () => {
+      const mockDb = {
+        listCollections: () => ({
+          toArray: async () => [
+            { name: 'users' },
+            { name: 'materials' },
+            { name: 'purchases' },
+            { name: 'entitlement_cache' },
+            { name: 'refunds' },
+            { name: 'audit_ledger' },
+          ],
+        }),
+      };
+
+      const res = await checkMigrationReadiness({
+        db: mockDb,
+        registeredMigrations: [
+          { id: 'mig-1', applied: true, reversible: true },
+        ],
+      });
+      assert.equal(res.status, CheckStatus.PASSED);
+    });
+
+    test('fails when irreversible migrations are pending', async () => {
+      const mockDb = {
+        listCollections: () => ({
+          toArray: async () => [
+            { name: 'users' },
+            { name: 'materials' },
+            { name: 'purchases' },
+            { name: 'entitlement_cache' },
+            { name: 'refunds' },
+            { name: 'audit_ledger' },
+          ],
+        }),
+      };
+
+      const res = await checkMigrationReadiness({
+        db: mockDb,
+        registeredMigrations: [
+          { id: 'mig-breaking-schema', applied: false, reversible: false },
+        ],
+      });
+      assert.equal(res.status, CheckStatus.FAILED);
+      assert.ok(res.message.includes('Irreversible pending migrations'));
+    });
   });
 
-  test("stale evidence blocks the release", () => {
-    const result = evaluate(passingEvidence({ generatedAt: "2026-09-01T00:00:00Z" }));
-    assert.equal(blockedGates(result).includes("evidence"), true);
+  describe('Smoke Tests with Retry Logic', () => {
+    test('succeeds on first attempt when canary cycle completes', async () => {
+      const store = new Map();
+      const mockDb = {
+        collection: () => ({
+          insertOne: async (doc) => store.set(doc._id, doc),
+          findOne: async (query) => store.get(query._id) || null,
+          deleteOne: async (query) => store.delete(query._id),
+        }),
+      };
+
+      const res = await runReleaseSmokeTests({ db: mockDb });
+      assert.equal(res.status, CheckStatus.PASSED);
+      assert.equal(res.retries, 0);
+    });
+
+    test('recovers after transient failure via retry', async () => {
+      let callCount = 0;
+      const store = new Map();
+      const mockDb = {
+        collection: () => ({
+          insertOne: async (doc) => {
+            callCount++;
+            if (callCount === 1) {
+              throw new Error('Transient socket reset');
+            }
+            store.set(doc._id, doc);
+          },
+          findOne: async (query) => store.get(query._id) || null,
+          deleteOne: async (query) => store.delete(query._id),
+        }),
+      };
+
+      const res = await runReleaseSmokeTests({ db: mockDb, maxRetries: 3, retryDelayMs: 10 });
+      assert.equal(res.status, CheckStatus.PASSED);
+      assert.equal(res.retries, 1);
+    });
   });
 
-  test("a pending migration blocks the release", () => {
-    const result = evaluate(passingEvidence({
-      migrations: [{ id: "backfill_x", status: "pending" }],
-    }));
-    assert.deepEqual(blockedGates(result), ["migrations"]);
-    assert.match(result.blockers[0].message, /still pending/);
+  describe('Rollback Readiness Path', () => {
+    test('passes when fresh verified backup snapshot exists and rehearsal done', () => {
+      const twoHoursAgo = new Date(Date.now() - 2 * 3600000).toISOString();
+      const res = checkRollbackReadiness({
+        lastBackupTimestamp: twoHoursAgo,
+        hasRehearsedRollback: true,
+      });
+      assert.equal(res.status, CheckStatus.PASSED);
+    });
+
+    test('fails when no backup timestamp exists', () => {
+      const res = checkRollbackReadiness({ lastBackupTimestamp: null });
+      assert.equal(res.status, CheckStatus.FAILED);
+      assert.ok(res.message.includes('No verified backup'));
+    });
+
+    test('warns when backup is stale (>24h)', () => {
+      const thirtyHoursAgo = new Date(Date.now() - 30 * 3600000).toISOString();
+      const res = checkRollbackReadiness({
+        lastBackupTimestamp: thirtyHoursAgo,
+        maxBackupAgeHours: 24,
+      });
+      assert.equal(res.status, CheckStatus.WARNING);
+    });
   });
 
-  test("an applied migration without a dry run or documented rollback blocks", () => {
-    const result = evaluate(passingEvidence({
-      migrations: [{ id: "backfill_x", status: "applied", dryRunPassed: true }],
-    }));
-    assert.deepEqual(blockedGates(result), ["migrations"]);
-  });
+  describe('evaluateReleaseReadiness Orchestrator', () => {
+    test('produces PROCEED decision when all criteria pass', async () => {
+      const store = new Map();
+      const mockDb = {
+        listCollections: () => ({
+          toArray: async () => [
+            { name: 'users' },
+            { name: 'materials' },
+            { name: 'purchases' },
+            { name: 'entitlement_cache' },
+            { name: 'refunds' },
+            { name: 'audit_ledger' },
+          ],
+        }),
+        collection: () => ({
+          insertOne: async (doc) => store.set(doc._id, doc),
+          findOne: async (query) => store.get(query._id) || null,
+          deleteOne: async (query) => store.delete(query._id),
+        }),
+      };
 
-  test("an empty migrations list is an explicit pass", () => {
-    assert.equal(evaluate(passingEvidence({ migrations: [] })).ready, true);
-  });
+      const report = await evaluateReleaseReadiness({
+        actor: { id: 'lead-dev', role: 'admin' },
+        db: mockDb,
+        env: {
+          JWT_SECRET: 'test-secret',
+          NEXT_PUBLIC_STELLAR_NETWORK: 'TESTNET',
+        },
+        rollbackOpts: {
+          lastBackupTimestamp: new Date().toISOString(),
+          hasRehearsedRollback: true,
+        },
+      });
 
-  test("a missing migrations field blocks rather than defaulting to pass", () => {
-    const { migrations: _omit, ...evidence } = passingEvidence();
-    assert.deepEqual(blockedGates(evaluate(evidence)), ["migrations"]);
-  });
+      assert.equal(report.decision, ReleaseDecision.PROCEED);
+      assert.equal(report.summary.failed, 0);
+      assert.ok(report.releaseId.startsWith('rel-'));
+    });
 
-  test("a failed or missing security check blocks the release", () => {
-    const result = evaluate(passingEvidence({ securityChecks: { dependencyAudit: "passed", secretScan: "failed" } }));
-    assert.deepEqual(blockedGates(result), ["security_checks"]);
-    assert.match(result.blockers[0].message, /secretScan=failed/);
-  });
+    test('blocks release if any check fails', async () => {
+      const report = await evaluateReleaseReadiness({
+        actor: { id: 'unauthorized-user', role: 'guest' },
+        db: null,
+      });
 
-  test("smoke tests that did not run block the release", () => {
-    assert.deepEqual(blockedGates(evaluate(passingEvidence({ smokeTests: { status: "not_run" } }))), ["smoke_tests"]);
-  });
-
-  test("a rollback rehearsal must name the restored commit and be recent", () => {
-    const noTarget = evaluate(passingEvidence({ rollbackRehearsal: { status: "passed", rehearsedAt: "2026-10-10T16:00:00Z" } }));
-    assert.deepEqual(blockedGates(noTarget), ["rollback_rehearsal"]);
-
-    const old = evaluate(passingEvidence({
-      rollbackRehearsal: { status: "passed", rehearsedAt: "2026-07-01T00:00:00Z", restoredToCommit: "b".repeat(40) },
-    }));
-    assert.deepEqual(blockedGates(old), ["rollback_rehearsal"]);
-  });
-
-  test("every failing gate is reported together, not just the first", () => {
-    const result = evaluate(passingEvidence({
-      migrations: [{ id: "x", status: "pending" }],
-      smokeTests: { status: "failed" },
-    }));
-    assert.deepEqual(blockedGates(result), ["migrations", "smoke_tests"]);
+      assert.equal(report.decision, ReleaseDecision.BLOCKED);
+      assert.ok(report.summary.failed > 0);
+    });
   });
 });

@@ -43,22 +43,56 @@ export const VALID_TRANSITIONS = {
   [MaterialLifecycleState.REMOVED]: [] // Terminal
 };
 
+/** States with no outgoing transitions. Derived so the table stays the single source of truth. */
+export const TERMINAL_STATES = Object.freeze(
+  Object.keys(VALID_TRANSITIONS).filter((state) => VALID_TRANSITIONS[state].length === 0)
+);
+
+export const LIFECYCLE_ERROR_CODES = Object.freeze({
+  INVALID_TRANSITION: 'INVALID_LIFECYCLE_TRANSITION',
+  CONCURRENT_MODIFICATION: 'LIFECYCLE_CONCURRENT_MODIFICATION',
+  NOT_FOUND: 'MATERIAL_NOT_FOUND'
+});
+
+function lifecycleError(message, code) {
+  const error = new Error(message);
+  error.code = code;
+  return error;
+}
+
+export function isTerminalState(state) {
+  return TERMINAL_STATES.includes(state);
+}
+
+/**
+ * Same-state is a legal no-op for known states; unknown states are never valid,
+ * so corrupt data cannot slip through the identity check.
+ */
 export function isValidTransition(currentState, nextState) {
-  if (currentState === nextState) return true;
-  const allowed = VALID_TRANSITIONS[currentState || MaterialLifecycleState.DRAFT];
-  return allowed ? allowed.includes(nextState) : false;
+  const from = currentState || MaterialLifecycleState.DRAFT;
+  if (!Object.hasOwn(VALID_TRANSITIONS, from) || !Object.hasOwn(VALID_TRANSITIONS, nextState)) return false;
+  if (from === nextState) return true;
+  return VALID_TRANSITIONS[from].includes(nextState);
 }
 
 export async function transitionMaterialState(db, materialId, nextState, { actor, reason, eventDetails = {} } = {}) {
   const materials = db.collection('materials');
   const material = await materials.findOne({ _id: materialId });
   if (!material) {
-    throw new Error('Material not found');
+    throw lifecycleError('Material not found', LIFECYCLE_ERROR_CODES.NOT_FOUND);
   }
 
   const currentState = material.lifecycleState || MaterialLifecycleState.DRAFT;
   if (!isValidTransition(currentState, nextState)) {
-    throw new Error(`Invalid lifecycle transition from ${currentState} to ${nextState}`);
+    throw lifecycleError(
+      `Invalid lifecycle transition from ${currentState} to ${nextState}`,
+      LIFECYCLE_ERROR_CODES.INVALID_TRANSITION
+    );
+  }
+
+  // Idempotent no-op: a repeated request must not rewrite deletion/audit metadata.
+  if (currentState === nextState) {
+    return material;
   }
 
   const patch = {
@@ -95,7 +129,26 @@ export async function transitionMaterialState(db, materialId, nextState, { actor
     patch.legalTombstone = true;
   }
 
-  await materials.updateOne({ _id: materialId }, { $set: patch });
+  // Compare-and-set on the state we validated against, so a concurrent writer
+  // can never turn a legal transition into an illegal one. Legacy documents
+  // without a lifecycleState are treated as draft.
+  const stateGuard =
+    currentState === MaterialLifecycleState.DRAFT
+      ? {
+          $or: [
+            { lifecycleState: MaterialLifecycleState.DRAFT },
+            { lifecycleState: { $exists: false } },
+            { lifecycleState: null }
+          ]
+        }
+      : { lifecycleState: currentState };
+  const writeResult = await materials.updateOne({ _id: materialId, ...stateGuard }, { $set: patch });
+  if (writeResult && writeResult.matchedCount === 0) {
+    throw lifecycleError(
+      `Material ${String(materialId)} changed state while transitioning ${currentState} to ${nextState}`,
+      LIFECYCLE_ERROR_CODES.CONCURRENT_MODIFICATION
+    );
+  }
 
   // Add audit events or logs for state changes that affect users or funds
   auditLog({
