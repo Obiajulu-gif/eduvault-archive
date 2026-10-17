@@ -29,9 +29,18 @@ export async function POST(request) {
 
     if (user) {
       const db = await getDb();
-      await db.collection('refresh_tokens').deleteMany({
-        userId: String(user._id || user.id || user.walletAddress)
-      });
+      const userId = String(user._id || user.id || user.sub || user.walletAddress);
+      
+      try {
+        const { revokeUserSessions, SECURITY_EVENT_TYPES } = await import('@/lib/auth/sessionRevocation');
+        await revokeUserSessions(db, userId, {
+          eventType: SECURITY_EVENT_TYPES.MANUAL_LOGOUT_ALL,
+          reason: "User explicit logout",
+          actor: user.walletAddress || user.sub || userId,
+        });
+      } catch {
+        await db.collection('refresh_tokens').deleteMany({ userId });
+      }
       
       auditLog({
         event: "auth_logout_success",

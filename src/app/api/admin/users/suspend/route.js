@@ -18,6 +18,7 @@ import { appendAuditRecord } from '@/lib/backend/auditLedger'
 import { enqueueMaterialSearchProjection } from '@/lib/backend/materialSearchProjection'
 import { notify } from '@/lib/notifications/notifications'
 import { computePermissionDiff, isBroadChange } from '@/lib/auth/permissionDiff'
+import { revokeUserSessions, SECURITY_EVENT_TYPES } from '@/lib/auth/sessionRevocation'
 
 async function getAdminUser(request) {
   const cookieHeader = request.headers.get('cookie') || ''
@@ -155,6 +156,14 @@ const { userId, action, reason, confirmBroad, preview, expectedPermissionsHash, 
           : buildReactivationPatch({ reactivatedBy: admin.sub }),
       }
     )
+
+    if (isSuspending) {
+      await revokeUserSessions(db, userId, {
+        eventType: SECURITY_EVENT_TYPES.ACCOUNT_SUSPENDED,
+        reason: reason || "Account suspended by administrator",
+        actor: admin.sub,
+      })
+    }
 
     // Hide (or restore) the creator's listings. Denormalised onto each material
     // so public discovery stays one indexed query instead of a per-result

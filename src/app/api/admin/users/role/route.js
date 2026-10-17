@@ -11,6 +11,7 @@ import {
   validateRoleTransition,
   VALID_ROLES,
 } from '@/lib/auth/permissionDiff'
+import { revokeUserSessions, SECURITY_EVENT_TYPES } from '@/lib/auth/sessionRevocation'
 
 const ALLOWED_ROLES = new Set(VALID_ROLES)
 
@@ -146,6 +147,12 @@ const diff = computePermissionDiff({
       { _id: new ObjectId(userId), role: target.role },
       { $set: { role, updatedAt: new Date() } },
     )
+
+    await revokeUserSessions(db, userId, {
+      eventType: SECURITY_EVENT_TYPES.ROLE_CHANGED,
+      reason: `Role changed from ${target.role} to ${role}`,
+      actor,
+    })
 
     await appendAuditRecord({
       db,
