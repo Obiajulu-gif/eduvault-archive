@@ -7,6 +7,7 @@ import { verifyEmailConnection } from "@/lib/email";
 import { withApiHardening } from "@/lib/api/hardening";
 import { Server, rpc } from "@stellar/stellar-sdk";
 import { HORIZON_URL, STELLAR_RPC_URL } from "@/lib/config/chain";
+import { sanitizeErrorMessage } from "@/lib/status/publicStatusModel";
 
 export async function GET(request) {
   return withApiHardening(
@@ -28,7 +29,7 @@ export async function GET(request) {
         await db.command({ ping: 1 });
         status.database = "online";
       } catch (err) {
-        status.database = `offline: ${err.message}`;
+        status.database = `offline: ${sanitizeErrorMessage(err)}`;
         isHealthy = false;
       }
 
@@ -42,7 +43,7 @@ export async function GET(request) {
           status.pinata = "online";
         }
       } catch (err) {
-        status.pinata = `offline: ${err.message}`;
+        status.pinata = `offline: ${sanitizeErrorMessage(err)}`;
         isHealthy = false;
       }
 
@@ -51,7 +52,7 @@ export async function GET(request) {
         await verifyEmailConnection();
         status.email = "online";
       } catch (err) {
-        status.email = `offline: ${err.message}`;
+        status.email = `offline: ${sanitizeErrorMessage(err)}`;
         isHealthy = false;
       }
 
@@ -66,11 +67,11 @@ export async function GET(request) {
         if (health && health.status === "healthy") {
           status.stellar = "online";
         } else {
-          status.stellar = `offline: RPC status is ${health?.status || "unknown"}`;
+          status.stellar = `offline: RPC status is ${sanitizeErrorMessage(health?.status || "unknown")}`;
           isHealthy = false;
         }
       } catch (err) {
-        status.stellar = `offline: ${err.message}`;
+        status.stellar = `offline: ${sanitizeErrorMessage(err)}`;
         isHealthy = false;
       }
 

@@ -125,3 +125,11 @@ export function listFeatureFlags() {
     getFeatureFlag(definition.key),
   );
 }
+
+// Rollout guard exports (#964)
+export {
+  FeatureRolloutGuard,
+  ROLLOUT_STATUS,
+  computePrincipalBucket,
+} from './featureFlags/rolloutGuard.js';
+

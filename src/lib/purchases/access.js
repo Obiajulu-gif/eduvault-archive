@@ -42,8 +42,30 @@ async function findPurchase(db, materialId, buyerAddress) {
   const direct = await purchases.findOne({ materialId, buyerAddress: normalised });
   if (direct) return direct;
 
-  if (normalised === buyerAddress) return null;
-  return purchases.findOne({ materialId, buyerAddress });
+  if (normalised !== buyerAddress) {
+    const directRaw = await purchases.findOne({ materialId, buyerAddress });
+    if (directRaw) return directRaw;
+  }
+
+  // Check alias IDs if material is canonical or merged
+  try {
+    const material = await findMaterial(db, materialId);
+    const candidateIds = [];
+    if (material?.mergedInto) candidateIds.push(material.mergedInto);
+    if (Array.isArray(material?.aliases)) candidateIds.push(...material.aliases);
+
+    for (const altId of candidateIds) {
+      const altPurchase = await purchases.findOne({
+        materialId: altId,
+        buyerAddress: normalised,
+      });
+      if (altPurchase) return altPurchase;
+    }
+  } catch {
+    // Graceful fallback if material query fails
+  }
+
+  return null;
 }
 
 function isOwner(material, buyerAddress) {
@@ -110,7 +132,7 @@ export async function getMaterialAccessStatus(db, materialId, buyerAddress) {
     // endpoint can never claim access that the authorization service denies.
     const decision = await resolveEntitlement({
       db,
-      materialId,
+      materialId: purchase.materialId || materialId,
       buyerAddress,
       purchaseId: purchase.purchaseId || null,
     });
