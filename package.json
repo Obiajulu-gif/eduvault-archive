@@ -25,6 +25,7 @@
     "test:contracts": "hardhat test",
     "test:integration": "vitest run test/integration",
     "test:backend": "npx tsx --test tests/backend/*.test.mjs",
+    "test:fuzz": "npx tsx --test tests/backend/fuzz.test.mjs",
     "test:concurrency": "vitest run test/concurrency",
     "audit:deps": "npm audit --audit-level=critical",
     "audit:deps:high": "npm audit --audit-level=high",
@@ -36,6 +37,8 @@
     "indexer:deadletter": "node scripts/indexer-deadletter.mjs",
     "monitor:journey": "node scripts/journey-monitor.mjs",
     "monitor:journey:dry": "node scripts/journey-monitor.mjs --dry-run",
+    "monitor:synthetic": "node scripts/synthetic-monitor.mjs",
+    "monitor:synthetic:dry": "node scripts/synthetic-monitor.mjs --dry-run",
     "verify:restore": "node scripts/verify-restore.mjs",
     "support:expire": "node scripts/expire-support-sessions.mjs"
   },

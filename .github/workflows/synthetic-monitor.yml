@@ -1,0 +1,59 @@
+name: Synthetic Monitor
+
+# Runs all critical journey scenarios (buyer purchase flow, creator publish,
+# auth, search-to-purchase, entitlement revocation) every 15 minutes and
+# reports per-scenario SLA health.
+#
+# The dry-run step always executes (no secrets required) so CI wiring is
+# verified on every push.  The live step runs only when MONGODB_URI is set.
+#
+# See docs/synthetic-monitoring.md for runbook details.
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+    inputs:
+      scenarios:
+        description: "Comma-separated scenario ids to run (leave blank for all)"
+        required: false
+        default: ""
+      dry_run:
+        description: "Force dry-run even if MONGODB_URI is set"
+        required: false
+        default: "false"
+
+jobs:
+  synthetic:
+    name: Synthetic health check
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      MONGODB_URI: ${{ secrets.MONGODB_URI }}
+      MONGODB_DB: ${{ vars.MONGODB_DB }}
+      SYNTHETIC_MONITOR_WEBHOOK_URL: ${{ secrets.SYNTHETIC_MONITOR_WEBHOOK_URL }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+
+      - name: Dry-run wiring check (always)
+        run: npm run monitor:synthetic:dry
+
+      - name: Live synthetic check against the configured database
+        if: env.MONGODB_URI != '' && github.event.inputs.dry_run != 'true'
+        run: |
+          SCENARIOS="${{ github.event.inputs.scenarios }}"
+          if [ -n "$SCENARIOS" ]; then
+            node scripts/synthetic-monitor.mjs --scenarios="$SCENARIOS"
+          else
+            node scripts/synthetic-monitor.mjs
+          fi
