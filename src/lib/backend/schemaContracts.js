@@ -53,6 +53,10 @@ export const COLLECTIONS = {
   sensitiveAccessLog: SENSITIVE_ACCESS_COLLECTION,
   downloadAccessLog: DOWNLOAD_ACCESS_LOG_COLLECTION,
   idempotencyKeys: IDEMPOTENCY_KEYS_COLLECTION,
+  // #953: signed approval receipts for high-impact maintainer actions. See
+  // src/lib/approvals/maintainerApprovalFlow.js.
+  maintainerApprovalIntents: "maintainer_approval_intents",
+  maintainerApprovalReceipts: "maintainer_approval_receipts",
 };
 
 export const REQUIRED_INDEXES = {
@@ -280,6 +284,16 @@ export const REQUIRED_INDEXES = {
   ],
   [IDEMPOTENCY_KEYS_COLLECTION]: [
     { keys: { expiresAt: 1 }, options: { expireAfterSeconds: 0, name: "idempotency_keys_expiry_idx" } },
+  ],
+  maintainer_approval_intents: [
+    { keys: { intentId: 1 }, options: { unique: true, name: "maintainer_approval_intent_lookup_idx" } },
+    { keys: { actor: 1, createdAt: -1 }, options: { name: "maintainer_approval_intent_actor_idx" } },
+  ],
+  maintainer_approval_receipts: [
+    { keys: { receiptId: 1 }, options: { unique: true, name: "maintainer_approval_receipt_id_idx" } },
+    // One decided receipt per intent — a decision, once signed, is final.
+    { keys: { intentId: 1 }, options: { unique: true, name: "maintainer_approval_intent_idx" } },
+    { keys: { approverAddress: 1, signedAt: -1 }, options: { name: "maintainer_approval_approver_idx" } },
   ],
 };
 
