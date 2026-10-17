@@ -51,8 +51,10 @@ export function extractIdempotencyKey(request) {
   return null;
 }
 
+export const IDEMPOTENCY_KEYS_COLLECTION = "idempotency_keys";
+
 function idempotencyCollection(db) {
-  return db.collection("idempotency_keys");
+  return db.collection(IDEMPOTENCY_KEYS_COLLECTION);
 }
 
 const DEFAULT_LOCK_MS = 2 * 60 * 1000; // how long an in-flight claim blocks duplicates

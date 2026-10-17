@@ -12,13 +12,17 @@ import {
   removeMaterialFromIndex,
   materialVisibility,
 } from "@/lib/search/index";
+import { sanitizeMaterialPublic } from "@/lib/storage/protectedStorage";
 
 const PAGE_SIZE = 10;
 
+// #946: delegate to the shared public projector rather than this
+// collection's own blocklist, which had drifted out of sync with
+// protectedStorage.js and was still omitting wrappedKey/wrapIv/wrapAuthTag/
+// authTag/iv — the envelope-encryption fields for protected materials.
 function sanitizeMaterial(doc) {
   if (!doc) return doc;
-  const { storageKey, fileUrl, metadataUrl, ...safe } = doc;
-  return safe;
+  return sanitizeMaterialPublic(doc);
 }
 
 function isVisibleTo(material, userAddress) {

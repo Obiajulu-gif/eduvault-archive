@@ -110,8 +110,9 @@ Events are stored in the `sensitive_access_log` collection
 (`COLLECTIONS.sensitiveAccessLog`). Indexes are declared in
 `REQUIRED_INDEXES.sensitive_access_log`: unique `correlationId`, plus
 `{ actorId, at }`, `{ resourceType, resourceId, at }`, and `{ decision, at }`
-for review queries. Apply the retention policy to this collection through the
-database's retention configuration rather than application deletion.
+for review queries. Retention (180 days) is enforced by
+`scripts/data-retention-cleanup.mjs`'s `RETENTION_POLICIES` (#954); field-shape
+drift is caught separately by `scripts/data-minimization-review.mjs`.
 
 ## Test coverage
 

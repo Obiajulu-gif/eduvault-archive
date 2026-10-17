@@ -43,6 +43,8 @@
 
 import { MongoClient } from "mongodb";
 import { pathToFileURL } from "node:url";
+import { SENSITIVE_ACCESS_COLLECTION } from "../src/lib/security/sensitiveAccessLog.js";
+import { DOWNLOAD_ACCESS_LOG_COLLECTION } from "../src/lib/downloads/accessLog.js";
 
 // ---------------------------------------------------------------------------
 // Structured logger
@@ -96,6 +98,20 @@ export const RETENTION_POLICIES = {
 
   // Quarantine records: keep for 30 days after resolution
   quarantine: { retentionDays: 30, protectionCheck: "unresolvedQuarantine" },
+
+  // #954: operational metadata previously missing an enforced retention
+  // window. Field-level hold markers (legalHold/auditHold/activeDispute/etc.,
+  // see RECORD_HOLD_MARKERS) still apply generically to these collections.
+
+  // Sensitive-field access log: never stores values, only field names
+  // (see src/lib/security/sensitiveAccessLog.js), kept long enough to
+  // support an incident review before cleanup.
+  [SENSITIVE_ACCESS_COLLECTION]: { retentionDays: 180, protectionCheck: null },
+
+  // Download access log: identity/decision metadata for dispute resolution
+  // (src/lib/downloads/accessLog.js). Kept for the same window as a buyer
+  // dispute can realistically be raised.
+  [DOWNLOAD_ACCESS_LOG_COLLECTION]: { retentionDays: 180, protectionCheck: null },
 };
 
 // ---------------------------------------------------------------------------
@@ -229,6 +245,12 @@ export function buildRetentionQuery(collection, policy, now) {
     quarantine: {
       status: { $in: ["released", "approved", "rejected"] },
       resolvedAt: { $lt: cutoffDate }
+    },
+    [SENSITIVE_ACCESS_COLLECTION]: {
+      at: { $lt: cutoffDate.toISOString() }
+    },
+    [DOWNLOAD_ACCESS_LOG_COLLECTION]: {
+      timestamp: { $lt: cutoffDate }
     },
   };
 

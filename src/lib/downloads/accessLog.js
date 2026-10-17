@@ -15,7 +15,8 @@
  * needed to answer "who accessed what, when, and was it authorized."
  */
 
-const COLLECTION = 'download_access_log';
+export const DOWNLOAD_ACCESS_LOG_COLLECTION = 'download_access_log';
+const COLLECTION = DOWNLOAD_ACCESS_LOG_COLLECTION;
 
 /**
  * Record one download-capability decision (issued or denied). Never throws

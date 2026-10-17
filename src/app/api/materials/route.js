@@ -13,6 +13,15 @@ import { evaluateAndQueueListing } from "@/lib/backend/manipulationScoring";
 import { invalidateCatalogCache } from "@/lib/cache/redis";
 import { appendCriticalMutation } from "@/lib/backend/auditLedger";
 import { effectiveVersion, updateWithExpectedVersion, VERSIONED_WRITE } from "@/lib/backend/versionedWrite";
+import {
+  readRecord,
+  writeRecord,
+  negotiateSchemaVersion,
+  schemaResponseHeaders,
+  UnsupportedSchemaVersionError,
+} from "@/lib/backend/schemaCompat";
+import { buildDerivedProvenance, recordProvenanceRevision } from "@/lib/backend/provenance";
+import { sanitizeMaterialPublic } from "@/lib/storage/protectedStorage";
 
 export const runtime = "nodejs";
 
@@ -30,10 +39,13 @@ async function findDerivedSource(db, derivedFrom = {}) {
   return null;
 }
 
+// #946: delegate to the shared public projector rather than re-deriving
+// this collection's own blocklist, which had drifted out of sync with
+// protectedStorage.js and was still omitting wrappedKey/wrapIv/wrapAuthTag/
+// authTag/iv — the envelope-encryption fields for protected materials.
 function sanitizeMaterial(doc) {
   if (!doc) return doc;
-  const { storageKey, fileUrl, metadataUrl, ...safe } = doc;
-  return safe;
+  return sanitizeMaterialPublic(doc);
 }
 
 export async function POST(request) {
@@ -82,14 +94,22 @@ export async function POST(request) {
           });
         }
 
-        const doc = {
-          userAddress,
-          ...material,
-          ...(provenance ? { provenance } : {}),
-          version: 1,
-          createdAt: new Date(),
-          updatedAt: new Date(),
-        };
+        // #946: stamp the schema version a new listing is written at — without
+        // this, every new document silently falls back to v1 on read, and
+        // never carries the v2 fields (pricingTier, sorobanEntitlementConfig,
+        // rightsMetadata) the catalog migration is supposed to backfill.
+        const doc = writeRecord(
+          "materials",
+          {
+            userAddress,
+            ...material,
+            ...(provenance ? { provenance } : {}),
+            version: 1,
+            createdAt: new Date(),
+            updatedAt: new Date(),
+          },
+          { version: negotiation.version }
+        );
 
         const result = await db.collection("materials").insertOne(doc);
         const assessment = await evaluateAndQueueListing(db, { _id: result.insertedId, ...doc });
