@@ -6,7 +6,8 @@ writes.
 
 - Harness: [`test/concurrency/harness.js`](../test/concurrency/harness.js)
 - Scenarios: [`criticalWrites.test.js`](../test/concurrency/criticalWrites.test.js),
-  [`lifecycleRaces.test.js`](../test/concurrency/lifecycleRaces.test.js)
+  [`lifecycleRaces.test.js`](../test/concurrency/lifecycleRaces.test.js),
+  [`archiveSubmissions.test.js`](../test/concurrency/archiveSubmissions.test.js)
 - Harness self-tests: [`harness.test.js`](../test/concurrency/harness.test.js)
 
 Run: `npm run test:concurrency`
@@ -57,6 +58,20 @@ sequential run never would, and that atomic updates survive every interleaving.
 | Refunds | Overlapping reconcilers | Refunded amount mirrored onto the purchase exactly once |
 | | Worker pool polling the queue | One claim, one on-chain submission |
 | | Retry storm on failing dependency | `retryCount` equals processed attempts; nothing submitted |
+| Archive (eduvault-archive) | N concurrent duplicate archive submissions | Document ends archived; `searchVisibility` consistent |
+| | Archive + restore racing | Final state is either fully archived or fully restored; no split-brain |
+| | N archivers on the same CAS version | Exactly one write lands; the rest get `CONFLICT` with current version |
+| | Deeply stale archive request | Rejected; document unchanged |
+| | Read-modify-write refetch-and-retry on archive | No lost update; `toggleCounter` == number of editors |
+| | Archive racing a concurrent metadata PUT | Exactly one write lands at version *v*; other retries at *v+1* |
+| | Impersonator vs. real owner racing | Only the verified owner's write lands; impersonators always get `forbidden` |
+| | Case-insensitive address matching | Same address in different cases accepted; different address rejected |
+| | N workers racing to create a publication saga | Exactly one saga created per idempotency key |
+| | Concurrent sagas for different materials | Two distinct sagas; no cross-contamination |
+| | Saga failure + retry racing archive transition | Saga state consistent; stale fail is a no-op after step advances |
+| | Retry storm on transiently failing archive write | Document archived exactly once; every client converges |
+| | Non-retryable authorization failure | Storm stops immediately; no retries; no write lands |
+| | Concurrent archive and delete | Final state consistently archived or gone; never corrupted |
 
 ## Defects the harness found (and the fixes)
 
@@ -97,6 +112,21 @@ sequential run never would, and that atomic updates survive every interleaving.
   single-document operations. It does not model multi-document transactions,
   replication lag or process crashes between statements; crash recovery is
   covered by the lifecycle tests.
+
+## Archive route: known races and hardening recommendations
+
+The `POST /api/creator/materials/[id]/archive` route performs a **blind
+`updateOne`** (no optimistic version check). The tests in
+`archiveSubmissions.test.js` document the resulting behaviour and recommend
+mitigations:
+
+| Race | Current behaviour | Recommended fix |
+| --- | --- | --- |
+| N duplicate archive requests | All land (idempotent flag write); `searchVersion` advances N times | Wrap in `updateWithExpectedVersion` so only one write lands per version step |
+| Archive + restore racing | Last committed write wins; no split-brain | Acceptable for a flag toggle; add CAS if ordering must be authoritative |
+| Archive racing a metadata PUT | Both read the same version and one silently overwrites the other | Both routes must use `updateWithExpectedVersion`; the loser retries at the new version |
+| Concurrent archive + delete | Archiver may read the document before it is deleted; `updateOne` on a gone doc is a silent no-op | Check `matchedCount === 1` and return 404 when the doc vanished between read and write |
+| Publication saga duplicate creation | Without a unique index on `idempotencyKey`, two workers can each insert a saga | Add a unique index on `publication_sagas.idempotencyKey`; `ensureOneSaga` pattern in the tests shows the correct guard |
 
 ## Rollback and recovery
 

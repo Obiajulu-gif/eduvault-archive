@@ -8,6 +8,7 @@ import { withApiHardening } from "@/lib/api/hardening";
 import { getDb } from "@/lib/mongodb";
 import { auditLog } from "@/lib/api/audit";
 import { errorResponse } from "@/lib/utils/errorResponse";
+import { withFeatureGuard } from "@/lib/featureFlags";
 import {
   enqueueMaterialSearchProjection,
   enqueueMaterialSearchDeletion,
@@ -17,7 +18,7 @@ function normalizeAddress(addr) {
   return String(addr || "").trim().toLowerCase();
 }
 
-export async function POST(request, context) {
+async function handleArchive(request, context) {
   return withApiHardening(
     request,
     { route: "creator-material-archive" },
@@ -150,10 +151,9 @@ export async function POST(request, context) {
   );
 }
 
-export async function PUT(request, context) {
-  return POST(request, context);
-}
-
-export async function PATCH(request, context) {
-  return POST(request, context);
-}
+// Wrap all three HTTP methods with the ARCHIVE_MATERIAL feature guard.
+// When the flag is disabled (env var or DB override), every method responds
+// with 503 immediately without running any business logic.
+export const POST  = withFeatureGuard('ARCHIVE_MATERIAL', handleArchive);
+export const PUT   = withFeatureGuard('ARCHIVE_MATERIAL', handleArchive);
+export const PATCH = withFeatureGuard('ARCHIVE_MATERIAL', handleArchive);

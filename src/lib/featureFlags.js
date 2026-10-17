@@ -1,7 +1,8 @@
 /**
  * src/lib/featureFlags.js
  *
- * Typed feature flag definitions with safe defaults (#797).
+ * Typed feature flag definitions with safe defaults (#797) and runtime
+ * emergency-disablement overrides (#1018).
  *
  * Feature flags let maintainers stage rollout of risky behavior, compare
  * behavior between enabled/disabled cohorts, and disable a new path without a
@@ -14,10 +15,14 @@
  * • Flags are read from `FEATURE_FLAG_<KEY>` environment variables so they
  *   can be changed per-environment (local / preview / production) without a
  *   code change.
+ * • Runtime overrides (stored in MongoDB `feature_flag_overrides`) take
+ *   precedence over env vars and are the basis for emergency disablement
+ *   without a redeploy. Use `withFeatureGuard()` at route level to enforce.
  * • The registry below is the single source of truth. Adding a flag means
  *   adding one entry here; nothing else in the codebase needs to change.
- * • Flag evaluation is synchronous and side-effect free so it is safe to call
- *   from both route handlers and React components.
+ * • Synchronous `isFeatureFlagEnabled` is still safe in React components and
+ *   contexts where a DB isn't available; async `resolveFeatureFlag` consults
+ *   the override layer and is the correct choice for API route handlers.
  */
 
 /**
@@ -25,6 +30,7 @@
  * @property {string} key            - Registry key. The env var is `FEATURE_FLAG_<KEY>`.
  * @property {string} description    - What the flag controls, for operators.
  * @property {boolean} defaultValue  - Safe fallback when the env var is missing or malformed.
+ * @property {string[]} [rolloutStages] - Ordered stage names for progressive rollout (informational).
  */
 
 /**
@@ -45,6 +51,7 @@ export const FEATURE_FLAG_REGISTRY = Object.freeze({
     description:
       'Sends in-app notifications for critical lifecycle and recovery events (purchases, refunds, entitlement changes, payouts, suspensions, wallet recovery).',
     defaultValue: false,
+    rolloutStages: ['internal', 'beta', 'ga'],
   },
 
   /**
@@ -57,6 +64,25 @@ export const FEATURE_FLAG_REGISTRY = Object.freeze({
     description:
       'Enables the authenticated learner data export endpoint (GET /api/learner-export).',
     defaultValue: false,
+    rolloutStages: ['internal', 'beta', 'ga'],
+  },
+
+  /**
+   * Gates the material archive/restore route (#1018).
+   * Default OFF — archiving is new creator-facing behavior that changes
+   * catalog visibility and search index state. Stays disabled until the
+   * feature has been validated in a staging environment.
+   *
+   * Emergency disablement: set FEATURE_FLAG_ARCHIVE_MATERIAL=false in env,
+   * or POST /api/admin/feature-flags with { key: "ARCHIVE_MATERIAL", enabled: false }
+   * to override at runtime without a redeploy.
+   */
+  ARCHIVE_MATERIAL: {
+    key: 'ARCHIVE_MATERIAL',
+    description:
+      'Enables the creator material archive/restore endpoint (POST /api/creator/materials/[id]/archive). Disabling immediately blocks new archive/restore operations without a redeploy.',
+    defaultValue: false,
+    rolloutStages: ['internal', 'beta', 'ga'],
   },
 });
 
