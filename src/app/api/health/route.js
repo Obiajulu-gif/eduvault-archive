@@ -1,89 +1,71 @@
 export const dynamic = "force-dynamic";
 
 import { NextResponse } from "next/server";
-import { getDb } from "@/lib/mongodb";
-import { pinata } from "@/lib/pinata";
-import { verifyEmailConnection } from "@/lib/email";
 import { withApiHardening } from "@/lib/api/hardening";
-import { Server, rpc } from "@stellar/stellar-sdk";
-import { HORIZON_URL, STELLAR_RPC_URL } from "@/lib/config/chain";
-import { sanitizeErrorMessage } from "@/lib/status/publicStatusModel";
+import {
+  checkAllDependencies,
+  DEPENDENCY_STATUS,
+  sanitizeDiagnostics,
+} from "@/lib/health/dependencyChecker";
 
 export async function GET(request) {
   return withApiHardening(
     request,
     { route: "health-check", rateLimit: { limit: 60, windowMs: 60_000 } },
     async () => {
-      const status = {
-        database: "offline",
-        pinata: "offline",
-        email: "offline",
-        stellar: "offline",
+      const { searchParams } = new URL(request.url);
+      const includeDiagnostics = searchParams.get("diagnostics") === "true";
+
+      const report = await checkAllDependencies();
+
+      // Maintain backward-compatible services mapping for existing consumers
+      const legacyServices = {
+        database:
+          report.dependencies.database.status === DEPENDENCY_STATUS.HEALTHY
+            ? "online"
+            : `offline: ${report.dependencies.database.message}`,
+        pinata:
+          report.dependencies.storage.status === DEPENDENCY_STATUS.HEALTHY
+            ? "online"
+            : `offline: ${report.dependencies.storage.message}`,
+        email:
+          report.dependencies.email.status === DEPENDENCY_STATUS.HEALTHY
+            ? "online"
+            : `offline: ${report.dependencies.email.message}`,
+        stellar:
+          report.dependencies.stellar.status === DEPENDENCY_STATUS.HEALTHY
+            ? "online"
+            : `offline: ${report.dependencies.stellar.message}`,
       };
-      
-      let isHealthy = true;
 
-      // 1. Check Database
-      try {
-        const db = await getDb();
-        await db.command({ ping: 1 });
-        status.database = "online";
-      } catch (err) {
-        status.database = `offline: ${sanitizeErrorMessage(err)}`;
-        isHealthy = false;
+      const isHealthy = report.status === DEPENDENCY_STATUS.HEALTHY;
+      const isDegraded = report.status === DEPENDENCY_STATUS.DEGRADED;
+      const statusCode = isHealthy || isDegraded ? 200 : 503;
+
+      const payload = {
+        status: report.status,
+        timestamp: report.timestamp,
+        services: legacyServices,
+        dependencies: report.dependencies,
+        remediations: report.remediations,
+        summary: report.summary,
+      };
+
+      if (includeDiagnostics) {
+        payload.diagnostics = sanitizeDiagnostics({
+          environment: process.env.NODE_ENV || "development",
+          stellarNetwork: process.env.NEXT_PUBLIC_STELLAR_NETWORK || "TESTNET",
+          gatewayConfigured: Boolean(process.env.NEXT_PUBLIC_GATEWAY_URL),
+          emailConfigured: Boolean(process.env.SMTP_HOST || process.env.EMAIL_USER),
+          contractsConfigured: Boolean(
+            process.env.NEXT_PUBLIC_MATERIAL_REGISTRY_CONTRACT_ID ||
+            process.env.NEXT_PUBLIC_PURCHASE_MANAGER_CONTRACT_ID ||
+            process.env.NEXT_PUBLIC_SOROBAN_CONTRACT_ID
+          ),
+        });
       }
 
-      // 2. Check Pinata Gateway / Authentication API
-      try {
-        if (!process.env.PINATA_JWT) {
-          status.pinata = "offline: PINATA_JWT not configured";
-          isHealthy = false;
-        } else {
-          await pinata.testAuthentication();
-          status.pinata = "online";
-        }
-      } catch (err) {
-        status.pinata = `offline: ${sanitizeErrorMessage(err)}`;
-        isHealthy = false;
-      }
-
-      // 3. Check Email Connection (Nodemailer verification)
-      try {
-        await verifyEmailConnection();
-        status.email = "online";
-      } catch (err) {
-        status.email = `offline: ${sanitizeErrorMessage(err)}`;
-        isHealthy = false;
-      }
-
-      // 4. Check Stellar Horizon & RPC Connection
-      try {
-        const horizonServer = new Server(HORIZON_URL);
-        await horizonServer.root();
-
-        const rpcServer = new rpc.Server(STELLAR_RPC_URL);
-        const health = await rpcServer.getHealth();
-
-        if (health && health.status === "healthy") {
-          status.stellar = "online";
-        } else {
-          status.stellar = `offline: RPC status is ${sanitizeErrorMessage(health?.status || "unknown")}`;
-          isHealthy = false;
-        }
-      } catch (err) {
-        status.stellar = `offline: ${sanitizeErrorMessage(err)}`;
-        isHealthy = false;
-      }
-
-      const statusCode = isHealthy ? 200 : 503;
-      return NextResponse.json(
-        {
-          status: isHealthy ? "healthy" : "unhealthy",
-          timestamp: new Date().toISOString(),
-          services: status,
-        },
-        { status: statusCode }
-      );
+      return NextResponse.json(payload, { status: statusCode });
     }
   );
 }
