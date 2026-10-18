@@ -188,12 +188,16 @@ the report without writing.
 
 1. Restore Mongo from snapshot (`mongorestore … --drop --archive=…`).
 2. Run `restore-verification.mjs` against the restored archive and confirm exit `0`.
-3. Run `npm run indexer:stellar` to replay on-chain events (materials/events).
-4. Run `scripts/rebuild-entitlement-cache.mjs` (verification-only). Confirm **no**
+3. Run `npm run verify:restore` (snapshot restore invariant verification —
+   derived views, indexes, audit chain; see
+   `docs/restore-invariant-verification.md`). Confirm exit `0`, or run
+   `node scripts/verify-restore.mjs --repair` and re-verify.
+4. Run `npm run indexer:stellar` to replay on-chain events (materials/events).
+5. Run `scripts/rebuild-entitlement-cache.mjs` (verification-only). Confirm **no**
    missing/extra/mismatched. If discrepancies exist, run `--rebuild`.
-5. Re-run verification; expect exit `0`.
-6. Run `npm run scan:secrets` and confirm a clean result.
-7. Spot-check protected downloads for a creator-owned and a purchased material.
+6. Re-run verification; expect exit `0`.
+7. Run `npm run scan:secrets` and confirm a clean result.
+8. Spot-check protected downloads for a creator-owned and a purchased material.
 
 Mismatches are the highest-signal failure: they mean the cache and the chain
 disagree on who *should* have access — resolve before reopening traffic.

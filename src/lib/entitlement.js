@@ -464,6 +464,18 @@ export async function resolveEntitlement({ db, materialId, buyerAddress, purchas
     let purchase;
     try {
       purchase = await database.collection('purchases').findOne({ materialId, buyerAddress: normalised });
+      if (!purchase) {
+        const mat = await database.collection('materials').findOne({
+          $or: [{ materialId }, { _id: materialId }],
+        });
+        const candidateIds = [];
+        if (mat?.mergedInto) candidateIds.push(mat.mergedInto);
+        if (Array.isArray(mat?.aliases)) candidateIds.push(...mat.aliases);
+        for (const altId of candidateIds) {
+          purchase = await database.collection('purchases').findOne({ materialId: altId, buyerAddress: normalised });
+          if (purchase) break;
+        }
+      }
     } catch (err) {
       logger.warn({ event: 'entitlement_resolve_error', materialId, buyerAddress: normalised, err: err?.message }, 'purchases lookup failed closed');
       return { state: ENTITLEMENT_STATE.UNAVAILABLE, hasAccess: false, source: 'purchases-db-error' };

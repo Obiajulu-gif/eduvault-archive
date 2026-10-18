@@ -40,14 +40,17 @@ export function suspendedResponseBody(user) {
 /** The `$set` payload applied when suspending an account. */
 export function buildSuspensionPatch({ suspendedBy, reason, now = new Date() }) {
   const timestamp = now instanceof Date ? now : new Date(now);
+  const timestampIso = timestamp.toISOString();
   return {
     isSuspended: true,
     // `status` is kept in step for the existing dashboard queries that read it.
     status: "suspended",
-    suspendedAt: timestamp.toISOString(),
+    suspendedAt: timestampIso,
+    tokensValidAfter: timestampIso,
+    sessionRevokedAt: timestampIso,
     suspensionReason: reason || null,
     suspendedBy: suspendedBy || null,
-    updatedAt: timestamp.toISOString(),
+    updatedAt: timestampIso,
   };
 }
 

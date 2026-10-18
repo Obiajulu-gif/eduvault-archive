@@ -67,6 +67,7 @@ export async function POST(request) {
           walletAddress: user?.walletAddress ?? "",
           action: requestedAction,
           sessionFamilyId: rotation.sessionFamilyId,
+          sessionVersion: Number(user?.sessionVersion || 1),
         };
 
         const accessToken = generateAccessToken(tokenPayload);

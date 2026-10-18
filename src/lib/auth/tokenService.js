@@ -2,9 +2,10 @@ import crypto from "crypto";
 import jwt from "jsonwebtoken";
 import { getDb } from "@/lib/mongodb";
 import { ObjectId } from "mongodb";
+import { revokeUserSessions, SECURITY_EVENT_TYPES } from "./sessionRevocation.js";
 
-const ACCESS_TOKEN_TTL_SECONDS = 15 * 60; // 15 minutes
-const REFRESH_TOKEN_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+export const ACCESS_TOKEN_TTL_SECONDS = 15 * 60; // 15 minutes
+export const REFRESH_TOKEN_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 
 // Key rotation configuration — versioned keys with audience, network, and session binding.
 export const KEY_VERSION = Number(process.env.JWT_KEY_VERSION || 1);
@@ -26,18 +27,15 @@ function buildKeySecret(baseSecret, version) {
 }
 
 /**
- * JWT payload extensions for key rotation binding.
- *
- * - aud: audience (e.g., "eduvault", "frontend", "mobile")
- * - network: Stellar network passphrase (testnet/mainnet)
- * - keyId: explicit key version identifier
- * - sessionVersion: monotonically increasing session counter for cutoff
+ * JWT payload extensions for key rotation binding and session tracking.
  */
 export const JWT_EXTENSIONS = {
   audience: "aud",
   network: "network",
   keyId: "keyId",
   sessionVersion: "sessionVersion",
+  sessionFamilyId: "sessionFamilyId",
+  jti: "jti",
 };
 
 /**
@@ -48,11 +46,15 @@ export function generateAccessToken(payload, options = {}) {
   if (!secret) throw new Error("JWT_SECRET not configured");
 
   const {
-    audience = options.audience || "eduvault",
-    network = options.network || "",
-    keyId = options.keyId || KEY_VERSION,
-    sessionVersion = options.sessionVersion || KEY_VERSION,
+    audience = options.audience || payload.aud || "eduvault",
+    network = options.network || payload.network || "",
+    keyId = options.keyId || payload.keyId || KEY_VERSION,
+    sessionVersion = options.sessionVersion ?? payload.sessionVersion ?? 1,
+    sessionFamilyId = options.sessionFamilyId ?? payload.sessionFamilyId ?? null,
   } = options;
+
+  const nowSec = Math.floor(Date.now() / 1000);
+  const jti = options.jti || crypto.randomUUID();
 
   const payloadWithExtensions = {
     ...payload,
@@ -60,8 +62,10 @@ export function generateAccessToken(payload, options = {}) {
     [JWT_EXTENSIONS.network]: network,
     [JWT_EXTENSIONS.keyId]: keyId,
     [JWT_EXTENSIONS.sessionVersion]: sessionVersion,
-    iat: Math.floor(Date.now() / 1000),
-    exp: Math.floor(Date.now() / 1000) + ACCESS_TOKEN_TTL_SECONDS,
+    [JWT_EXTENSIONS.sessionFamilyId]: sessionFamilyId,
+    [JWT_EXTENSIONS.jti]: jti,
+    iat: nowSec,
+    exp: nowSec + ACCESS_TOKEN_TTL_SECONDS,
   };
 
   const keySecret = buildKeySecret(secret, keyId);
@@ -71,13 +75,6 @@ export function generateAccessToken(payload, options = {}) {
 /**
  * Verify a JWT access token, with optional fallback to previous key versions.
  * Returns the decoded payload or null if invalid/expired.
- *
- * @param {string} token - The JWT token to verify
- * @param {object} [options] - Verification options
- * @param {number} [options.maxKeyVersions] - How many previous key versions to try (default: 1)
- * @param {string} [options.audience] - Expected audience (optional)
- * @param {string} [options.network] - Expected network passphrase (optional)
- * @returns {{payload: object, keyVersion: number} | null}
  */
 export function verifyAccessToken(token, options = {}) {
   const {
@@ -123,23 +120,145 @@ export function verifyAccessToken(token, options = {}) {
           keyVersion,
         };
       } catch {
-        // Continue to next key version
         continue;
       }
     }
 
-    // All key versions failed
     return null;
   }
 }
 
 /**
- * Remove expired refresh tokens — intended for a daily cron or background job.
+ * Generate a cryptographically secure opaque refresh token.
+ */
+export function generateRefreshToken() {
+  return crypto.randomBytes(64).toString("hex");
+}
+
+/**
+ * Persist a refresh token in the database, associated with a user and session family.
+ */
+export async function storeRefreshToken(userId, token, sessionContext = {}) {
+  const db = await getDb();
+  const sessionFamilyId = sessionContext.sessionFamilyId || crypto.randomUUID();
+
+  await db.collection("refresh_tokens").insertOne({
+    userId: String(userId),
+    token,
+    sessionFamilyId,
+    used: false,
+    revoked: false,
+    createdAt: new Date(),
+    expiresAt: new Date(Date.now() + REFRESH_TOKEN_TTL_MS),
+    sessionContext: {
+      action: sessionContext.action || "default",
+      network: sessionContext.network || "",
+      origin: sessionContext.origin || "",
+    },
+  });
+
+  return { sessionFamilyId };
+}
+
+/**
+ * Rotate a refresh token with strict replay-attack detection and automatic
+ * session revocation (Issue #1006).
+ *
+ * - Unknown token -> return null (reject).
+ * - Expired token -> delete doc and return null.
+ * - Revoked or already used token -> REPLAY ATTACK DETECTED:
+ *   Immediately revokes ALL active sessions for that user across devices,
+ *   invalidates all refresh tokens in the family, and returns null.
+ * - Valid token -> marks old token used, creates new refresh token in same family,
+ *   returns { userId, refreshToken, sessionFamilyId }.
+ */
+export async function rotateRefreshToken(oldToken, options = {}) {
+  const db = await getDb();
+  const doc = await db.collection("refresh_tokens").findOne({ token: oldToken });
+
+  if (!doc) return null;
+
+  // Replay Attack Detection: If token was already consumed or revoked, someone is
+  // trying to replay an obsolete token. Invalidate ALL sessions for this user!
+  if (doc.used || doc.revoked) {
+    await revokeUserSessions(db, doc.userId, {
+      eventType: SECURITY_EVENT_TYPES.TOKEN_REUSE_DETECTED,
+      reason: `Refresh token reuse / replay detected on family ${doc.sessionFamilyId}`,
+      actor: "system",
+    });
+    return null;
+  }
+
+  // Expired token check
+  if (new Date(doc.expiresAt) < new Date()) {
+    await db.collection("refresh_tokens").deleteOne({ _id: doc._id });
+    return null;
+  }
+
+  // Atomically mark old token as used
+  const updateResult = await db.collection("refresh_tokens").updateOne(
+    { _id: doc._id, used: false, revoked: false },
+    { $set: { used: true, usedAt: new Date() } }
+  );
+
+  if (updateResult.modifiedCount === 0) {
+    // Concurrent race condition on rotation — treat as replay
+    await revokeUserSessions(db, doc.userId, {
+      eventType: SECURITY_EVENT_TYPES.TOKEN_REUSE_DETECTED,
+      reason: `Concurrent refresh collision / race condition on family ${doc.sessionFamilyId}`,
+      actor: "system",
+    });
+    return null;
+  }
+
+  // Issue new refresh token in the same session family
+  const newToken = generateRefreshToken();
+  const sessionFamilyId = doc.sessionFamilyId || crypto.randomUUID();
+
+  await db.collection("refresh_tokens").insertOne({
+    userId: doc.userId,
+    token: newToken,
+    sessionFamilyId,
+    used: false,
+    revoked: false,
+    createdAt: new Date(),
+    expiresAt: new Date(Date.now() + REFRESH_TOKEN_TTL_MS),
+    sessionContext: {
+      action: options.action || doc.sessionContext?.action || "default",
+      network: options.network || doc.sessionContext?.network || "",
+      origin: options.origin || doc.sessionContext?.origin || "",
+    },
+  });
+
+  return {
+    userId: doc.userId,
+    refreshToken: newToken,
+    sessionFamilyId,
+  };
+}
+
+/**
+ * Remove expired or revoked refresh tokens past retention threshold.
  */
 export async function cleanupExpiredRefreshTokens() {
   const db = await getDb();
   const result = await db.collection("refresh_tokens").deleteMany({
-    expiresAt: { $lt: new Date() },
+    $or: [
+      { expiresAt: { $lt: new Date() } },
+      { revoked: true, revokedAt: { $lt: new Date(Date.now() - 24 * 60 * 60 * 1000) } },
+    ],
   });
   return result.deletedCount;
+}
+
+/**
+ * Invalidate all refresh tokens for a user.
+ */
+export async function revokeRefreshTokensForUser(userId) {
+  const db = await getDb();
+  const result = await db.collection("refresh_tokens").updateMany(
+    { userId: String(userId), revoked: { $ne: true } },
+    { $set: { revoked: true, revokedAt: new Date(), revocationReason: "Explicit user revocation" } }
+  );
+  return result.modifiedCount;
 }

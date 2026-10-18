@@ -41,11 +41,9 @@ export const COLLECTIONS = {
   adminTransfers: "admin_transfers",
   checkoutQuotes: "checkout_quotes",
   storageQuotaHistory: "storage_quota_history",
-  notifications: "notifications",
-  // #976: per-recipient opt-outs for optional notification types only.
-  notificationPreferences: "notification_preferences",
-  backgroundJobs: "background_jobs",
-  sensitiveAccessLog: "sensitive_access_log",
+  // Time-bounded maintainer impersonation / support access (see
+  // src/lib/auth/supportAccess.js). Immutable audit lives in audit_ledger.
+  supportSessions: "support_sessions",
 };
 
 export const REQUIRED_INDEXES = {
@@ -248,34 +246,15 @@ export const REQUIRED_INDEXES = {
     { keys: { contentHash: 1 }, options: { unique: true, name: "material_previews_content_hash_idx", background: true } },
     { keys: { state: 1, updatedAt: 1 }, options: { name: "material_previews_state_idx", background: true } },
   ],
-  // #794: one notification per (recipient, dedupeKey), so a retried event
-  // can't notify twice even when two workers race.
-  notifications: [
-    { keys: { recipient: 1, dedupeKey: 1 }, options: { unique: true, name: "notifications_dedupe_idx" } },
-    { keys: { recipient: 1, read: 1, createdAt: -1 }, options: { name: "notifications_inbox_idx" } },
-    // #834: delivery tracking / diagnostics scan a recipient's failed and
-    // exhausted notifications without a collection scan.
-    { keys: { recipient: 1, deliveryStatus: 1, lastAttemptAt: -1 }, options: { name: "notifications_delivery_idx", background: true } },
-  ],
-  // #976: one preference per (recipient, type). Mandatory types never get a row.
-  notification_preferences: [
-    { keys: { recipient: 1, type: 1 }, options: { unique: true, name: "notification_preferences_recipient_type_idx" } },
-  ],
-  // #789: Background worker framework jobs queue indexes
-  background_jobs: [
-    { keys: { jobId: 1 }, options: { unique: true, name: "background_jobs_id_idx" } },
-    { keys: { idempotencyKey: 1 }, options: { unique: true, sparse: true, name: "background_jobs_idempotency_idx" } },
-    { keys: { status: 1, scheduledFor: 1, lockedUntil: 1 }, options: { name: "background_jobs_lease_idx", background: true } },
-    { keys: { name: 1, status: 1 }, options: { name: "background_jobs_name_status_idx", background: true } },
-    { keys: { createdAt: -1 }, options: { name: "background_jobs_created_idx", background: true } },
-  ],
-  // #889: sensitive field access events are looked up by correlation, by actor
-  // window, and by resource, and denials are reviewed by decision/time.
-  sensitive_access_log: [
-    { keys: { correlationId: 1 }, options: { unique: true, name: "sensitive_access_correlation_idx" } },
-    { keys: { actorId: 1, at: -1 }, options: { name: "sensitive_access_actor_idx", background: true } },
-    { keys: { resourceType: 1, resourceId: 1, at: -1 }, options: { name: "sensitive_access_resource_idx", background: true } },
-    { keys: { decision: 1, at: -1 }, options: { name: "sensitive_access_decision_idx", background: true } },
+  support_sessions: [
+    // Lookup is by hash of the bearer token, never the raw token.
+    { keys: { tokenHash: 1 }, options: { unique: true, name: "support_sessions_token_hash_idx" } },
+    // "Does this user have an active support session?" (user-facing notices).
+    { keys: { targetUserId: 1, status: 1, expiresAt: 1 }, options: { name: "support_sessions_target_idx" } },
+    // "Which sessions did this maintainer start?" (admin listing / forensics).
+    { keys: { actorId: 1, createdAt: -1 }, options: { name: "support_sessions_actor_idx" } },
+    // Scheduled expiry sweep (scripts/expire-support-sessions.mjs).
+    { keys: { status: 1, expiresAt: 1 }, options: { name: "support_sessions_expiry_idx" } },
   ],
 };
 
