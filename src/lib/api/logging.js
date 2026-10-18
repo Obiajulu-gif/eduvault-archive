@@ -1,12 +1,13 @@
 import { logger } from '@/lib/logger'
-import { sanitizeLogFields } from '@/lib/monitoring/telemetry'
+import { ensureCorrelationId, runWithCorrelationId, sanitizeLogFields } from '@/lib/monitoring/telemetry'
 
-export function createRequestLogger(route, method) {
+export function createRequestLogger(route, method, correlationId) {
   return {
     info: (message, context = {}) => {
       logger.info({
         route,
         method,
+        correlationId,
         level: 'info',
         message,
         ...sanitizeLogFields(context),
@@ -17,6 +18,7 @@ export function createRequestLogger(route, method) {
       logger.warn({
         route,
         method,
+        correlationId,
         level: 'warn',
         message,
         ...sanitizeLogFields(context),
@@ -27,6 +29,7 @@ export function createRequestLogger(route, method) {
       logger.error({
         route,
         method,
+        correlationId,
         level: 'error',
         message,
         ...sanitizeLogFields(context),
@@ -37,6 +40,7 @@ export function createRequestLogger(route, method) {
       logger.debug({
         route,
         method,
+        correlationId,
         level: 'debug',
         message,
         ...sanitizeLogFields(context),
@@ -46,7 +50,7 @@ export function createRequestLogger(route, method) {
   }
 }
 
-export function logApiRequest(route, method, { status, duration, error, details } = {}) {
+export function logApiRequest(route, method, { status, duration, error, details, correlationId } = {}) {
   const level = status >= 500 ? 'error' : status >= 400 ? 'warn' : 'info'
   const logFn = logger[level]
 
@@ -54,6 +58,7 @@ export function logApiRequest(route, method, { status, duration, error, details 
     event: 'api_request_completed',
     route,
     method,
+    correlationId,
     status,
     durationMs: duration,
     error: error ? sanitizeLogFields({ message: error.message }).message : undefined,
@@ -63,11 +68,12 @@ export function logApiRequest(route, method, { status, duration, error, details 
   })
 }
 
-export function logApiError(route, method, error, { status = 500, details } = {}) {
+export function logApiError(route, method, error, { status = 500, details, correlationId } = {}) {
   logger.error({
     event: 'api_error',
     route,
     method,
+    correlationId,
     status,
     error: sanitizeLogFields({ message: error.message }).message,
     errorStack: error.stack,
@@ -81,9 +87,13 @@ export function withRequestLogging(route, method) {
   return async (handler) => {
     return async (request) => {
       const startTime = Date.now()
-      const log = createRequestLogger(route, method)
+      const headers = request?.headers
+      const incoming = headers?.get?.('x-correlation-id') || headers?.get?.('x-request-id')
+      const correlationId = ensureCorrelationId(incoming)
+      const log = createRequestLogger(route, method, correlationId)
 
-      try {
+      return runWithCorrelationId(correlationId, async () => {
+        try {
         log.debug('API request received', {
           url: request.url,
           headers: Object.fromEntries(
@@ -99,24 +109,27 @@ export function withRequestLogging(route, method) {
         logApiRequest(route, method, {
           status: response.status,
           duration,
+          correlationId,
           details: {
             contentType: response.headers.get('content-type'),
           },
         })
 
         return response
-      } catch (error) {
+        } catch (error) {
         const duration = Date.now() - startTime
 
         logApiError(route, method, error, {
           status: 500,
+          correlationId,
           details: {
             duration,
           },
         })
 
         throw error
-      }
+        }
+      })
     }
   }
 }

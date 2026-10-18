@@ -5,11 +5,11 @@ import { NextResponse } from 'next/server';
 import { getDb } from '@/lib/mongodb';
 import { requireAdmin } from '@/lib/api/auth';
 import {
-  simulatePolicyChange,
   assertPolicyCommitAllowed,
   POLICY_TYPES,
   PolicySimulationError,
 } from '@/lib/policies/policySimulator';
+import { evaluatePolicyDryRun } from '@/lib/operations/operationalControls';
 import { COLLECTIONS } from '@/lib/backend/schemaContracts';
 
 /**
@@ -77,7 +77,7 @@ export async function POST(request) {
       dataSource = {};
     }
 
-    const preview = await simulatePolicyChange({
+    const preview = await evaluatePolicyDryRun({
       policyType,
       proposedPolicy,
       currentPolicy,

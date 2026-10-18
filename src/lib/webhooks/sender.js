@@ -1,6 +1,7 @@
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { getDb } from '@/lib/mongodb';
 import { logger } from '@/lib/logger';
+import { ensureCorrelationId } from '@/lib/monitoring/telemetry';
 import { validateWebhookDestination, safeFetch, SsrfError } from './ssrfGuard';
 
 const replayCache = new Map();
@@ -181,12 +182,14 @@ export async function sendWebhookWithRetry(url, payload, retries = 3, { signingS
   for (let attempt = 1; attempt <= retries; attempt++) {
     try {
       const signature = createWebhookSignatureHeader(body, signingSecret);
+      const correlationId = ensureCorrelationId();
 
       const response = await safeFetch(url, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'User-Agent': 'EduVault-Webhook-Sender/1.0',
+          'X-Correlation-Id': correlationId,
           ...(signature ? { 'X-EduVault-Signature': signature } : {}),
         },
         body,
