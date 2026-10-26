@@ -11,6 +11,7 @@ import { AppError } from "../errors/AppError.js";
 // can tell from the material's owner which way to settle it.
 
 export const OWNERSHIP_TRANSFERS_COLLECTION = "ownership_transfers";
+export const OWNERSHIP_DISPUTES_COLLECTION = "ownership_transfer_disputes";
 
 export const TransferState = Object.freeze({
   PENDING: "pending",
@@ -20,6 +21,13 @@ export const TransferState = Object.freeze({
   CANCELLED: "cancelled",
   EXPIRED: "expired",
   FAILED: "failed",
+});
+
+export const DisputeState = Object.freeze({
+  OPEN: "open",
+  UNDER_REVIEW: "under_review",
+  RESOLVED_ACCEPTED: "resolved_accepted",
+  RESOLVED_REJECTED: "resolved_rejected",
 });
 
 export const DEFAULT_TRANSFER_TTL_MS = 72 * 60 * 60 * 1000;
@@ -72,6 +80,57 @@ function isDuplicateKey(error) {
 
 function transfers(db) {
   return db.collection(OWNERSHIP_TRANSFERS_COLLECTION);
+}
+
+function disputes(db) { return db.collection(OWNERSHIP_DISPUTES_COLLECTION); }
+function disputeActorId(actor) { return String(actor?.id ?? actor?.sub ?? actor?.walletAddress ?? actor); }
+
+export async function openTransferDispute(db, { transferId, actor, reason, evidence = [], now = new Date() } = {}) {
+  const transfer = await loadTransfer(db, transferId);
+  const actorId = disputeActorId(actor);
+  if (![transfer.fromAddress, transfer.toAddress].some((address) => sameAddress(address, actorId)) && actor?.role !== "admin") {
+    throw new AppError("AUTH_FORBIDDEN", { message: "Only a transfer party or admin may open a dispute." });
+  }
+  if (!reason || String(reason).trim().length < 3) throw new AppError("VALIDATION_FIELD", { message: "A dispute reason is required." });
+  if (![TransferState.PENDING, TransferState.ACCEPTING, TransferState.ACCEPTED].includes(transfer.state)) throw new AppError("CONFLICT_STATE", { message: "Only live or completed transfers can be disputed." });
+  const existing = await disputes(db).findOne({ transferId, state: { $in: [DisputeState.OPEN, DisputeState.UNDER_REVIEW] } });
+  if (existing) return { dispute: existing, replayed: true };
+  const at = now instanceof Date ? now : new Date(now);
+  const dispute = { _id: crypto.randomUUID(), transferId, state: DisputeState.OPEN, openedBy: actorId, reason: String(reason).trim().slice(0, MAX_REASON_LENGTH), evidence: normalizeEvidence(evidence), history: [{ action: "opened", actor: actorId, at }], createdAt: at, updatedAt: at };
+  await disputes(db).insertOne(dispute);
+  return { dispute, replayed: false };
+}
+
+function normalizeEvidence(evidence) {
+  if (!Array.isArray(evidence)) throw new AppError("VALIDATION_FIELD", { message: "Evidence must be an array." });
+  return evidence.slice(0, 50).map((item) => ({ type: String(item?.type || "reference").slice(0, 40), reference: String(item?.reference || "").slice(0, 500), description: String(item?.description || "").slice(0, 500) })).filter((item) => item.reference);
+}
+
+export async function addDisputeEvidence(db, { disputeId, actor, evidence, now = new Date() } = {}) {
+  const dispute = await disputes(db).findOne({ _id: disputeId });
+  if (!dispute) throw new AppError("NOT_FOUND", { message: "Ownership transfer dispute not found." });
+  if (![DisputeState.OPEN, DisputeState.UNDER_REVIEW].includes(dispute.state)) throw new AppError("CONFLICT_STATE", { message: "Resolved disputes cannot receive evidence." });
+  const at = now instanceof Date ? now : new Date(now);
+  const item = normalizeEvidence([evidence])[0];
+  if (!item) throw new AppError("VALIDATION_FIELD", { message: "Evidence reference is required." });
+  const result = await disputes(db).findOneAndUpdate({ _id: disputeId }, { $push: { evidence: item, history: { action: "evidence_added", actor: disputeActorId(actor), at } }, $set: { updatedAt: at } }, { returnDocument: "after" });
+  return result?.value ?? result;
+}
+
+export async function resolveTransferDispute(db, { disputeId, actor, resolution, reason, now = new Date() } = {}) {
+  if (actor?.role !== "admin") throw new AppError("AUTH_FORBIDDEN", { message: "Only an admin may resolve ownership disputes." });
+  if (![DisputeState.RESOLVED_ACCEPTED, DisputeState.RESOLVED_REJECTED].includes(resolution)) throw new AppError("VALIDATION_FIELD", { message: "Invalid dispute resolution." });
+  const dispute = await disputes(db).findOne({ _id: disputeId });
+  if (!dispute) throw new AppError("NOT_FOUND", { message: "Ownership transfer dispute not found." });
+  if (![DisputeState.OPEN, DisputeState.UNDER_REVIEW].includes(dispute.state)) return { dispute, replayed: true };
+  const at = now instanceof Date ? now : new Date(now);
+  const result = await disputes(db).findOneAndUpdate({ _id: disputeId, state: { $in: [DisputeState.OPEN, DisputeState.UNDER_REVIEW] } }, { $set: { state: resolution, resolutionReason: String(reason || "").slice(0, MAX_REASON_LENGTH), resolvedBy: disputeActorId(actor), resolvedAt: at, updatedAt: at }, $push: { history: { action: resolution, actor: disputeActorId(actor), at } } }, { returnDocument: "after" });
+  return { dispute: result?.value ?? result, replayed: false };
+}
+
+export async function assertTransferNotDisputed(db, transferId) {
+  const dispute = await disputes(db).findOne({ transferId, state: { $in: [DisputeState.OPEN, DisputeState.UNDER_REVIEW] } });
+  if (dispute) throw new AppError("CONFLICT_STATE", { message: "This transfer is on hold while an ownership dispute is reviewed.", details: { reason: "dispute_active", disputeId: dispute._id } });
 }
 
 /** Conditional state change; resolves to the updated transfer or null if it lost the race. */
@@ -215,6 +274,7 @@ export async function acceptTransfer(db, { transferId, actorAddress, now = new D
   const actor = requireAddress(actorAddress, "actorAddress");
   let transfer = await loadTransfer(db, transferId);
   assertParty(transfer, actor, { allowed: "to" });
+  await assertTransferNotDisputed(db, transferId);
 
   if (transfer.state === TransferState.ACCEPTED) return { transfer, material: null, replayed: true };
 
@@ -309,6 +369,7 @@ export async function cancelTransfer(db, { transferId, actorAddress, isAdmin = f
 }
 
 async function closePending(db, transfer, actor, targetState, action, timeField, now) {
+  await assertTransferNotDisputed(db, transfer._id);
   if (transfer.state === targetState) return { transfer, replayed: true };
   const current = await expireIfOverdue(db, transfer, now);
   if (current.state !== TransferState.PENDING) {

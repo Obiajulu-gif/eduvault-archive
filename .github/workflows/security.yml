@@ -23,7 +23,7 @@ jobs:
           cache-dependency-path: package-lock.json
 
       - name: Install dependencies
-        run: npm ci
+        run: npm install --legacy-peer-deps --package-lock=false --ignore-scripts --no-audit --no-fund
 
       - name: Dependency audit
         run: npm run audit:deps

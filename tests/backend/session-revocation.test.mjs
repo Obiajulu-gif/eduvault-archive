@@ -6,6 +6,7 @@ import {
   revokeTokenFamily,
   SECURITY_EVENT_TYPES,
   getRevocationHistory,
+  getReauthenticationMessage,
 } from '../../src/lib/auth/sessionRevocation.js';
 
 function createMockCollection(initialDocs = []) {
@@ -240,6 +241,25 @@ describe('Stale Session and Token Revocation (Issue #1006)', () => {
   });
 
   describe('revokeUserSessions Execution', () => {
+    test('logout-other-devices preserves the current session version and access token', async () => {
+      const result = await revokeUserSessions(mockDb, '507f1f77bcf86cd799439011', {
+        eventType: SECURITY_EVENT_TYPES.ALL_SESSIONS_REVOKED,
+        preserveFamilyId: 'current_fam',
+        now: new Date('2026-10-17T14:30:00Z'),
+      });
+
+      assert.equal(result.sessionVersion, 1);
+      const user = await usersCol.findOne({ _id: '507f1f77bcf86cd799439011' });
+      assert.equal(user.sessionVersion, 1);
+      assert.equal(user.tokensValidAfter, undefined);
+      assert.equal(isSessionRevoked({ sessionVersion: 1 }, user).revoked, false);
+    });
+
+    test('security event types provide a safe, deterministic re-authentication message', () => {
+      assert.match(getReauthenticationMessage(SECURITY_EVENT_TYPES.PASSWORD_CHANGED), /password changed/i);
+      assert.match(getReauthenticationMessage('unknown_event'), /security change/i);
+    });
+
     test('updates user cutoff timestamp, increments sessionVersion, and revokes refresh tokens', async () => {
       const userId = '507f1f77bcf86cd799439011';
       await refreshTokensCol.insertOne({

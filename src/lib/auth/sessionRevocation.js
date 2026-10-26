@@ -27,11 +27,41 @@ export const SECURITY_EVENT_TYPES = Object.freeze({
   ROLE_CHANGED: "role_changed",
   WALLET_RECOVERED: "wallet_recovered",
   CREDENTIALS_CHANGED: "credentials_changed",
+  PASSWORD_CHANGED: "password_changed",
+  KEY_CHANGED: "key_changed",
+  RECOVERY_COMPLETED: "recovery_completed",
   TOKEN_REUSE_DETECTED: "token_reuse_detected",
   ALL_SESSIONS_REVOKED: "all_sessions_revoked",
   IMPERSONATION_REVOKED: "impersonation_revoked",
   MANUAL_LOGOUT_ALL: "manual_logout_all",
 });
+
+export const SECURITY_EVENT_POLICIES = Object.freeze({
+  [SECURITY_EVENT_TYPES.ACCOUNT_SUSPENDED]: { invalidateAll: true },
+  [SECURITY_EVENT_TYPES.ACCOUNT_REACTIVATED]: { invalidateAll: true },
+  [SECURITY_EVENT_TYPES.ROLE_CHANGED]: { invalidateAll: true },
+  [SECURITY_EVENT_TYPES.WALLET_RECOVERED]: { invalidateAll: true },
+  [SECURITY_EVENT_TYPES.CREDENTIALS_CHANGED]: { invalidateAll: true },
+  [SECURITY_EVENT_TYPES.PASSWORD_CHANGED]: { invalidateAll: true },
+  [SECURITY_EVENT_TYPES.KEY_CHANGED]: { invalidateAll: true },
+  [SECURITY_EVENT_TYPES.RECOVERY_COMPLETED]: { invalidateAll: true },
+  [SECURITY_EVENT_TYPES.TOKEN_REUSE_DETECTED]: { invalidateAll: true },
+  [SECURITY_EVENT_TYPES.ALL_SESSIONS_REVOKED]: { invalidateAll: true },
+  [SECURITY_EVENT_TYPES.IMPERSONATION_REVOKED]: { invalidateAll: true },
+  [SECURITY_EVENT_TYPES.MANUAL_LOGOUT_ALL]: { invalidateAll: true },
+});
+
+export const REAUTHENTICATION_MESSAGES = Object.freeze({
+  PASSWORD_CHANGED: "Your password changed. Sign in again to continue.",
+  KEY_CHANGED: "Your security key changed. Sign in again to continue.",
+  RECOVERY_COMPLETED: "Account recovery completed. Sign in again to continue.",
+  ROLE_CHANGED: "Your access changed. Sign in again to refresh your permissions.",
+  DEFAULT: "Your session ended after a security change. Sign in again to continue.",
+});
+
+export function getReauthenticationMessage(eventType) {
+  return REAUTHENTICATION_MESSAGES[eventType?.toUpperCase()] || REAUTHENTICATION_MESSAGES.DEFAULT;
+}
 
 export const REVOCATION_COLLECTION = "session_revocations";
 
@@ -137,6 +167,8 @@ export async function revokeUserSessions(db, userId, options = {}) {
   if (!userId) throw new Error("userId required for session revocation");
 
   const timestamp = now instanceof Date ? now : new Date(now);
+  if (Number.isNaN(timestamp.getTime())) throw new Error("Invalid revocation timestamp");
+  if (!SECURITY_EVENT_POLICIES[eventType]) throw new Error(`Unknown security event type: ${eventType}`);
   const timestampIso = timestamp.toISOString();
 
   const userIdString = String(userId);
@@ -154,11 +186,11 @@ export async function revokeUserSessions(db, userId, options = {}) {
   const refreshTokensCollection = db.collection("refresh_tokens");
   const revocationsCollection = db.collection(REVOCATION_COLLECTION);
 
-  // 1. Atomically bump user sessionVersion, update tokensValidAfter and record security event
+  // Logout-other-devices deliberately preserves the caller's current session.
+  // A global cutoff/version bump would invalidate that session as well.
+  const preserveCurrentSession = Boolean(preserveFamilyId);
   const userUpdate = {
     $set: {
-      tokensValidAfter: timestampIso,
-      sessionRevokedAt: timestampIso,
       updatedAt: timestampIso,
       lastSecurityEvent: {
         eventType,
@@ -167,10 +199,12 @@ export async function revokeUserSessions(db, userId, options = {}) {
         at: timestampIso,
       },
     },
-    $inc: {
-      sessionVersion: 1,
-    },
   };
+  if (!preserveCurrentSession) {
+    userUpdate.$set.tokensValidAfter = timestampIso;
+    userUpdate.$set.sessionRevokedAt = timestampIso;
+    userUpdate.$inc = { sessionVersion: 1 };
+  }
 
   const updateResult = await usersCollection.findOneAndUpdate(
     userQuery,
@@ -179,7 +213,7 @@ export async function revokeUserSessions(db, userId, options = {}) {
   );
 
   const updatedUser = updateResult?.value || updateResult;
-  const newSessionVersion = updatedUser?.sessionVersion || 2;
+  const newSessionVersion = updatedUser?.sessionVersion || 1;
 
   // 2. Invalidate refresh tokens
   const tokenQuery = {

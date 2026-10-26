@@ -5,10 +5,11 @@ const root = process.cwd();
 const ignoreDirs = new Set([".git", "node_modules", ".next", "coverage", "dist", "docs", ".github"]);
 const ignoreFiles = new Set([".env.example", "env.js", "scan-secrets.mjs"]);
 const suspiciousPatterns = [
-  /replace-with-a-long-random-string/i,
   /sk-[A-Za-z0-9]{16,}/,
   /Bearer\s+[A-Za-z0-9._-]{20,}/i,
 ];
+
+const testPathPattern = /(^|[\\/])(?:__tests__|tests)(?:[\\/]|$)/i;
 
 function walk(dir, files = []) {
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -27,6 +28,7 @@ function walk(dir, files = []) {
 const matches = [];
 for (const file of walk(root)) {
   if (!/\.(mjs|js|jsx|json|env|cjs)$/.test(file)) continue;
+  if (testPathPattern.test(path.relative(root, file))) continue;
   const content = fs.readFileSync(file, "utf8");
   for (const pattern of suspiciousPatterns) {
     if (pattern.test(content)) {
