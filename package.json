@@ -43,7 +43,11 @@
     "verify:rollback": "node scripts/verify-rollback.mjs",
     "support:expire": "node scripts/expire-support-sessions.mjs",
     "health:check": "node scripts/check-dependency-health.mjs",
-    "diagnostics:contributor": "node scripts/contributor-diagnostics.mjs"
+    "diagnostics:contributor": "node scripts/contributor-diagnostics.mjs",
+    "diagnostics:setup": "node scripts/contributor-diagnostics.mjs --setup",
+    "health:matrix": "node scripts/degradation-matrix.mjs",
+    "release:migrations": "node scripts/release-readiness.mjs --migration-plan",
+    "audit:verify-receipt": "node scripts/verify-audit-receipt.mjs"
   },
   "dependencies": {
     "@creit-tech/stellar-wallets-kit": "npm:@jsr/creit-tech__stellar-wallets-kit@^2.1.0",
