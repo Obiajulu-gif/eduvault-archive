@@ -79,3 +79,110 @@ Every detection, review decision, merge, and rollback emits an immutable record 
 - `duplicate.review_approved` / `duplicate.review_rejected`
 - `duplicate.merged`
 - `duplicate.unmerged`
+
+## Authorized, deterministic merge review (#1085)
+
+[`src/lib/marketplace/mergeReviewService.js`](../src/lib/marketplace/mergeReviewService.js)
+is the entry point for API routes, operator tooling and scripts. The
+functions in `mergeReviewWorkflow.js` remain the low-level state machine.
+
+| Command | Permission | Extra rules |
+| --- | --- | --- |
+| `queueDuplicateCandidates({ db, materials, actor })` | `catalog:merge:review` | Deterministic detection, then idempotent review creation |
+| `decideMergeReview({ db, actor, reviewId, decision, notes })` | `catalog:merge:review` | `REJECTED` needs notes. `APPROVED` pins both materials' content fingerprints. |
+| `mergeApprovedDuplicate({ db, actor, reviewId, requireSeparateMerger })` | `catalog:merge:execute` | Review must be `APPROVED`. Fingerprints must still match (not stale). Optional four-eyes. |
+| `reverseMergedDuplicate({ db, actor, reviewId, reason })` | `catalog:merge:reverse` | Reason required |
+
+Admins hold all three permissions through `*`. Every command also refuses
+(`403 MERGE_REVIEW_CONFLICT_OF_INTEREST`) when the actor is the creator of
+either material. The check compares `userAddress`, `creator`, `creatorId`,
+`creatorAddress`, `ownerId` and `owner` case-insensitively against the actor's
+`id` and `walletAddress`.
+
+### Determinism
+
+- Candidate ordering no longer depends on input order. An unparseable
+  `createdAt` sorts as epoch 0; previously the comparator returned `NaN`, which
+  let input order decide which record was "canonical". Ids compare by code
+  unit, not `localeCompare`, so results do not vary with ICU data.
+- `detectDuplicates(materials, { now })` accepts a clock, so `detectedAt` (and
+  therefore the whole output) is reproducible.
+- Review ids stay `rev-<canonicalId>-<duplicateId>`. Re-queueing the same
+  catalog returns the existing reviews.
+- Audit operation ids are derived from per-review counters
+  (`audit-<reviewId>-decision-<n>`, `-merged-<n>`, `-unmerged-<n>`) instead of
+  `Date.now()`, so a retried step appends exactly one ledger record.
+
+### Stale reviews
+
+Approval stores `approvedFingerprints` (`computeContentFingerprint` of both
+materials). If either material changes before the merge, the merge fails with
+`409 MERGE_REVIEW_STALE` and nothing is written. Re-approving pins the new
+fingerprints. This guarantees a merge only ever applies to what a reviewer saw.
+
+### Retry and crash recovery
+
+`executeMerge` now persists `snapshotBeforeMerge` with `mergeInProgress: true`
+**before** touching any material. If the process dies after the duplicate is
+marked merged but before the review is updated:
+
+- the review stays `APPROVED` with `mergeInProgress: true`, and
+  `decideMergeReview` refuses to change it (`409 MERGE_REVIEW_LOCKED`);
+- re-running `mergeApprovedDuplicate` detects the duplicate was merged *by this
+  review*, resumes from the persisted snapshot (`resumed: true`), finishes the
+  alias and review updates, and audits once;
+- the stale check compares against the persisted snapshot, because the live
+  duplicate has already changed.
+
+Previously, a retry failed permanently with "already marked as merged", and the
+snapshot was only stored at the very end.
+
+Repeating a decision, a merge of a merged review, or a reversal of a reversed
+review returns `idempotent: true` without writing.
+
+After a reversal the active snapshot is cleared (it is kept as
+`lastReversedSnapshot`). A later re-approval and merge therefore captures the
+then-current state (`mergeCount` increments).
+
+### Failure reference
+
+| Code | Status | Meaning |
+| --- | --- | --- |
+| `MERGE_REVIEW_FORBIDDEN` | 403 | Missing permission or actor id |
+| `MERGE_REVIEW_CONFLICT_OF_INTEREST` | 403 | Actor created one of the materials |
+| `MERGE_REVIEW_SEPARATE_MERGER_REQUIRED` | 403 | Four-eyes enabled and the approver tried to merge |
+| `MERGE_REVIEW_NOT_FOUND` | 404 | Unknown review |
+| `MERGE_REVIEW_NOT_APPROVED` / `MERGE_REVIEW_NOT_MERGED` | 409 | Wrong state for the command |
+| `MERGE_REVIEW_STALE` | 409 | Material changed since approval. Re-review. |
+| `MERGE_REVIEW_LOCKED` | 409 | Merged or mid-merge review cannot be re-decided |
+| `MERGE_REVIEW_MATERIAL_MISSING` | 409 | Canonical or duplicate material no longer exists |
+| `MERGE_REVIEW_INVALID_DECISION` / `MERGE_REVIEW_NOTES_REQUIRED` / `MERGE_REVIEW_REASON_REQUIRED` | 400 | Invalid input |
+
+### Contract changes and migration
+
+- **`executeMerge` now requires an `APPROVED` review.** `DETECTED` candidates
+  could previously be merged without any human decision. No caller in this
+  repository relied on that (the detection script only queues reviews). An
+  external automation that merged `DETECTED` reviews must first call
+  `decideMergeReview(..., APPROVED)`.
+- `executeMerge` also refuses a canonical material that has itself been merged,
+  which would otherwise create alias chains.
+- Review documents gain optional fields: `approvedFingerprints`,
+  `decisionCount`, `mergeCount`, `mergeInProgress`, `lastReversedSnapshot`. No
+  backfill is needed:
+  - Existing `APPROVED` reviews without fingerprints are treated as stale by
+    `mergeApprovedDuplicate`. Re-approve them once.
+  - Existing `MERGED` reviews reverse exactly as before.
+- `updateReviewDecision` takes an optional sixth argument (`extra` fields).
+  Existing callers are unaffected.
+
+### Verification
+
+```bash
+npx tsx --test tests/backend/duplicate-merge-review-authorization.test.mjs
+node --import ./test/test-loader.mjs --test tests/backend/duplicate-detection-merge.test.mjs
+```
+
+The second suite imports `purchases/access.js`, which uses the `@/` alias. It
+needs the repository's test loader and fails under plain `npm run
+test:backend`. That failure predates this change.

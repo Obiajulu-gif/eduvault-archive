@@ -43,7 +43,8 @@
     "verify:rollback": "node scripts/verify-rollback.mjs",
     "support:expire": "node scripts/expire-support-sessions.mjs",
     "health:check": "node scripts/check-dependency-health.mjs",
-    "diagnostics:contributor": "node scripts/contributor-diagnostics.mjs"
+    "diagnostics:contributor": "node scripts/contributor-diagnostics.mjs",
+    "schema:compat": "node scripts/check-schema-compat.mjs"
   },
   "dependencies": {
     "@creit-tech/stellar-wallets-kit": "npm:@jsr/creit-tech__stellar-wallets-kit@^2.1.0",

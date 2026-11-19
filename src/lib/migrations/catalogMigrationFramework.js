@@ -34,6 +34,11 @@ export const migrationV2 = {
         distributionAllowed: false,
         ...(doc.rightsMetadata || {}),
       },
+      // #1083: a v1 record may already carry creator-set rightsMetadata, which
+      // is merged over the defaults above. Keep the original so `down` (pinned
+      // v1 reads and `runCatalogMigration({ rollback: true })`) restores it
+      // instead of deleting it. Absent for records that had none.
+      ...(doc.rightsMetadata !== undefined ? { legacyRightsMetadata: doc.rightsMetadata } : {}),
     };
   },
   down: (doc) => {
@@ -41,6 +46,10 @@ export const migrationV2 = {
     delete copy.pricingTier;
     delete copy.sorobanEntitlementConfig;
     delete copy.rightsMetadata;
+    if (Object.prototype.hasOwnProperty.call(copy, 'legacyRightsMetadata')) {
+      copy.rightsMetadata = copy.legacyRightsMetadata;
+      delete copy.legacyRightsMetadata;
+    }
     copy.schemaVersion = 1;
     return copy;
   },

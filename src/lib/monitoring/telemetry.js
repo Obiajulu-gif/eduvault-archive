@@ -20,7 +20,11 @@
 import crypto from "node:crypto";
 import { AsyncLocalStorage } from "node:async_hooks";
 import logger from "../logger.js";
-import { boundFields, createTelemetryGuard } from "./telemetryGuard.js";
+import { hasPermission } from "../auth/permissions.js";
+// logSafety.js imports this module too; the cycle is safe because neither
+// module calls the other at load time.
+import { maskIdentifiersInText, protectTelemetryFields } from "./logSafety.js";
+import { boundFields, createTelemetryGuard, normalizeSampleRate, validateLabelValue } from "./telemetryGuard.js";
 
 export const TELEMETRY_SCHEMA_VERSION = 1;
 
@@ -239,11 +243,36 @@ export function assertTelemetryRecord(record) {
 /**
  * Telemetry guard singleton (label validation, cardinality limits, sampling).
  * Set `TELEMETRY_GUARD=off` to bypass it at runtime; redaction always applies.
+ * `TELEMETRY_TRACE_SAMPLE_RATE` (0-1, default 1) enables trace-coherent head
+ * sampling of successful records (#1086).
  */
-let guard = createTelemetryGuard();
+function defaultGuardOptions() {
+  return { config: { traceSampleRate: normalizeSampleRate(process.env.TELEMETRY_TRACE_SAMPLE_RATE) } };
+}
+
+let guard = createTelemetryGuard(defaultGuardOptions());
 
 function guardEnabled() {
   return process.env.TELEMETRY_GUARD !== "off";
+}
+
+/**
+ * Identifier pseudonymization of `metadata`/`error` before *any* sink (#1086).
+ * Pino output was already protected by the logger hook, but custom sinks
+ * (`setTelemetrySink`, exporters) received raw wallet addresses, user ids,
+ * emails and IPs. `TELEMETRY_PSEUDONYMIZE=off` is the rollback switch; secret
+ * redaction stays on regardless.
+ */
+function pseudonymizeEnabled() {
+  return process.env.TELEMETRY_PSEUDONYMIZE !== "off";
+}
+
+function protectIdentifiers(record) {
+  if (!pseudonymizeEnabled()) return record;
+  const next = { ...record };
+  if (next.metadata !== undefined) next.metadata = protectTelemetryFields(next.metadata);
+  if (next.error !== undefined) next.error = protectTelemetryFields(next.error);
+  return next;
 }
 
 /** Exact, unsampled counters plus label-rejection and overflow tallies. */
@@ -253,7 +282,7 @@ export function getTelemetryGuardStats() {
 
 /** Rebuild the guard (tests, config changes). Accepts `createTelemetryGuard` options. */
 export function resetTelemetryGuard(options) {
-  guard = createTelemetryGuard(options);
+  guard = createTelemetryGuard(options ?? defaultGuardOptions());
   return guard;
 }
 
@@ -319,7 +348,7 @@ function emitRecord(record) {
     prepared = decision.record;
   }
 
-  const safe = redactSensitive(prepared);
+  const safe = redactSensitive(protectIdentifiers(prepared));
   deliver(safe);
   return safe;
 }
@@ -449,6 +478,22 @@ function defaultResponseIsFailure(response) {
   );
 }
 
+const CORRELATION_ID_PATTERN = /^[A-Za-z0-9._:-]{1,128}$/;
+
+/**
+ * Accept a client-supplied correlation id only if it is a plain token (#1086).
+ * It is echoed verbatim into every record of the request, so free text,
+ * control characters, or a value carrying a wallet/email/IP would bypass
+ * metadata pseudonymization. Rejected values get a fresh server-side id.
+ */
+export function normalizeCorrelationId(raw) {
+  if (raw === undefined || raw === null) return undefined;
+  const text = String(raw).trim();
+  if (!CORRELATION_ID_PATTERN.test(text)) return undefined;
+  if (maskIdentifiersInText(text) !== text) return undefined;
+  return text;
+}
+
 function correlationIdFromRequest(request) {
   const headers = request?.headers;
   if (!headers || typeof headers.get !== "function") return undefined;
@@ -457,8 +502,151 @@ function correlationIdFromRequest(request) {
     headers.get("x-request-id") ||
     headers.get("traceparent") ||
     undefined;
-  if (!raw) return undefined;
-  return String(raw).trim().slice(0, 128) || undefined;
+  return normalizeCorrelationId(raw);
+}
+
+// ── Sampling overrides (#1086) ────────────────────────────────────────────
+
+export const TELEMETRY_SAMPLING_PERMISSION = "telemetry:sampling:override";
+export const MAX_SAMPLING_OVERRIDE_TTL_MS = 60 * 60 * 1000;
+export const MIN_SAMPLING_OVERRIDE_TTL_MS = 1000;
+
+const OVERRIDE_KEYS = new Set(["id", "operation", "correlationId", "rate", "ttlMs", "reason"]);
+const OVERRIDE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}$/;
+
+export class TelemetryOverrideError extends Error {
+  constructor(code, message, status = 400) {
+    super(message);
+    this.name = "TelemetryOverrideError";
+    this.code = code;
+    this.status = status;
+  }
+}
+
+function overrideActorId(actor) {
+  if (!actor || typeof actor !== "object") return null;
+  const id = actor.id ?? actor.userId ?? null;
+  return id === null || String(id).trim() === "" ? null : String(id);
+}
+
+function assertOverrideAuthorized(actor, authorize) {
+  const allowed = typeof authorize === "function" ? authorize(actor) === true : hasPermission(actor, TELEMETRY_SAMPLING_PERMISSION);
+  if (!allowed || !overrideActorId(actor)) {
+    throw new TelemetryOverrideError("TELEMETRY_OVERRIDE_FORBIDDEN", `Permission ${TELEMETRY_SAMPLING_PERMISSION} is required`, 403);
+  }
+}
+
+function validateOverride(input) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new TelemetryOverrideError("TELEMETRY_OVERRIDE_INVALID", "override must be an object");
+  }
+  const unknown = Object.keys(input).filter((key) => !OVERRIDE_KEYS.has(key));
+  if (unknown.length > 0) {
+    throw new TelemetryOverrideError(
+      "TELEMETRY_OVERRIDE_INVALID",
+      `Unsupported override field(s): ${unknown.join(", ")}. Only sampling can be overridden; redaction and label validation cannot be disabled.`
+    );
+  }
+  if (typeof input.id !== "string" || !OVERRIDE_ID_PATTERN.test(input.id)) {
+    throw new TelemetryOverrideError("TELEMETRY_OVERRIDE_INVALID", "id must be 1-64 characters of [A-Za-z0-9_.:-]");
+  }
+  const hasOperation = input.operation !== undefined;
+  const hasTrace = input.correlationId !== undefined;
+  if (hasOperation === hasTrace) {
+    throw new TelemetryOverrideError("TELEMETRY_OVERRIDE_INVALID", "Exactly one of operation or correlationId is required");
+  }
+  if (hasOperation && !validateLabelValue(input.operation).ok) {
+    throw new TelemetryOverrideError("TELEMETRY_OVERRIDE_INVALID", "operation must be a valid low-cardinality label");
+  }
+  if (hasTrace && normalizeCorrelationId(input.correlationId) !== input.correlationId) {
+    throw new TelemetryOverrideError("TELEMETRY_OVERRIDE_INVALID", "correlationId must be a plain token without identifiers");
+  }
+  if (typeof input.rate !== "number" || !Number.isFinite(input.rate) || input.rate < 0 || input.rate > 1) {
+    throw new TelemetryOverrideError("TELEMETRY_OVERRIDE_INVALID", "rate must be a number between 0 and 1");
+  }
+  if (!Number.isInteger(input.ttlMs) || input.ttlMs < MIN_SAMPLING_OVERRIDE_TTL_MS || input.ttlMs > MAX_SAMPLING_OVERRIDE_TTL_MS) {
+    throw new TelemetryOverrideError(
+      "TELEMETRY_OVERRIDE_INVALID",
+      `ttlMs must be an integer between ${MIN_SAMPLING_OVERRIDE_TTL_MS} and ${MAX_SAMPLING_OVERRIDE_TTL_MS}`
+    );
+  }
+  if (typeof input.reason !== "string" || !input.reason.trim()) {
+    throw new TelemetryOverrideError("TELEMETRY_OVERRIDE_INVALID", "reason is required");
+  }
+  return {
+    id: input.id,
+    ...(hasOperation ? { operation: input.operation } : { correlationId: input.correlationId }),
+    rate: input.rate,
+    ttlMs: input.ttlMs,
+    reason: input.reason.trim().slice(0, 300),
+  };
+}
+
+function defaultOverrideAudit(entry) {
+  // Emitted unsampled (directly to the sink): an override must always leave a trace.
+  deliver(
+    redactSensitive(
+      protectIdentifiers({
+        operation: "telemetry.sampling_override",
+        actorType: ACTOR_TYPES.SYSTEM,
+        result: TELEMETRY_RESULT.SUCCESS,
+        latencyMs: 0,
+        correlationId: ensureCorrelationId(),
+        timestamp: new Date().toISOString(),
+        schemaVersion: TELEMETRY_SCHEMA_VERSION,
+        metadata: entry,
+      })
+    )
+  );
+}
+
+/**
+ * Temporarily change head sampling for one operation or one trace, e.g. keep
+ * every record of `checkout.quote` (rate 1) during an incident, or keep a
+ * single user's trace while reproducing a bug. Requires
+ * `telemetry:sampling:override`; expires after `ttlMs` (max 1 h); can never
+ * touch redaction. Retrying with the same id and parameters is a no-op; the
+ * same id with different parameters is a 409. The audit hook runs first and
+ * fails closed.
+ */
+export async function applyTelemetrySamplingOverride({ actor, override, authorize, audit = defaultOverrideAudit, now = () => Date.now() } = {}) {
+  assertOverrideAuthorized(actor, authorize);
+  const valid = validateOverride(override);
+
+  const existing = guard.getSamplingOverride(valid.id);
+  if (existing) {
+    const same =
+      existing.operation === valid.operation &&
+      existing.correlationId === valid.correlationId &&
+      existing.rate === valid.rate &&
+      existing.ttlMs === valid.ttlMs;
+    if (!same) {
+      throw new TelemetryOverrideError("TELEMETRY_OVERRIDE_CONFLICT", `Override ${valid.id} already exists with different parameters`, 409);
+    }
+    return { status: "unchanged", override: existing };
+  }
+  if (guard.listSamplingOverrides().length >= guard.config.maxOverrides) {
+    throw new TelemetryOverrideError("TELEMETRY_OVERRIDE_LIMIT", `At most ${guard.config.maxOverrides} sampling overrides may be active`, 429);
+  }
+
+  const stored = { ...valid, expiresAt: now() + valid.ttlMs, actor: overrideActorId(actor) };
+  await audit({ action: "telemetry.sampling_override.applied", ...stored });
+  return guard.setSamplingOverride(stored);
+}
+
+/** Remove an override before it expires. Removing a missing id is a no-op. */
+export async function revokeTelemetrySamplingOverride({ actor, id, authorize, audit = defaultOverrideAudit } = {}) {
+  assertOverrideAuthorized(actor, authorize);
+  const existing = guard.getSamplingOverride(id);
+  if (!existing) return { status: "absent" };
+  await audit({ action: "telemetry.sampling_override.revoked", id, actor: overrideActorId(actor) });
+  guard.clearSamplingOverride(id);
+  return { status: "revoked" };
+}
+
+/** Active (unexpired) overrides; safe to expose to operators. */
+export function listTelemetrySamplingOverrides() {
+  return guard.listSamplingOverrides();
 }
 
 /**
@@ -485,6 +673,10 @@ export function withTelemetryRoute(operation, actorType, handler, options = {}) 
 const telemetry = {
   ACTOR_TYPES,
   CORE_OPERATIONS,
+  applyTelemetrySamplingOverride,
+  listTelemetrySamplingOverrides,
+  normalizeCorrelationId,
+  revokeTelemetrySamplingOverride,
   REDACTED,
   REQUIRED_TELEMETRY_FIELDS,
   TELEMETRY_LOG_NAMESPACE,
