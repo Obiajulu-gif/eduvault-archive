@@ -133,5 +133,32 @@
     "signatureHeader": "t=1700000000,v1=aa00aa00aa00aa00aa00aa00aa00aa00aa00aa00aa00aa00aa00aa00aa00aa00",
     "secret": "a-signing-secret",
     "verifyAt": 1700000000
+  },
+  {
+    "id": "negative-timestamp",
+    "description": "Negative Unix timestamp in signature header must be rejected.",
+    "category": "replay",
+    "body": "{\"event\":\"purchase.completed\"}",
+    "signatureHeader": "t=-1700000000,v1=aa00aa00aa00aa00aa00aa00aa00aa00aa00aa00aa00aa00aa00aa00aa00aa00",
+    "secret": "a-signing-secret",
+    "verifyAt": 1700000000
+  },
+  {
+    "id": "duplicate-v1-component",
+    "description": "Header duplicates the v1= field to probe parser precedence ambiguity.",
+    "category": "schema-drift",
+    "body": "{\"event\":\"purchase.completed\"}",
+    "signatureHeader": "t=1700000000,v1=aa00aa00aa00aa00aa00aa00aa00aa00aa00aa00aa00aa00aa00aa00aa00aa00,v1=bb11bb11bb11bb11bb11bb11bb11bb11bb11bb11bb11bb11bb11bb11bb11bb11",
+    "secret": "a-signing-secret",
+    "verifyAt": 1700000000
+  },
+  {
+    "id": "crlf-header-injection",
+    "description": "Signature header contains CR/LF characters simulating HTTP header injection.",
+    "category": "invalid-signature",
+    "body": "{\"event\":\"purchase.completed\"}",
+    "signatureHeader": "t=1700000000,v1=aa00aa00aa00aa00aa00aa00aa00aa00aa00aa00aa00aa00aa00aa00aa00aa00\r\nX-Injected: true",
+    "secret": "a-signing-secret",
+    "verifyAt": 1700000000
   }
 ]

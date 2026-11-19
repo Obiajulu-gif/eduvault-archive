@@ -1,0 +1,89 @@
+{
+  "malformedPayloads": [
+    {
+      "id": "prototype-pollution-proto",
+      "category": "malformed-payload",
+      "description": "Payload attempts prototype pollution via __proto__ key.",
+      "rawJson": "{\"title\":\"Safe Course\",\"__proto__\":{\"isAdmin\":true}}",
+      "expect": "no-prototype-pollution"
+    },
+    {
+      "id": "prototype-pollution-constructor",
+      "category": "malformed-payload",
+      "description": "Payload attempts constructor.prototype pollution.",
+      "rawJson": "{\"title\":\"Safe Course\",\"constructor\":{\"prototype\":{\"role\":\"admin\"}}}",
+      "expect": "no-prototype-pollution"
+    },
+    {
+      "id": "invalid-field-name-injection",
+      "category": "malformed-payload",
+      "description": "Field name containing null bytes or script injection must be rejected as [invalid-field-name].",
+      "validator": "sanitizeFieldName",
+      "value": "email\u0000<script>",
+      "expect": "[invalid-field-name]"
+    },
+    {
+      "id": "oversized-field-name",
+      "category": "malformed-payload",
+      "description": "Field name exceeding 120 chars must be rejected as [invalid-field-name].",
+      "validator": "sanitizeFieldName",
+      "value": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "expect": "[invalid-field-name]"
+    },
+    {
+      "id": "unsafe-javascript-url",
+      "category": "malformed-payload",
+      "description": "javascript: URI must be rejected by isSafeUrl.",
+      "validator": "isSafeUrl",
+      "value": "javascript:alert(1)",
+      "expect": false
+    },
+    {
+      "id": "unsafe-data-url",
+      "category": "malformed-payload",
+      "description": "data:text/html URI must be rejected by isSafeUrl.",
+      "validator": "isSafeUrl",
+      "value": "data:text/html,<script>alert(1)</script>",
+      "expect": false
+    }
+  ],
+  "replayAttacks": [
+    {
+      "id": "capability-token-jti-replay",
+      "category": "replay-attack",
+      "description": "Single-use capability token JTI replayed after first consumption.",
+      "action": "material:archive",
+      "actorId": "creator-1",
+      "role": "creator",
+      "resourceId": "mat-100"
+    },
+    {
+      "id": "capability-token-expired",
+      "category": "replay-attack",
+      "description": "Capability token presented after expiration window.",
+      "action": "payout:request",
+      "actorId": "creator-1",
+      "role": "creator",
+      "resourceId": "payout-1",
+      "expiredByMs": 60000
+    },
+    {
+      "id": "capability-token-cross-actor",
+      "category": "authorization-replay",
+      "description": "Valid capability token issued to creator-1 replayed by attacker-2.",
+      "action": "material:delete",
+      "issuedTo": "creator-1",
+      "presentedBy": "attacker-2",
+      "role": "creator",
+      "resourceId": "mat-200"
+    },
+    {
+      "id": "idempotency-key-payload-mutation",
+      "category": "replay-attack",
+      "description": "Replaying an idempotency key with a mutated payload must fail with CONFLICT_IDEMPOTENCY_KEY.",
+      "key": "idem-replay-1",
+      "originalPayload": { "materialId": "mat-1", "amount": 10 },
+      "mutatedPayload": { "materialId": "mat-1", "amount": 1 }
+    }
+  ]
+}
