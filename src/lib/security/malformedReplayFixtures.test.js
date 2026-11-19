@@ -13,8 +13,8 @@ import {
 } from "../webhooks/sender.js";
 import {
   createCapabilityNonceStore,
-  issueCapabilityToken,
-  verifyCapabilityToken,
+  generateSensitiveCapabilityToken,
+  verifySensitiveCapabilityToken,
 } from "../auth/sensitiveCapabilityToken.js";
 import { isSafeUrl } from "../api/safeUrl.js";
 import { sanitizeFieldName } from "./sensitiveAccessLog.js";
@@ -58,22 +58,22 @@ describe("malformed payload and replay attack fixtures (#1074)", () => {
     assert.equal(sanitizeFieldName("user.email"), "user.email");
 
     const nonceStore = createCapabilityNonceStore();
-    const { token } = issueCapabilityToken({
+    const capNow = Date.now();
+    const { token } = generateSensitiveCapabilityToken({
       action: "material:archive",
-      actorId: "creator-1",
-      role: "creator",
-      resourceId: "mat-1",
+      actor: "creator-1",
+      target: "mat-1",
       secret: "cap-secret",
-      now: 1_700_000_000_000,
+      iat: capNow,
     });
-    const verified = verifyCapabilityToken(token, {
+    const verified = verifySensitiveCapabilityToken(token, {
       expectedAction: "material:archive",
-      expectedActorId: "creator-1",
-      expectedResourceId: "mat-1",
+      expectedActor: "creator-1",
+      expectedTarget: "mat-1",
       secret: "cap-secret",
-      nonceStore,
+      store: nonceStore,
       consume: true,
-      now: 1_700_000_001_000,
+      now: capNow + 1000,
     });
     assert.equal(verified.valid, true);
   });
@@ -106,70 +106,67 @@ describe("malformed payload and replay attack fixtures (#1074)", () => {
 
   it("replay & authorization paths: rejects JTI replay, expired tokens, cross-actor replay, and idempotency mutation", async () => {
     const nonceStore = createCapabilityNonceStore();
-    const baseNow = 1_700_000_000_000;
+    const baseNow = Date.now();
 
     for (const attack of corpus.replayAttacks) {
       if (attack.id === "capability-token-jti-replay") {
-        const { token } = issueCapabilityToken({
+        const { token } = generateSensitiveCapabilityToken({
           action: attack.action,
-          actorId: attack.actorId,
-          role: attack.role,
-          resourceId: attack.resourceId,
+          actor: attack.actorId,
+          target: attack.resourceId,
           secret: "cap-secret",
-          now: baseNow,
+          iat: baseNow,
         });
-        const first = verifyCapabilityToken(token, {
+        const first = verifySensitiveCapabilityToken(token, {
           expectedAction: attack.action,
-          expectedActorId: attack.actorId,
-          expectedResourceId: attack.resourceId,
+          expectedActor: attack.actorId,
+          expectedTarget: attack.resourceId,
           secret: "cap-secret",
-          nonceStore,
+          store: nonceStore,
           consume: true,
           now: baseNow + 1000,
         });
         assert.equal(first.valid, true);
 
-        const replay = verifyCapabilityToken(token, {
+        const replay = verifySensitiveCapabilityToken(token, {
           expectedAction: attack.action,
-          expectedActorId: attack.actorId,
-          expectedResourceId: attack.resourceId,
+          expectedActor: attack.actorId,
+          expectedTarget: attack.resourceId,
           secret: "cap-secret",
-          nonceStore,
+          store: nonceStore,
           consume: true,
           now: baseNow + 2000,
         });
         assert.equal(replay.valid, false);
       } else if (attack.id === "capability-token-expired") {
-        const { token } = issueCapabilityToken({
+        const { token } = generateSensitiveCapabilityToken({
           action: attack.action,
-          actorId: attack.actorId,
-          role: attack.role,
-          resourceId: attack.resourceId,
+          actor: attack.actorId,
+          target: attack.resourceId,
           ttlMs: 10_000,
           secret: "cap-secret",
-          now: baseNow,
+          iat: baseNow,
         });
-        const expired = verifyCapabilityToken(token, {
+        const expired = verifySensitiveCapabilityToken(token, {
           expectedAction: attack.action,
-          expectedActorId: attack.actorId,
-          expectedResourceId: attack.resourceId,
+          expectedActor: attack.actorId,
+          expectedTarget: attack.resourceId,
           secret: "cap-secret",
           now: baseNow + 10_000 + attack.expiredByMs,
         });
         assert.equal(expired.valid, false);
       } else if (attack.id === "capability-token-cross-actor") {
-        const { token } = issueCapabilityToken({
+        const { token } = generateSensitiveCapabilityToken({
           action: attack.action,
-          actorId: attack.issuedTo,
-          role: attack.role,
-          resourceId: attack.resourceId,
+          actor: attack.issuedTo,
+          target: attack.resourceId,
           secret: "cap-secret",
-          now: baseNow,
+          iat: baseNow,
         });
-        const crossActor = verifyCapabilityToken(token, {
+        const crossActor = verifySensitiveCapabilityToken(token, {
           expectedAction: attack.action,
-          expectedActorId: attack.presentedBy,
-          expectedResourceId: attack.resourceId,
+          expectedActor: attack.presentedBy,
+          expectedTarget: attack.resourceId,
           secret: "cap-secret",
           now: baseNow + 1000,
         });
