@@ -21,7 +21,10 @@ honest.
 | `stale-dead-letter-event` | Indexer dead-letter event `retryable` for 10 days | `stale_dead_letter_events` | **Script.** `node scripts/indexer-deadletter.mjs retry <eventId>`, or quarantine it |
 
 `node scripts/load-failure-fixtures.mjs --list` prints every fixture with its
-full step-by-step repair instructions and the expected end state.
+full step-by-step repair instructions and the expected end state. Add `--now` (or
+`--now=<ISO>`) to generate the fixtures relative to that clock instead of the
+fixed `FIXTURE_NOW`, so time-based rules flag them the same way on a live
+database.
 
 ## Using a fixture locally
 

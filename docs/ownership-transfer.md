@@ -84,7 +84,7 @@ import { recoverStuckTransfers } from "@/lib/ownership/ownershipTransfer";
 await recoverStuckTransfers(db); // → { expired, completed, rolledBack }
 ```
 
-It is safe to run repeatedly and from several workers. Run it every few minutes; it is only needed to tidy transfers nobody retries.
+It is safe to run repeatedly and from several workers. Run it every few minutes; it is only needed to tidy transfers nobody retries. From cron: `MONGODB_URI=... npm run transfers:recover` (logs the `{ expired, completed, rolledBack }` summary; exit code 1 on failure).
 
 ### Undoing a completed transfer
 
