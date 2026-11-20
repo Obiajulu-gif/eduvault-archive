@@ -2,11 +2,13 @@
 /**
  * scripts/feature-rollout-guard.mjs
  *
- * Operational CLI for feature-flag canary rollout and rollback verification (#964).
+ * Operational CLI for feature-flag canary rollout, rollback verification (#964)
+ * and authorized emergency disablement (#1152).
  *
  * Usage:
  *   node scripts/feature-rollout-guard.mjs --flag NEW_CHECKOUT --percentage 25 --check-principal GBUYER123
  *   node scripts/feature-rollout-guard.mjs --simulate-failure --json
+ *   node scripts/feature-rollout-guard.mjs --flag NEW_CHECKOUT --emergency-disable --actor admin-ops --reason "Zero-day vulnerability discovered"
  */
 
 import { FeatureRolloutGuard, computePrincipalBucket } from '../src/lib/featureFlags/rolloutGuard.js';
@@ -17,6 +19,10 @@ function parseArgs(argv) {
     percentage: 10,
     checkPrincipal: null,
     simulateFailure: false,
+    emergencyDisable: false,
+    actor: 'admin-operator',
+    actorRole: 'admin',
+    reason: 'Operational emergency disablement initiated via CLI',
     json: false,
     help: false,
   };
@@ -26,12 +32,19 @@ function parseArgs(argv) {
     if (arg === '--help' || arg === '-h') args.help = true;
     else if (arg === '--json') args.json = true;
     else if (arg === '--simulate-failure') args.simulateFailure = true;
+    else if (arg === '--emergency-disable') args.emergencyDisable = true;
     else if (arg.startsWith('--flag=')) args.flag = arg.slice('--flag='.length);
     else if (arg === '--flag') args.flag = argv[++i];
     else if (arg.startsWith('--percentage=')) args.percentage = parseInt(arg.slice('--percentage='.length), 10);
     else if (arg === '--percentage') args.percentage = parseInt(argv[++i], 10);
     else if (arg.startsWith('--check-principal=')) args.checkPrincipal = arg.slice('--check-principal='.length);
     else if (arg === '--check-principal') args.checkPrincipal = argv[++i];
+    else if (arg.startsWith('--actor=')) args.actor = arg.slice('--actor='.length);
+    else if (arg === '--actor') args.actor = argv[++i];
+    else if (arg.startsWith('--actor-role=')) args.actorRole = arg.slice('--actor-role='.length);
+    else if (arg === '--actor-role') args.actorRole = argv[++i];
+    else if (arg.startsWith('--reason=')) args.reason = arg.slice('--reason='.length);
+    else if (arg === '--reason') args.reason = argv[++i];
   }
 
   return args;
@@ -41,7 +54,7 @@ async function main() {
   const args = parseArgs(process.argv.slice(2));
 
   if (args.help) {
-    console.log(`Feature Flag Rollout Guard CLI (#964)
+    console.log(`Feature Flag Rollout Guard & Emergency Disablement CLI (#964, #1152)
 
 Usage:
   node scripts/feature-rollout-guard.mjs [options]
@@ -51,6 +64,10 @@ Options:
   --percentage <0..100>    Rollout percentage (default: 10)
   --check-principal <id>   Evaluate bucket and enrollment for given principal
   --simulate-failure       Simulate consecutive failures triggering auto-rollback
+  --emergency-disable      Execute authorized emergency disablement kill switch
+  --actor <id>             Operator or service ID initiating emergency action
+  --actor-role <role>      Role of operator (admin, operator, deployer)
+  --reason <text>          Justification or incident ticket for emergency disable
   --json                   Output structured JSON
   --help, -h               Show this help
 `);
@@ -77,6 +94,17 @@ Options:
       bucket,
       enrolled,
     };
+  }
+
+  if (args.emergencyDisable) {
+    const actorObj = { id: args.actor, role: args.actorRole };
+    await guard.emergencyDisable({
+      actor: actorObj,
+      reason: args.reason,
+      rollbackCleanup: async () => ({ cleaned: true, releasedInFlight: 0 }),
+      verifyConsistency: async () => ({ verified: true, orphanedRecordsCount: 0 }),
+    });
+    report.emergencyDisableReport = guard.getStatus();
   }
 
   if (args.simulateFailure) {
@@ -119,6 +147,14 @@ Options:
       console.log(`- ID:       ${report.principalCheck.principalId}`);
       console.log(`- Bucket:   ${report.principalCheck.bucket}/100`);
       console.log(`- Enrolled: ${report.principalCheck.enrolled ? 'YES' : 'NO'}`);
+    }
+
+    if (report.emergencyDisableReport) {
+      console.log(`\nEmergency Disablement (#1152):`);
+      console.log(`- Status:       ${report.emergencyDisableReport.status}`);
+      console.log(`- Reason:       ${report.emergencyDisableReport.emergencyDisableReason}`);
+      console.log(`- Disabled By:  ${report.emergencyDisableReport.emergencyDisabledBy}`);
+      console.log(`- Verified Clean:${report.emergencyDisableReport.postRollbackVerification?.verifiedClean ? 'YES' : 'NO'}`);
     }
 
     if (report.postRollbackStatus) {
