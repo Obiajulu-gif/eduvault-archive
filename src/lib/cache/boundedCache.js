@@ -326,6 +326,28 @@ export function createBoundedCache(options = {}) {
     return { removed, findings };
   }
 
+  /**
+   * Non-mutating snapshot of current cache entries for reconciliation/inspection.
+   * Does not update LRU order or hit/miss counters.
+   */
+  function snapshot({ scope } = {}) {
+    if (scope !== undefined) validateName(scope, "scope");
+    const items = [];
+    for (const entry of entries.values()) {
+      if (scope !== undefined && entry.scope !== scope) continue;
+      items.push({
+        scope: entry.scope,
+        key: entry.key,
+        value: copy(entry.value),
+        version: entry.version,
+        tags: [...entry.tags],
+        storedAt: entry.storedAt,
+        expiresAt: entry.expiresAt,
+      });
+    }
+    return items;
+  }
+
   function stats() {
     const lookups = counters.hits + counters.misses + counters.expired + counters.staleVersion;
     return {
@@ -338,5 +360,5 @@ export function createBoundedCache(options = {}) {
     };
   }
 
-  return { set, get, lookup, peekStale, getOrLoad, invalidate, invalidateTag, invalidateScope, invalidatePrefix, clear, findStale, purgeStale, stats };
+  return { set, get, lookup, peekStale, getOrLoad, invalidate, invalidateTag, invalidateScope, invalidatePrefix, clear, findStale, purgeStale, snapshot, stats };
 }
