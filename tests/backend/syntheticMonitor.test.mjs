@@ -16,6 +16,8 @@ import {
   runScenario,
   runHealthCheck,
   createSyntheticMonitorScheduler,
+  SyntheticAuthorizationError,
+  assertSyntheticMonitorAuthorized,
 } from "../../src/lib/monitoring/syntheticMonitor.js";
 
 import {
@@ -351,3 +353,57 @@ describe("history rolling window", () => {
     assert.ok(runs.length <= SCENARIO_DEFINITIONS.find((d) => d.id === SCENARIO_IDS.BUYER_PURCHASE_FLOW).sla.windowSize);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Authorization and retry paths (#1109)
+// ---------------------------------------------------------------------------
+
+describe("synthetic monitor authorization and retry paths", () => {
+  test("assertSyntheticMonitorAuthorized rejects unprivileged actors and allows admin/operator/service", () => {
+    assert.throws(() => assertSyntheticMonitorAuthorized(null), SyntheticAuthorizationError);
+    assert.throws(() => assertSyntheticMonitorAuthorized({ role: "viewer" }), SyntheticAuthorizationError);
+    assert.throws(() => assertSyntheticMonitorAuthorized({ role: "creator" }), SyntheticAuthorizationError);
+
+    assert.doesNotThrow(() => assertSyntheticMonitorAuthorized({ role: "admin" }));
+    assert.doesNotThrow(() => assertSyntheticMonitorAuthorized({ role: "operator" }));
+    assert.doesNotThrow(() => assertSyntheticMonitorAuthorized({ role: "service" }));
+  });
+
+  test("runHealthCheck enforces actor authorization", async () => {
+    await assert.rejects(
+      () => runHealthCheck({ adapters: happyAdapters(), actor: { role: "student" } }),
+      SyntheticAuthorizationError
+    );
+
+    const report = await runHealthCheck({
+      adapters: happyAdapters(),
+      actor: { role: "admin" },
+      scenarioIds: [SCENARIO_IDS.BUYER_PURCHASE_FLOW],
+    });
+    assert.equal(report.health, HEALTH_STATES.GREEN);
+  });
+
+  test("retries transient step failure when maxRetries > 0", async () => {
+    let attempts = 0;
+    const flakeHarness = {
+      steps: {
+        ...happyHarness().steps,
+        [JOURNEY_STEP_IDS.CHECKOUT_QUOTE]: async () => {
+          attempts += 1;
+          if (attempts === 1) {
+            const err = new Error("Temporary network glitch");
+            err.code = "ECONNRESET";
+            throw err;
+          }
+          return { synthetic: true, retried: true };
+        },
+      },
+    };
+
+    const def = SCENARIO_DEFINITIONS.find((d) => d.id === SCENARIO_IDS.BUYER_PURCHASE_FLOW);
+    const result = await runScenario(def, { purchaseHarness: flakeHarness }, { maxRetries: 2 });
+    assert.equal(result.ok, true);
+    assert.equal(attempts, 2);
+  });
+});
+
