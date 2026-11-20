@@ -13,6 +13,7 @@
  *   node scripts/load-failure-fixtures.mjs --unload
  *
  *   --detect   run the read-only integrity monitor afterwards and print what it flags
+ *   --now[=ISO] generate the fixtures relative to that time (default: the current time) instead of the fixed FIXTURE_NOW
  *
  * Environment:
  *   MONGODB_URI  defaults to mongodb://localhost:27017/eduvault
@@ -27,6 +28,7 @@ import { MongoClient } from "mongodb";
 import { resolveEnvironment } from "../src/lib/config/configContract.js";
 import {
   FAILURE_FIXTURES,
+  generateFailureFixtures,
   getFailureFixture,
   loadFailureFixtures,
   unloadFailureFixtures,
@@ -36,6 +38,12 @@ import { validateIntegrity } from "./lib/integrity-rules.mjs";
 const args = process.argv.slice(2);
 const flags = new Set(args.filter((arg) => arg.startsWith("--")));
 const ids = args.filter((arg) => !arg.startsWith("--"));
+const nowArg = args.find((arg) => arg === "--now" || arg.startsWith("--now="));
+const generatedNow = nowArg ? (nowArg === "--now" ? new Date() : new Date(nowArg.slice("--now=".length))) : null;
+if (generatedNow && Number.isNaN(generatedNow.getTime())) {
+  console.error("[failure-fixtures] --now must be an ISO timestamp.");
+  process.exit(2);
+}
 
 function printCatalog() {
   for (const fixture of FAILURE_FIXTURES) {
@@ -64,7 +72,8 @@ if (!flags.has("--all") && !flags.has("--unload") && ids.length === 0) {
 
 const client = new MongoClient(process.env.MONGODB_URI ?? "mongodb://localhost:27017/eduvault");
 try {
-  const fixtures = flags.has("--all") ? FAILURE_FIXTURES : ids.map(getFailureFixture);
+  const selected = flags.has("--all") ? FAILURE_FIXTURES : ids.map(getFailureFixture);
+  const fixtures = generatedNow ? generateFailureFixtures(selected, generatedNow) : selected;
   await client.connect();
   const db = client.db(process.env.MONGODB_DB ?? "eduvault");
 
@@ -76,7 +85,7 @@ try {
   }
 
   if (flags.has("--detect")) {
-    const results = await validateIntegrity(db);
+    const results = await validateIntegrity(db, generatedNow ? { now: generatedNow } : undefined);
     console.log(JSON.stringify({ event: "integrity_detected", violations: results.violations.map((v) => v.id) }));
   }
 } catch (error) {

@@ -250,6 +250,25 @@ export const FAILURE_FIXTURES = Object.freeze([
   },
 ]);
 
+/**
+ * Generate copies of fixtures with every timestamp shifted so `FIXTURE_NOW`
+ * becomes `now`. Ages ("pending for 3 days") are preserved, so the generated
+ * state is detected the same way against a live clock. Ids are unchanged, so
+ * load/unload stay idempotent. Does not mutate the catalog.
+ */
+export function generateFailureFixtures(fixtures, now = new Date()) {
+  const offset = now.getTime() - FIXTURE_NOW.getTime();
+  const shift = (value) => {
+    if (value instanceof Date) return new Date(value.getTime() + offset);
+    if (Array.isArray(value)) return value.map(shift);
+    if (value && Object.getPrototypeOf(value) === Object.prototype) {
+      return Object.fromEntries(Object.entries(value).map(([key, inner]) => [key, shift(inner)]));
+    }
+    return value;
+  };
+  return fixtures.map((fixture) => ({ ...fixture, documents: shift(fixture.documents) }));
+}
+
 export function getFailureFixture(id) {
   const fixture = FAILURE_FIXTURES.find((candidate) => candidate.id === id);
   if (!fixture) throw new Error(`Unknown failure fixture "${id}"`);
