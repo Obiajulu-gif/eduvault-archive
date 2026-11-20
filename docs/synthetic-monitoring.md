@@ -149,3 +149,38 @@ npx tsx --test tests/backend/syntheticMonitor.test.mjs
 Covers: scenario definitions shape, SLA evaluation (green/degraded/red),
 individual scenario runner, full health check roll-up, onScenario/onAlert
 callbacks, scheduler tick/stop, and rolling history window enforcement.
+
+
+---
+
+## Execution Paths (#1148)
+
+### 1. Normal Path
+- The runner executes all configured scenario pipelines sequentially or on a timed interval.
+- Each scenario runs its multi-step pipeline (e.g. quote -> purchase -> entitlement -> download capability).
+- Step latencies are captured and pushed to a bounded rolling window.
+- Overall health rolls up to `green` when all scenario SLAs (p95 latency and >=95% success floor) are satisfied.
+
+### 2. Failure Path
+- If a step throws or times out (exceeding `stepTimeoutMs`), the scenario fails immediately.
+- Blame attribution maps the failed step to its upstream subsystem (e.g. `checkout-quotes`, `storage-ipfs`, `stellar-rpc`).
+- The health state transitions to `red`, alerting hooks (`onAlert`) are triggered, and the process exits with code `1`.
+
+### 3. Retry Path
+- When transient network flakiness occurs during step execution, the monitor supports step-level retries (`maxRetries > 0`) with backoff.
+- If a subsequent retry passes within SLA bounds, the step is recorded as recovered.
+- If retries are exhausted, the failure is recorded and blames are rolled up.
+
+### 4. Authorization Path
+- Programmatic execution via `runHealthCheck({ actor })` or API calls to `/api/internal/synthetic-health` require authorized identities.
+- `assertSyntheticMonitorAuthorized(actor)` enforces that only actors with roles `admin`, `operator`, or `service` may trigger health evaluations.
+- Unauthorized callers receive `SyntheticAuthorizationError` (HTTP 403).
+
+---
+
+## Edge Cases, Recovery & Rollback
+
+- **Zero-Dependency CI Verification:** Running with `--dry-run` uses synthetic step stubs and requires no external MongoDB database or network connectivity.
+- **Rolling Window Bounded Memory:** History is maintained in an in-memory ring buffer strictly capped at `windowSize` (default: 10 runs), preventing memory leaks in daemon mode.
+- **Synthetic Row Isolation:** In live database mode, all synthetic test materials use unique prefixed IDs (`synthetic_`) and are cleaned up via `cleanupSyntheticRows(db)` in a `finally` block, guaranteeing test data never pollutes production catalogs.
+- **Rollback Behavior:** Synthetic monitors are read-only observers. To roll back an automated schedule, call `scheduler.stop()` or disable the GitHub Actions cron job.
