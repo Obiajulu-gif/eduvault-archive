@@ -146,6 +146,7 @@ export async function runSyntheticJourney({
   runId = newJourneyRunId(),
   now = () => Date.now(),
   stepTimeoutMs = 15_000,
+  maxRetries = 0,
   onStep,
 } = {}) {
   if (!harness || typeof harness.steps !== "object" || harness.steps === null) {
@@ -195,12 +196,31 @@ export async function runSyntheticJourney({
     const stepStarted = now();
     const startedAt = new Date(stepStarted).toISOString();
     try {
-      const detail = await runStepWithTimeout(
-        (context) => stepFn(context),
-        definition,
-        stepTimeoutMs,
-        { runId, results, step: definition, now },
-      );
+      let detail;
+      let lastError = null;
+      const retries = Math.max(0, Number(maxRetries) || 0);
+
+      for (let attempt = 0; attempt <= retries; attempt += 1) {
+        try {
+          detail = await runStepWithTimeout(
+            (context) => stepFn(context),
+            definition,
+            stepTimeoutMs,
+            { runId, results, step: definition, now, attempt },
+          );
+          lastError = null;
+          break;
+        } catch (error) {
+          lastError = error;
+          if (attempt < retries) {
+            // Non-blocking backoff for transient retry
+            await new Promise((r) => setTimeout(r, Math.min(25 * Math.pow(2, attempt), 200)));
+          }
+        }
+      }
+
+      if (lastError) throw lastError;
+
       const completed = {
         ...baseStep,
         status: JOURNEY_STEP_STATUSES.PASSED,

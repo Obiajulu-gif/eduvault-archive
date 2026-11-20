@@ -57,6 +57,20 @@ export const HEALTH_STATES = Object.freeze({
   RED:      "red",      // SLA breach: success rate below floor or p95 over limit
 });
 
+export class SyntheticAuthorizationError extends Error {
+  constructor(message = "Unauthorized synthetic monitor operation.") {
+    super(message);
+    this.name = "SyntheticAuthorizationError";
+    this.status = 403;
+  }
+}
+
+export function assertSyntheticMonitorAuthorized(actor) {
+  if (!actor || (actor.role !== "admin" && actor.role !== "operator" && actor.role !== "service")) {
+    throw new SyntheticAuthorizationError("Only an admin, operator, or service identity may execute synthetic monitors.");
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Built-in scenario definitions
 // ---------------------------------------------------------------------------
@@ -251,6 +265,7 @@ export async function runScenario(definition, adapters = {}, opts = {}) {
     harness,
     runId,
     stepTimeoutMs: opts.stepTimeoutMs ?? 15_000,
+    maxRetries:    opts.maxRetries ?? 0,
     now:           opts.now,
   });
 
@@ -288,9 +303,15 @@ export async function runHealthCheck({
   scenarioIds,
   history = new Map(),
   stepTimeoutMs = 15_000,
+  maxRetries = 0,
+  actor,
   now = () => Date.now(),
   onScenario,
 } = {}) {
+  if (actor) {
+    assertSyntheticMonitorAuthorized(actor);
+  }
+
   const definitions = scenarioIds
     ? SCENARIO_DEFINITIONS.filter((d) => scenarioIds.includes(d.id))
     : [...SCENARIO_DEFINITIONS];
@@ -299,7 +320,7 @@ export async function runHealthCheck({
   const scenarioResults = [];
 
   for (const definition of definitions) {
-    const result = await runScenario(definition, adapters, { stepTimeoutMs, now });
+    const result = await runScenario(definition, adapters, { stepTimeoutMs, maxRetries, now });
 
     // Append this run to the rolling history for SLA evaluation
     const previousRuns = history.get(definition.id) ?? [];
