@@ -435,6 +435,11 @@ export const ERROR_CODES = {
     retryable: true,
     userMessage: "The content delivery service is temporarily unavailable.",
     recovery: "Wait briefly and retry the download. Do not share or reuse an expired capability URL.",
+    remediationHints: [
+      "Check IPFS/Pinata gateway and Vercel Blob health via /api/health.",
+      "Verify upstream storage circuit breaker state and rate limits.",
+      "Transient storage outages are retryable with exponential backoff.",
+    ],
   },
   STORAGE_QUARANTINED: {
     code: "STORAGE_QUARANTINED",
