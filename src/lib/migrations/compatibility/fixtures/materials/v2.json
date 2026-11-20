@@ -1,0 +1,20 @@
+{
+  "_id": "compat-mat-v2-0001",
+  "schemaVersion": 2,
+  "title": "Intro to Soroban Smart Contracts",
+  "description": "Beginner module covering Soroban contracts and Stellar assets.",
+  "price": 20,
+  "asset": "XLM",
+  "userAddress": "GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN7",
+  "createdAt": "2026-01-15T00:00:00.000Z",
+  "pricingTier": "standard",
+  "sorobanEntitlementConfig": {
+    "contractId": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+    "standard": "SEP-0041",
+    "transferable": false
+  },
+  "rightsMetadata": {
+    "commercialUse": false,
+    "educationalLicense": true
+  }
+}
