@@ -1,4 +1,5 @@
 import nodemailer from "nodemailer";
+import { isNotificationEnabled } from "../api/validation.js";
 
 function createTransporter() {
   const smtpHost = process.env.SMTP_HOST;
@@ -38,7 +39,12 @@ function createTransporter() {
  * @param {{ materialCount: number, demotedCount: number }} stats
  * @returns {Promise<void>}
  */
-export async function sendInactivityReminder(to, name, inactiveDays, stats) {
+export async function sendInactivityReminder(to, name, inactiveDays, stats, options = {}) {
+  const { notificationPreferences, user } = options;
+  if (!isNotificationEnabled(notificationPreferences || user, "reminders")) {
+    return { sent: false, reason: "reminders_disabled" };
+  }
+
   const defaultFrom = process.env.EMAIL_USER || "no-reply@eduvault.local";
   const from = process.env.EMAIL_FROM || defaultFrom;
   const transporter = createTransporter();
@@ -178,4 +184,5 @@ export async function sendInactivityReminder(to, name, inactiveDays, stats) {
   </html>`;
 
   await transporter.sendMail({ from, to, subject, text, html });
+  return { sent: true };
 }

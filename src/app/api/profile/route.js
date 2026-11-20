@@ -7,14 +7,22 @@ import { auditLog } from "@/lib/api/audit";
 import { withApiHardening } from "@/lib/api/hardening";
 import {
   escapeRegExp,
+  getDefaultNotificationPreferences,
   normalizeWalletAddress,
   validateProfilePayload,
   validatePayoutSettingsPayload,
 } from "@/lib/api/validation";
 import { getUserFromCookie, sanitizeString } from "@/lib/api/auth";
+import { verifyChallenge } from "@/lib/auth/challenge";
 import { verifySessionWalletAddress } from "@/lib/auth/sessionVerification";
 import { sendWelcomeEmail } from "@/lib/email";
 import { getDb } from "@/lib/mongodb";
+import { getUserIdString, getWalletAddresses, getUserQuery } from "@/lib/profile/accountData";
+import {
+  buildAnonymizedProfileUpdate,
+  buildReviewAnonymizationUpdate,
+  buildReviewerQuery,
+} from "@/lib/profile/accountPrivacy";
 
 export async function POST(request) {
   return withApiHardening(
@@ -43,6 +51,7 @@ export async function POST(request) {
 
     const newUser = {
       ...profile,
+      notificationPreferences: getDefaultNotificationPreferences(),
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };
@@ -213,6 +222,127 @@ export async function PATCH(request) {
       } catch (error) {
         if (error.name === "ValidationError") throw error;
         auditLog({ event: "profile_update_failed", route: "profile", method: "PATCH", status: 500, reason: error.message });
+        return NextResponse.json({ error: "Server error" }, { status: 500 });
+      }
+    }
+  );
+}
+
+export async function DELETE(request) {
+  return withApiHardening(
+    request,
+    { route: "profile", rateLimit: { limit: 5, windowMs: 60 * 60 * 1000 } },
+    async () => {
+      try {
+        const sessionUser = await getUserFromCookie(request);
+        if (!sessionUser) {
+          return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+        }
+
+        let body;
+        try {
+          body = await request.json();
+        } catch {
+          return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
+        }
+
+        const address = normalizeWalletAddress(body?.address);
+        const nonce = sanitizeString(body?.nonce, { maxLength: 256 });
+        const signedTransactionXdr = sanitizeString(body?.signedTransactionXdr, { maxLength: 10000 });
+        if (!address || !nonce || !signedTransactionXdr) {
+          return NextResponse.json(
+            { error: "A wallet address, nonce and signed transaction are required" },
+            { status: 400 }
+          );
+        }
+
+        const sessionAddresses = getWalletAddresses(sessionUser).map((value) => value.toLowerCase());
+        if (!sessionAddresses.includes(address.toLowerCase())) {
+          auditLog({ event: "profile_delete_forbidden", route: "profile", method: "DELETE", status: 403 });
+          return NextResponse.json({ error: "Forbidden: Wallet address mismatch" }, { status: 403 });
+        }
+
+        const proof = await verifyChallenge(address, nonce, signedTransactionXdr, {
+          action: "delete_profile",
+          origin: sanitizeString(body.origin, { maxLength: 200 }) || undefined,
+          network: sanitizeString(body.network, { maxLength: 100 }) || undefined,
+          contract: sanitizeString(body.contract, { maxLength: 200 }) || undefined,
+        });
+        if (!proof.valid) {
+          auditLog({ event: "profile_delete_signature_invalid", route: "profile", method: "DELETE", status: 403, reason: proof.reason });
+          return NextResponse.json(
+            { error: "Invalid or expired wallet signature", reason: proof.reason },
+            { status: 403 }
+          );
+        }
+
+        const db = await getDb();
+        const users = db.collection("users");
+        const user = await users.findOne(getUserQuery(sessionUser, address));
+        if (!user) {
+          return NextResponse.json({ error: "User not found" }, { status: 404 });
+        }
+
+        const userAddresses = getWalletAddresses(user);
+        if (!userAddresses.some((value) => value.toLowerCase() === address.toLowerCase())) {
+          return NextResponse.json({ error: "Forbidden: Wallet address mismatch" }, { status: 403 });
+        }
+
+        const now = new Date();
+        const userUpdate = buildAnonymizedProfileUpdate(getUserIdString(user), now);
+        await users.updateOne({ _id: user._id }, userUpdate);
+
+        const reviewerQuery = buildReviewerQuery(
+          [...userAddresses, address],
+          [user._id, user.sub]
+        );
+        if (reviewerQuery) {
+          const reviewUpdate = buildReviewAnonymizationUpdate(now);
+          await db.collection("reviews").updateMany(reviewerQuery, reviewUpdate);
+          await db.collection("material_feedback").updateMany(reviewerQuery, reviewUpdate);
+        }
+
+        const sessionIdentifiers = [...new Set([
+          String(user._id || ""),
+          String(user.sub || ""),
+          ...userAddresses,
+          address,
+        ].filter(Boolean))];
+        await db.collection("refresh_tokens").deleteMany({ userId: { $in: sessionIdentifiers } });
+        await db.collection("auth_challenges").deleteMany({
+          address: { $in: sessionIdentifiers.map((value) => value.toLowerCase()) },
+        });
+
+        auditLog({
+          event: "profile_deleted",
+          route: "profile",
+          method: "DELETE",
+          status: 200,
+          actor: getUserIdString(sessionUser),
+        });
+
+        const response = NextResponse.json({
+          success: true,
+          deletedAt: now.toISOString(),
+          financialRecordsRetained: true,
+        });
+        response.cookies.set("auth_token", "", {
+          httpOnly: true,
+          secure: process.env.NODE_ENV === "production",
+          sameSite: "lax",
+          path: "/",
+          maxAge: 0,
+        });
+        response.cookies.set("refresh_token", "", {
+          httpOnly: true,
+          secure: process.env.NODE_ENV === "production",
+          sameSite: "strict",
+          path: "/api/auth/refresh",
+          maxAge: 0,
+        });
+        return response;
+      } catch (error) {
+        auditLog({ event: "profile_delete_failed", route: "profile", method: "DELETE", status: 500, reason: error.message });
         return NextResponse.json({ error: "Server error" }, { status: 500 });
       }
     }

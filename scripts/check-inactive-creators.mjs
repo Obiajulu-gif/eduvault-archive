@@ -158,18 +158,21 @@ async function run() {
       // Send reminder email
       if (!DRY_RUN && !SKIP_EMAIL && userEmail) {
         try {
-          await sendInactivityReminder(userEmail, userName, inactiveDays, {
+          const result = await sendInactivityReminder(userEmail, userName, inactiveDays, {
             materialCount,
             demotedCount: materialCount,
-          });
-          emailsSent++;
-          console.log(`[check-inactive-creators] ${label}Sent reminder to ${userEmail}.`);
+          }, { notificationPreferences: user.notificationPreferences });
+          if (!result?.sent) {
+            console.log(`[check-inactive-creators] ${label}Reminder skipped (${result?.reason || "disabled"}) for ${userName}.`);
+          } else {
+            emailsSent++;
+            console.log(`[check-inactive-creators] ${label}Sent reminder to ${userEmail}.`);
 
-          // Mark the user as reminded to prevent duplicate emails in future runs
-          await users.updateOne(
-            { _id: user._id },
-            { $set: { lastInactivityReminderAt: new Date() } }
-          );
+            await users.updateOne(
+              { _id: user._id },
+              { $set: { lastInactivityReminderAt: new Date() } }
+            );
+          }
         } catch (err) {
           emailsFailed++;
           console.error(`[check-inactive-creators] Failed to send email to ${userEmail}:`, err.message);

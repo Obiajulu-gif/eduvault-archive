@@ -202,6 +202,8 @@ export async function getDynamicBaseFee(tier = 'medium') {
   const optimalFees = calculateOptimalFees(feeStats);
   
   return optimalFees[tier] || optimalFees.medium;
+}
+
 const KNOWN_USDC_ISSUERS = {
   testnet: 'GBBD47IF6LWK7P7MDEVSCWRZDPOVPOFWLYERWFBN4JSE3OUQTISLV5EX',
   mainnet: 'GA5ZSEJYB37JDD5G3LYVYF77RD7QFGHSXPJNKXJFUMIVYQ33HE6IGM4Y',

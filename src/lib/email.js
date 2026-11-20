@@ -1,5 +1,6 @@
 import nodemailer from "nodemailer";
 import { ObjectId } from "mongodb";
+import { isNotificationEnabled } from "./api/validation.js";
 
 
 function createTransporter() {
@@ -187,17 +188,19 @@ export async function sendReceiptIfEligible(db, purchaseId) {
     if (purchase.receiptSent) return;
     if (!['confirmed', 'settled', 'completed'].includes(purchase.status)) return;
 
-    let email = purchase.userEmail;
-    if (!email && purchase.buyerAddress) {
-      const user = await db.collection('users').findOne({
+    let user = null;
+    if (purchase.buyerAddress) {
+      user = await db.collection('users').findOne({
         $or: [
           { walletAddress: purchase.buyerAddress },
           { walletAddressLower: purchase.buyerAddress.toLowerCase() }
         ]
       });
-      email = user?.email;
     }
 
+    if (!isNotificationEnabled(user, "receipts")) return;
+
+    const email = purchase.userEmail || user?.email;
     if (!email) return;
 
     const material = await db.collection('materials').findOne({

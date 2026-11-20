@@ -42,15 +42,16 @@ export async function POST(req) {
     }
 
     // Verify discount code if supplied
-    let verifiedDiscount = null;
+    let discountPercentage = 0;
     let finalBaseAmount = basePrice;
     if (discountCode) {
       const discountResult = await verifyDiscount(discountCode, materialId);
       if (discountResult.valid) {
-        verifiedDiscount = discountResult.discount;
-        const discountPercent = discountResult.discountAmountPercent || 0;
-        finalBaseAmount = basePrice * (1 - discountPercent / 100);
+        discountPercentage = discountResult.discountAmountPercent || 0;
+        finalBaseAmount = basePrice * (1 - discountPercentage / 100);
       }
+    }
+
     const buyerAddress = user.walletAddress || user.address || user.id;
 
     // Verify buyer holds an active trustline for the payment asset
@@ -83,13 +84,11 @@ export async function POST(req) {
     const db = await getDb();
     const checkoutIntent = {
       materialId,
-      buyerAddress: user.walletAddress || user.address || user.id,
+      buyerAddress,
       originalAmount: basePrice,
       discountCode: discountCode || null,
-      discountPercentage: verifiedDiscount ? (verifiedDiscount.percentage || 0) : 0,
+      discountPercentage,
       discountAmount: basePrice - finalBaseAmount,
-      buyerAddress,
-      originalAmount: amount,
       taxAmount: checkoutWithTax.taxAmount,
       taxRateBps: checkoutWithTax.taxRateBps,
       totalAmount: checkoutWithTax.totalAmount,

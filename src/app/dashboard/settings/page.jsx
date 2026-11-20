@@ -5,6 +5,7 @@ import { ObjectId } from "mongodb";
 import { getDb } from "@/lib/mongodb";
 import PayoutSettingsPanel from "../components/PayoutSettingsPanel";
 import CreatorProfileSettings from "../components/CreatorProfileSettings";
+import RecentlyViewedSettings from "../components/RecentlyViewedSettings";
 
 async function getCurrentUser() {
   const cookieStore = await cookies();
@@ -35,6 +36,7 @@ export default async function SettingsPage() {
     <div className="mx-auto max-w-7xl space-y-10 px-4 py-10 lg:px-8">
       <CreatorProfileSettings initialUser={user} />
       <PayoutSettingsPanel initialUser={user} />
+      <RecentlyViewedSettings />
     </div>
   );
 }

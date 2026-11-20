@@ -36,6 +36,18 @@ export const ProfileSchema = {
           bsonType: "string",
           description: "Short creator biography displayed on the marketplace",
         },
+        notificationPreferences: {
+          bsonType: "object",
+          description: "Per-category email notification opt-outs; receipts are always enabled",
+          required: ["receipts"],
+          properties: {
+            receipts: { bsonType: "bool", description: "Transactional receipts; always true" },
+            reviews: { bsonType: "bool", description: "Review activity notifications" },
+            sales: { bsonType: "bool", description: "Sales and payout notifications" },
+            reminders: { bsonType: "bool", description: "Inactivity reminders" },
+            productUpdates: { bsonType: "bool", description: "Product update announcements" },
+          },
+        },
         createdAt: {
           bsonType: "date",
           description: "Timestamp recording when the profile was first created",

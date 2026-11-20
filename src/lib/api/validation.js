@@ -116,6 +116,97 @@ export function validatePayoutSettingsPayload(body) {
   };
 }
 
+export const NOTIFICATION_CATEGORIES = [
+  "receipts",
+  "reviews",
+  "sales",
+  "reminders",
+  "productUpdates",
+];
+
+const OPTIONAL_NOTIFICATION_CATEGORIES = NOTIFICATION_CATEGORIES.filter(
+  (category) => category !== "receipts"
+);
+
+export function getDefaultNotificationPreferences() {
+  return {
+    receipts: true,
+    reviews: true,
+    sales: true,
+    reminders: true,
+    productUpdates: true,
+  };
+}
+
+export function normalizeNotificationPreferences(value) {
+  const preferences = getDefaultNotificationPreferences();
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return preferences;
+  }
+
+  for (const category of OPTIONAL_NOTIFICATION_CATEGORIES) {
+    if (typeof value[category] === "boolean") {
+      preferences[category] = value[category];
+    }
+  }
+  preferences.receipts = true;
+  return preferences;
+}
+
+export function validateNotificationPreferencesPayload(body) {
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    throw new ValidationError("Invalid notification preferences", {
+      field: "notificationPreferences",
+    });
+  }
+
+  const unknown = Object.keys(body).filter(
+    (key) => !NOTIFICATION_CATEGORIES.includes(key)
+  );
+  if (unknown.length > 0) {
+    throw new ValidationError(`Unknown notification category: ${unknown[0]}`, {
+      field: unknown[0],
+    });
+  }
+
+  if (body.receipts === false) {
+    throw new ValidationError("Receipts cannot be disabled", { field: "receipts" });
+  }
+
+  const preferences = getDefaultNotificationPreferences();
+  let hasUpdates = false;
+  for (const category of OPTIONAL_NOTIFICATION_CATEGORIES) {
+    if (body[category] === undefined) continue;
+    if (typeof body[category] !== "boolean") {
+      throw new ValidationError(`Invalid value for ${category}`, { field: category });
+    }
+    preferences[category] = body[category];
+    hasUpdates = true;
+  }
+
+  if (!hasUpdates) {
+    throw new ValidationError("No notification preferences provided", {
+      field: "notificationPreferences",
+    });
+  }
+
+  return preferences;
+}
+
+export function isNotificationEnabled(userOrPreferences, category) {
+  if (category === "receipts") return true;
+  if (!NOTIFICATION_CATEGORIES.includes(category)) return false;
+
+  const isUserObject =
+    userOrPreferences &&
+    typeof userOrPreferences === "object" &&
+    "notificationPreferences" in userOrPreferences;
+  const stored = isUserObject
+    ? userOrPreferences.notificationPreferences
+    : userOrPreferences;
+  return normalizeNotificationPreferences(stored)[category];
+}
+
 export function validateMaterialPayload(body) {
   const title = sanitizeString(body?.title, { maxLength: 160 });
   const storageKey = sanitizeString(body?.storageKey || body?.fileUrl, { maxLength: 2048 });
