@@ -461,3 +461,50 @@ export async function listTransfersForUser(db, { address, state, limit = 50, now
     row.state === TransferState.PENDING && row.expiresAt <= now ? { ...row, state: TransferState.EXPIRED } : row
   );
 }
+
+/**
+ * Loads a transfer with party authorization, lazy expiry, and optional audit history.
+ * Strangers receive NOT_FOUND (404) to prevent transfer id probing.
+ */
+export async function getTransfer(db, { transferId, actorAddress, isAdmin = false, includeHistory = true, now = new Date() }) {
+  const actor = requireAddress(actorAddress, "actorAddress");
+  let transfer = await loadTransfer(db, transferId);
+  assertParty(transfer, actor, { admin: isAdmin });
+  transfer = await expireIfOverdue(db, transfer, now);
+  if (!includeHistory) {
+    const { history: _h, ...rest } = transfer;
+    return { transfer: rest };
+  }
+  return { transfer };
+}
+
+/**
+ * Returns all transfers and their audit histories for a given material.
+ * Accessible only by current material owner or admin.
+ */
+export async function listMaterialTransferHistory(db, { materialId, actorAddress, isAdmin = false, limit = 50, now = new Date() }) {
+  const actor = requireAddress(actorAddress, "actorAddress");
+  if (materialId === undefined || materialId === null || materialId === "") {
+    throw new AppError("VALIDATION_FIELD", { message: "materialId is required.", details: { field: "materialId" } });
+  }
+  const material = await db.collection("materials").findOne({ _id: materialId });
+  if (!material) throw new AppError("NOT_FOUND_MATERIAL");
+
+  if (!isAdmin && !sameAddress(ownerOf(material), actor)) {
+    throw new AppError("AUTH_FORBIDDEN", {
+      message: "Only the material owner or admin can view material transfer history.",
+      details: { reason: "not_owner" },
+    });
+  }
+
+  const rows = await transfers(db)
+    .find({ materialId })
+    .sort({ createdAt: -1, _id: 1 })
+    .limit(Math.min(Math.max(limit, 1), 100))
+    .toArray();
+
+  return rows.map((row) =>
+    row.state === TransferState.PENDING && row.expiresAt <= now ? { ...row, state: TransferState.EXPIRED } : row
+  );
+}
+
