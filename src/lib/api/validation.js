@@ -19,6 +19,7 @@ const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const EVM_ADDRESS_PATTERN = /^0x[a-fA-F0-9]{40}$/;
 const STELLAR_ADDRESS_PATTERN = /^G[A-Z2-7]{55}$/;
 const CURRENCY_CODE_PATTERN = /^[A-Z][A-Z0-9]{2,11}$/;
+const MAX_PRICE = 1_000_000;
 
 export function sanitizeString(value, { maxLength = 5000 } = {}) {
   if (value === undefined || value === null) return "";
@@ -137,7 +138,7 @@ export function validateMaterialPayload(body) {
   }
 
   const price = Number(body?.price ?? 0);
-  if (!Number.isFinite(price) || price < 0) {
+  if (!Number.isFinite(price) || price < 0 || price > MAX_PRICE) {
     throw new ValidationError("Invalid price", { field: "price" });
   }
 
@@ -244,6 +245,9 @@ export function validateMaterialPayload(body) {
 }
 
 export function validateMaterialUpdatePayload(body) {
+  if (body === null || typeof body !== "object") {
+    throw new ValidationError("Request body must be a JSON object");
+  }
   const allowed = {};
 
   if (body.title !== undefined) {
@@ -258,7 +262,7 @@ export function validateMaterialUpdatePayload(body) {
 
   if (body.price !== undefined) {
     const price = Number(body.price);
-    if (!Number.isFinite(price) || price < 0) {
+    if (!Number.isFinite(price) || price < 0 || price > MAX_PRICE) {
       throw new ValidationError("Invalid price", { field: "price" });
     }
     allowed.price = price;
@@ -369,61 +373,11 @@ export function validateDateRangeQuery(searchParams, { maxRangeDays = 366, defau
   return { from, to };
 }
 
-export function validateMaterialUpdatePayload(body) {
-  const allowed = {};
-  const editableFields = ["title", "description", "price", "usageRights", "visibility", "thumbnailUrl"];
-
-  if (body.title !== undefined) {
-    const title = sanitizeString(body.title, { maxLength: 160 });
-    if (!title) throw new ValidationError("Title cannot be empty", { field: "title" });
-    allowed.title = title;
-  }
-
-  if (body.description !== undefined) {
-    allowed.description = sanitizeString(body.description, { maxLength: 5000 });
-  }
-
-  if (body.price !== undefined) {
-    const price = Number(body.price);
-    if (!Number.isFinite(price) || price < 0) {
-      throw new ValidationError("Invalid price", { field: "price" });
-    }
-    allowed.price = price;
-  }
-
-  if (body.usageRights !== undefined) {
-    allowed.usageRights = sanitizeString(body.usageRights, { maxLength: 1000 });
-  }
-
-  if (body.visibility !== undefined) {
-    const visibility = sanitizeString(body.visibility, { maxLength: 20 });
-    if (!["private", "public", "unlisted"].includes(visibility)) {
-      throw new ValidationError("Invalid visibility", { field: "visibility" });
-    }
-    allowed.visibility = visibility;
-  }
-
-  if (body.thumbnailUrl !== undefined) {
-    allowed.thumbnailUrl = sanitizeString(body.thumbnailUrl, { maxLength: 2048 }) || null;
-  }
-
-  if (Object.keys(allowed).length === 0) {
-    throw new ValidationError("No editable fields provided");
-  }
-
-  return allowed;
-}
-
-export function validateChangeReason(reason) {
-  if (!reason) return null;
-  return sanitizeString(reason, { maxLength: 500 });
-}
-
 export function parsePagination(searchParams, { defaultPageSize = 12, maxPageSize = 50 } = {}) {
-  const pageSize = Math.max(
-    1,
-    Math.min(maxPageSize, Number(searchParams.get("pageSize") || String(defaultPageSize)))
-  );
+  const rawPageSize = Number(searchParams.get("pageSize") || defaultPageSize);
+  const pageSize = Number.isFinite(rawPageSize)
+    ? Math.max(1, Math.min(maxPageSize, Math.floor(rawPageSize)))
+    : defaultPageSize;
 
   // Check for cursor-based pagination first
   const cursor = searchParams.get("cursor");
@@ -452,7 +406,7 @@ export function validatePrice(value, { allowZero = true } = {}) {
   if (!allowZero && price === 0) {
     throw new ValidationError("Price must be greater than 0", { field: "price" });
   }
-  if (price > 1000000) {
+  if (price > MAX_PRICE) {
     throw new ValidationError("Price cannot exceed 1,000,000", { field: "price" });
   }
   return price;
