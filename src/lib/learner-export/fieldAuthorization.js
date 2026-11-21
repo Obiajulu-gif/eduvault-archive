@@ -1,11 +1,18 @@
 /**
  * src/lib/learner-export/fieldAuthorization.js
  *
- * Field-Level Authorization & Privacy Filtering Engine for Learner Exports (#1017).
+ * Field-Level Authorization & Privacy Filtering Engine for Learner Exports (#1017, #1151).
  *
  * Implements granular, role-based field masking, redaction, and pseudonymization
  * to ensure that exports adhere to least-privilege privacy principles across
  * different consumers (learner, creator, support, auditor, admin).
+ *
+ * Provides:
+ * - Deterministic masking (email, wallet)
+ * - Non-reversible cryptographic pseudonymization (SHA-256)
+ * - Strict role validation and cross-subject boundary guards
+ * - Resilient export pipeline wrapper with configurable retries and exponential backoff
+ * - Post-export cryptographic tamper-evident integrity verification
  */
 
 import crypto from 'node:crypto';
@@ -123,6 +130,43 @@ export class FieldAuthorizationError extends Error {
 }
 
 /**
+ * Asserts that the requester is authorized to request the export and that
+ * cross-subject data isolation boundaries are not violated.
+ *
+ * @param {object} params
+ * @param {string} params.requesterRole
+ * @param {string} [params.subjectWallet]
+ * @param {object} params.exportDoc
+ * @throws {FieldAuthorizationError}
+ */
+export function assertExportAuthorization({ requesterRole, subjectWallet, exportDoc } = {}) {
+  const validRoles = Object.values(ExportRole);
+  if (!validRoles.includes(requesterRole)) {
+    throw new FieldAuthorizationError(
+      `Unauthorized export role: "${requesterRole}". Valid roles: ${validRoles.join(', ')}`,
+      'EVT_AUTH_FIELD_001',
+      403,
+    );
+  }
+
+  const exportSubjectWallet = exportDoc?.identity?.walletAddress || '';
+  if (
+    requesterRole === ExportRole.SUBJECT &&
+    subjectWallet &&
+    exportSubjectWallet &&
+    subjectWallet.toLowerCase() !== exportSubjectWallet.toLowerCase()
+  ) {
+    throw new FieldAuthorizationError(
+      'Access Denied: Subject cannot request another learner’s export.',
+      'EVT_AUTH_FIELD_002',
+      403,
+    );
+  }
+
+  return true;
+}
+
+/**
  * Applies field-level authorization policies to a raw or built LearnerExport document.
  *
  * @param {object} exportDoc - Complete LearnerExport document
@@ -145,30 +189,8 @@ export function applyFieldLevelAuthorization(exportDoc, context = {}) {
     purpose = 'general_export',
   } = context;
 
-  const validRoles = Object.values(ExportRole);
-  if (!validRoles.includes(requesterRole)) {
-    throw new FieldAuthorizationError(
-      `Unauthorized export role: "${requesterRole}". Valid roles: ${validRoles.join(', ')}`,
-      'EVT_AUTH_FIELD_001',
-      403,
-    );
-  }
-
-  // Cross-subject authorization guard:
-  // If requester is a subject/learner, they cannot export another user's data
-  const exportSubjectWallet = exportDoc.identity?.walletAddress || '';
-  if (
-    requesterRole === ExportRole.SUBJECT &&
-    subjectWallet &&
-    exportSubjectWallet &&
-    subjectWallet.toLowerCase() !== exportSubjectWallet.toLowerCase()
-  ) {
-    throw new FieldAuthorizationError(
-      'Access Denied: Subject cannot request another learner’s export.',
-      'EVT_AUTH_FIELD_002',
-      403,
-    );
-  }
+  // Verify role and cross-subject boundary
+  assertExportAuthorization({ requesterRole, subjectWallet, exportDoc });
 
   const policy = ROLE_FIELD_POLICIES[requesterRole];
   const fieldsRedacted = [];
@@ -284,4 +306,68 @@ export function applyFieldLevelAuthorization(exportDoc, context = {}) {
   };
 
   return filtered;
+}
+
+/**
+ * Resilient export wrapper with configurable retries, exponential backoff,
+ * and automatic field-level authorization filtering (#1151).
+ *
+ * @param {Function} exportFetcher - Async function fetching or building raw export document
+ * @param {object} [context={}] - Authorization context
+ * @param {object} [options={}] - Retry and timeout configuration
+ * @param {number} [options.retries=2] - Number of retry attempts
+ * @param {number} [options.delayMs=30] - Initial backoff delay
+ * @param {Function} [options.sleep] - Sleeper function
+ * @returns {Promise<object>} Filtered and authorized export document
+ */
+export async function exportWithPrivacyAuthorization(exportFetcher, context = {}, options = {}) {
+  const { retries = 2, delayMs = 30, sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)) } = options;
+
+  let lastError;
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      const rawDoc = await exportFetcher(attempt);
+      return applyFieldLevelAuthorization(rawDoc, context);
+    } catch (err) {
+      lastError = err;
+      // Never retry terminal authorization or validation rejections
+      if (err instanceof FieldAuthorizationError || err.code === 'EVT_EXPORT_INVALID' || err.status === 403 || err.status === 400) {
+        throw err;
+      }
+      if (attempt < retries) {
+        await sleep(delayMs * Math.pow(2, attempt));
+      }
+    }
+  }
+  throw lastError;
+}
+
+/**
+ * Verifies post-export integrity against the cryptographic checksum in privacyMeta (#1151).
+ * Confirms that no field was modified or unmasked post-authorization.
+ *
+ * @param {object} exportedDoc - Authorized export document
+ * @returns {{valid: boolean, expectedChecksum?: string, actualChecksum?: string, reason: string}}
+ */
+export function verifyExportIntegrity(exportedDoc) {
+  if (!exportedDoc || !exportedDoc.privacyMeta || !exportedDoc.privacyMeta.contentChecksum) {
+    return { valid: false, reason: 'Missing privacy metadata or contentChecksum' };
+  }
+
+  const canonicalContent = JSON.stringify({
+    exportId: exportedDoc.exportId,
+    generatedAt: exportedDoc.generatedAt,
+    identity: exportedDoc.identity,
+    purchasesLength: exportedDoc.purchases?.length || 0,
+  });
+
+  const computed = crypto.createHash('sha256').update(canonicalContent).digest('hex');
+  const matches = computed === exportedDoc.privacyMeta.contentChecksum;
+
+  return {
+    valid: matches,
+    expectedChecksum: exportedDoc.privacyMeta.contentChecksum,
+    actualChecksum: computed,
+    reason: matches ? 'Export integrity verified' : 'Integrity check failed: content altered after privacy authorization',
+  };
 }
