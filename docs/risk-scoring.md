@@ -49,7 +49,7 @@ and hard blocking in production.
 | `new_device`               | 0.15   | all                                               | Unrecognised device fingerprint |
 | `high_velocity`            | 0.20   | all                                               | > 5 actions in the last hour |
 | `geo_anomaly`              | 0.15   | all                                               | Geographic / IP anomaly or VPN |
-| `privileged_action`        | 0.25   | admin, bulk, export, refund                       | Inherently elevated admin/bulk actions |
+| `privileged_action`        | 0.45   | admin, bulk, export, refund                       | Inherently elevated admin/bulk actions |
 | `wallet_recently_changed`  | 0.15   | `wallet.withdrawal`, `purchase.high_value`, `profile.wallet_change` | Wallet changed < 72 hours ago |
 | `old_session`              | 0.10   | `wallet.withdrawal`, `admin.*`                    | Session > 60 minutes old |
 
@@ -168,3 +168,40 @@ Protected by admin/service token.
   "evaluatedAt": "2026-10-17T12:00:00.000Z"
 }
 ```
+
+
+---
+
+## Evaluation Paths (#1155)
+
+### 1. Normal Path
+- The caller invokes `scoreAction(action, ctx)` or `createRiskScorer().score(action, ctx)`.
+- Applicable signals are selected, evaluated, and normalized.
+- If the score falls below 0.35, the action is marked `low` with gate `allow`.
+- If the score is between 0.35 and 0.65, it is marked `medium` with gate `flag`.
+- If the score is between 0.65 and 0.85, it is marked `high` with gate `step_up`.
+- If the score is 0.85 or higher, it is marked `critical` with gate `block`.
+- Results include a deterministic `policyVersion` hash and human-readable explanation.
+
+### 2. Failure Path
+- **Invalid Action or Context:** Non-string/empty actions or non-object context inputs throw a strict `TypeError` immediately before evaluation.
+- **Faulty Signal Resilience:** If a custom signal's `evaluate()` or `explain()` throws an unhandled error, the scorer isolates the failure, records the error details on the contributor entry, sets its contribution to 0, and continues evaluating the remaining signals without crashing the service.
+
+### 3. Retry Path
+- Contexts carrying `retryCount`, `attemptCount`, or `attempt` are evaluated for retry safety.
+- Results return `retryable: true` for `low`, `medium`, and `high` risk actions (permitting stepped-up user retry or transient recovery).
+- `critical` actions return `retryable: false` to enforce immediate security blocks against automated brute-force attempts.
+
+### 4. Authorization Path
+- Programmatic and administrative execution requires authorization.
+- `assertRiskScoringAuthorized(actor)` enforces that only callers with role `admin`, `operator`, or `service` may invoke protected scoring routines.
+- `scoreAction(action, ctx, { actor })` verifies the actor's privileges and rejects unprivileged callers with `RiskScoringAuthorizationError` (HTTP 403).
+
+---
+
+## Edge Cases, Recovery & Rollback Behavior
+
+- **Zero-Signal / Inactive Context:** A context with no firing signals yields a score of `0.0`, level `low`, and gate `allow`.
+- **Weight Normalization Cap:** Normalized signal weights can never exceed 1.0, guaranteeing the aggregated score stays strictly within the `[0, 1]` interval.
+- **Policy Version Audit & Drift Detection:** Any change to signal weights or thresholds changes `policyVersion`. Stored audit records from previous versions can be verified for policy drift.
+- **Rollback Behavior:** Scoring is completely stateless and side-effect free. To rollback a threshold or signal change, revert configuration options or caller arguments; no database migrations or state clearances are needed.
