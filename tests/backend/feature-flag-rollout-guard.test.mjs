@@ -3,6 +3,8 @@ import { test } from 'node:test';
 import {
   FeatureRolloutGuard,
   ROLLOUT_STATUS,
+  RolloutAuthorizationError,
+  assertRolloutGuardAuthorized,
   computePrincipalBucket,
 } from '../../src/lib/featureFlags/rolloutGuard.js';
 
@@ -214,4 +216,169 @@ test('FeatureRolloutGuard triggers automatic rollback on invariant check failure
   assert.equal(guard.status, ROLLOUT_STATUS.ROLLED_BACK);
   assert.ok(guard.rollbackReason.includes('Balance deduction cannot be negative'));
   assert.equal(guard.postRollbackVerification.verifiedClean, true);
+});
+
+// ==========================================
+// ISSUE #1152: EMERGENCY DISABLEMENT TESTS
+// ==========================================
+
+test('emergencyDisable halts rollout immediately for authorized operators with verification', async () => {
+  const guard = new FeatureRolloutGuard({
+    flagKey: 'STREAMING_PAYOUTS_SOROBAN',
+    rolloutPercentage: 50,
+  });
+
+  let cleanupCalled = false;
+  let verifierCalled = false;
+
+  const status = await guard.emergencyDisable({
+    actor: { id: 'sec-ops-admin', role: 'admin' },
+    reason: 'CVE-2026-9999 reported in upstream dependency',
+    rollbackCleanup: async () => {
+      cleanupCalled = true;
+      return { purgedSessions: 14 };
+    },
+    verifyConsistency: async () => {
+      verifierCalled = true;
+      return { verified: true, orphanedRecordsCount: 0 };
+    },
+  });
+
+  assert.equal(guard.status, ROLLOUT_STATUS.EMERGENCY_DISABLED);
+  assert.equal(status.status, ROLLOUT_STATUS.EMERGENCY_DISABLED);
+  assert.equal(cleanupCalled, true);
+  assert.equal(verifierCalled, true);
+  assert.equal(guard.emergencyDisabledBy, 'sec-ops-admin');
+  assert.ok(guard.emergencyDisabledAt);
+  assert.equal(guard.emergencyDisableReason, 'CVE-2026-9999 reported in upstream dependency');
+  assert.equal(guard.postRollbackVerification.verifiedClean, true);
+
+  // Principals are no longer enrolled
+  assert.equal(guard.isEnrolled('any_principal'), false);
+
+  // execute() routes directly to fallback
+  let riskyExecuted = false;
+  const execResult = await guard.execute({
+    principalId: 'whitelisted_user',
+    riskyOperation: async () => {
+      riskyExecuted = true;
+      return { risky: true };
+    },
+    fallbackOperation: async () => ({ fallback: true }),
+  });
+
+  assert.equal(riskyExecuted, false);
+  assert.equal(execResult.fallback, true);
+});
+
+test('assertRolloutGuardAuthorized blocks unauthenticated and unauthorized actors', () => {
+  // Unauthenticated
+  assert.throws(
+    () => assertRolloutGuardAuthorized(null),
+    (err) => err instanceof RolloutAuthorizationError && err.code === 'ERR_ROLLOUT_UNAUTHENTICATED'
+  );
+
+  // Unauthorized viewer
+  assert.throws(
+    () => assertRolloutGuardAuthorized({ id: 'guest', role: 'viewer' }),
+    (err) => err instanceof RolloutAuthorizationError && err.code === 'ERR_ROLLOUT_UNAUTHORIZED'
+  );
+
+  // Unauthorized contributor
+  assert.throws(
+    () => assertRolloutGuardAuthorized({ id: 'user-1', role: 'contributor' }),
+    (err) => err instanceof RolloutAuthorizationError && err.code === 'ERR_ROLLOUT_UNAUTHORIZED'
+  );
+
+  // Authorized operator & admin pass
+  assert.equal(assertRolloutGuardAuthorized({ id: 'op-1', role: 'operator' }), true);
+  assert.equal(assertRolloutGuardAuthorized({ id: 'admin-1', role: 'admin' }), true);
+  assert.equal(assertRolloutGuardAuthorized('deployer'), true);
+});
+
+test('emergencyDisable rejects unauthorized callers and invalid reasons', async () => {
+  const guard = new FeatureRolloutGuard({ flagKey: 'PAYMENT_CANARY', rolloutPercentage: 20 });
+
+  // Unauthorized actor throws
+  await assert.rejects(
+    async () => {
+      await guard.emergencyDisable({
+        actor: { id: 'attacker', role: 'learner' },
+        reason: 'malicious disable attempt',
+      });
+    },
+    RolloutAuthorizationError
+  );
+
+  // Missing reason throws
+  await assert.rejects(
+    async () => {
+      await guard.emergencyDisable({
+        actor: { id: 'admin-1', role: 'admin' },
+        reason: '   ',
+      });
+    },
+    /descriptive reason is required/
+  );
+
+  // Flag remains active
+  assert.equal(guard.status, ROLLOUT_STATUS.ROLLING_OUT);
+});
+
+test('emergencyDisable retries transient failure in rollback cleanup handler', async () => {
+  const guard = new FeatureRolloutGuard({ flagKey: 'BATCH_SYNC_V3', rolloutPercentage: 100 });
+
+  let attempts = 0;
+  const cleanupWithRetry = async () => {
+    attempts++;
+    if (attempts === 1) {
+      throw new Error('Database connection timeout during session cleanup');
+    }
+    return { cleaned: true, retriedSuccessfully: true };
+  };
+
+  const status = await guard.emergencyDisable({
+    actor: { id: 'admin-1', role: 'operator' },
+    reason: 'Transient network partition recovery',
+    rollbackCleanup: cleanupWithRetry,
+    verifyConsistency: async () => ({ verified: true, orphanedRecordsCount: 0 }),
+    retries: 2,
+  });
+
+  assert.equal(attempts, 2, 'Should succeed on retry attempt');
+  assert.equal(guard.status, ROLLOUT_STATUS.EMERGENCY_DISABLED);
+  assert.equal(guard.postRollbackVerification.cleanup.retriedSuccessfully, true);
+  assert.equal(guard.postRollbackVerification.verifiedClean, true);
+});
+
+test('reEnable restores rolled-back or emergency-disabled flag for authorized operators', async () => {
+  const guard = new FeatureRolloutGuard({ flagKey: 'HOTFIX_FEATURE', rolloutPercentage: 10 });
+
+  // Emergency disable first
+  await guard.emergencyDisable({
+    actor: { id: 'lead-operator', role: 'operator' },
+    reason: 'Temporary circuit break',
+  });
+  assert.equal(guard.status, ROLLOUT_STATUS.EMERGENCY_DISABLED);
+
+  // Unauthorized actor cannot re-enable
+  await assert.rejects(
+    async () => {
+      await guard.reEnable({ actor: { id: 'learner', role: 'learner' }, rolloutPercentage: 50 });
+    },
+    RolloutAuthorizationError
+  );
+
+  // Authorized admin re-enables with new rollout percentage
+  const restored = await guard.reEnable({
+    actor: { id: 'lead-operator', role: 'operator' },
+    rolloutPercentage: 25,
+    whitelist: ['vip-1'],
+  });
+
+  assert.equal(guard.status, ROLLOUT_STATUS.ROLLING_OUT);
+  assert.equal(restored.rolloutPercentage, 25);
+  assert.equal(guard.consecutiveFailures, 0);
+  assert.equal(guard.emergencyDisabledBy, null);
+  assert.equal(guard.isEnrolled('vip-1'), true);
 });
