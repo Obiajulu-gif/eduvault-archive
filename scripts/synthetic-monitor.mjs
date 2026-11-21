@@ -25,7 +25,8 @@
  * Exit codes: 0 = green/degraded, 1 = red health or crash.
  */
 
-import { MongoClient } from "mongodb";
+// Dynamic import for MongoClient so --dry-run does not require mongodb package
+let MongoClient;
 import {
   SCENARIO_DEFINITIONS,
   SCENARIO_IDS,
@@ -308,6 +309,7 @@ async function main() {
       log("error", "Missing MONGODB_URI — use --dry-run for CI");
       process.exit(1);
     }
+    if (!MongoClient) { const m = await import("mongodb"); MongoClient = m.MongoClient; }
     const client = new MongoClient(mongoUri, { serverSelectionTimeoutMS: 10_000 });
     await client.connect();
     try {
