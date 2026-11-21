@@ -17,6 +17,7 @@ import { MongoMemoryServer } from 'mongodb-memory-server';
 import {
   FAILURE_FIXTURES,
   FIXTURE_NOW,
+  generateFailureFixtures,
   getFailureFixture,
   loadFailureFixtures,
   unloadFailureFixtures,
@@ -131,6 +132,28 @@ describe('fixture validity', () => {
     );
     assert.equal(await db.collection('dead_letter_events').countDocuments(), 0);
   });
+});
+
+describe('fixture generator', () => {
+  const later = new Date('2027-06-15T12:00:00.000Z');
+
+  it('shifts timestamps to the given clock without touching ids or the catalog', () => {
+    const fixture = getFailureFixture('stale-pending-purchase-paid-onchain');
+    const [generated] = generateFailureFixtures([fixture], later);
+    const [original] = fixture.documents.purchases;
+    const [shifted] = generated.documents.purchases;
+    assert.equal(later - shifted.createdAt, FIXTURE_NOW - original.createdAt);
+    assert.ok(shifted._id.equals(original._id));
+    assert.ok(original.createdAt < FIXTURE_NOW);
+  });
+
+  for (const fixture of FAILURE_FIXTURES) {
+    it(`generated ${fixture.id} is still detected at the shifted time`, async () => {
+      await loadFailureFixtures(db, generateFailureFixtures([fixture], later));
+      const results = await validateIntegrity(db, { now: later, logger: () => {} });
+      assert.deepEqual(results.violations.map((v) => v.id).sort(), [...fixture.detectedBy].sort());
+    });
+  }
 });
 
 describe('repair flows', () => {

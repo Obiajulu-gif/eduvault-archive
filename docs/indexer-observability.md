@@ -59,6 +59,7 @@ Operators can inspect and manage failed indexer events with
 
 ```bash
 node scripts/indexer-deadletter.mjs list --status=retryable --limit=20
+node scripts/indexer-deadletter.mjs inspect <eventId>   # read-only; shows canRetry / retryBlockedBy before a retry
 node scripts/indexer-deadletter.mjs retry <eventId>
 node scripts/indexer-deadletter.mjs quarantine <eventId> --reason="Malformed payload"
 ```

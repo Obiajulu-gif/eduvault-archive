@@ -2,6 +2,7 @@ export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 import { NextResponse } from "next/server";
+import { renderProblemResponse } from "@/lib/errors/renderErrorResponse";
 import { requirePermission } from "@/lib/api/auth";
 import { withApiHardening } from "@/lib/api/hardening";
 import { getDb } from "@/lib/mongodb";
@@ -17,15 +18,14 @@ export async function GET(request) {
     async () => {
       const authorization = await requirePermission(request, "creator:manage");
       if (!authorization.ok) {
-        return NextResponse.json(
-          { error: authorization.status === 401 ? "Authentication required" : "Creator access required" },
-          { status: authorization.status }
-        );
+        return authorization.status === 401
+          ? renderProblemResponse("AUTH_UNAUTHENTICATED", request, "Authentication required")
+          : renderProblemResponse("AUTH_FORBIDDEN", request, "Creator access required");
       }
       const user = authorization.user;
       const actorAddress = user.walletAddress || user.address;
       if (!actorAddress) {
-        return NextResponse.json({ error: "No wallet address on account" }, { status: 400 });
+        return renderProblemResponse("VALIDATION_FIELD", request, "No wallet address on account");
       }
 
       const { searchParams } = new URL(request.url);
