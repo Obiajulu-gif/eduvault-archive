@@ -73,3 +73,41 @@ Every invalidation also drops in-flight loads from the single-flight table and m
 ## Compatibility and rollback
 
 Additive: a new module with no callers changed. Existing Redis behavior and exports (`cacheGet`, `cacheSet`, `catalogCacheKey`, `invalidateCatalogCache`) are untouched. To adopt it for a read path, wrap the loader with `getOrLoad` and call the matching invalidation from the existing write path. To roll back an adoption, remove the wrapper and the invalidation call; there is no persisted state.
+
+
+---
+
+## Bounded Cache Execution Paths (#1149)
+
+### 1. Normal Path
+- **Reads / Writes:** `cache.set(key, value, { scope })` defensively deep-clones the value and stores it with an estimated byte size. `cache.get(key, { scope })` or `cache.lookup()` returns a deep copy to prevent mutation of the cache store.
+- **LRU & Byte Eviction:** Accessing an entry moves it to the most-recently-used position. When total entries exceed `maxEntries` or total payload bytes exceed `maxBytes`, the least recently used entries are evicted.
+- **Single-Flight In-Flight Coalescing:** Multiple concurrent calls to `getOrLoad` for the same key share a single running loader promise, preventing cache stampedes.
+
+### 2. Failure Path
+- **Validation:** Keys, scopes, and tag names containing invalid characters (such as NUL bytes) or empty strings throw `AppError("VALIDATION_FIELD")`.
+- **Unserializable Values:** Values containing functions or circular references return `false` without throwing, incrementing `counters.rejected`.
+- **Oversized Payloads:** Payloads larger than `maxBytes` are rejected immediately to prevent cache blowout, and any older copy is purged so stale data cannot be served.
+- **Loader Failures:** If a loader throws a non-retryable error (e.g. `err.retryable === false`), retries are immediately aborted.
+
+### 3. Retry Path
+- **Exponential Backoff:** If the loader throws a retryable error, `getOrLoad` retries up to `retries` times, doubling the delay on each attempt (`retryDelayMs * 2^(attempt - 1)`).
+- **Stale Fallback:** When all retry attempts fail and `serveStaleOnError` is enabled, any cached entry within its `staleGraceMs` window is served with `stale: true` and `source: "stale-cache"`, maintaining service availability during upstream outages.
+
+### 4. Authorization Path
+- **Mandatory Scope Isolation:** All entries require a `scope` (e.g. `PUBLIC_SCOPE` or `user:${actorId}`). Data stored in a viewer scope is completely inaccessible from another viewer scope.
+- **Actor Authorization Validation:** `assertCacheScopeAuthorized(actor, scope)` verifies that unprivileged actors can only read and mutate their own user scope or the public scope. Unauthorized access throws `CacheAuthorizationError` (HTTP 403).
+- **Scope Invalidation:** When user roles, permissions, or wallet credentials change, calling `cache.invalidateScope(scope)` purges all private cached data for that identity.
+
+---
+
+## Time and Space Complexity Design
+
+| Operation | Time Complexity | Space Complexity |
+|---|---|---|
+| `lookup(key, { scope })` | $O(1)$ amortized map lookup + LRU reinsertion | $O(1)$ |
+| `set(key, value, { scope })` | $O(1)$ insertion + $O(K)$ LRU evictions to fit bounds | $O(	ext{sizeOf}(value))$ bounded by `maxBytes` |
+| `invalidate(key, { scope })` | $O(1)$ map deletion and tag index cleanup | $O(1)$ |
+| `invalidateTag(tag)` | $O(T)$ where $T$ is keys associated with tag | $O(T)$ |
+| `invalidateScope(scope)` | $O(N)$ where $N$ is total cached entries | $O(1)$ auxiliary |
+| `findStale()` / `purgeStale()` | $O(N)$ scan of cached entries | $O(S)$ where $S$ is stale entries |
