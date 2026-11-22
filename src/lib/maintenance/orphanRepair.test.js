@@ -138,6 +138,72 @@ describe('repairMaterialsWithNoCreator()', () => {
     expect(result.repaired).toBe(0); // dryRun means 0 actual repairs
   });
 
+  it('preserves material that has userAddress and a valid profile', async () => {
+    // Regression test for the data-safety defect: materials store ownership in
+    // `userAddress`, not `creator`/`creatorAddress`/`ownerAddress`. A material
+    // with only `userAddress` set must NOT be orphaned when a matching profile
+    // exists.
+    const materialDoc = {
+      _id: 'material-1',
+      userAddress: 'GVALIDCREATOR',
+      status: 'published',
+    };
+    const profileDoc = { address: 'GVALIDCREATOR', name: 'Alice' };
+    const checkpointCol = {
+      findOne: vi.fn().mockResolvedValue(null),
+      updateOne: vi.fn().mockResolvedValue({}),
+    };
+    const profileCol = { findOne: vi.fn().mockResolvedValue(profileDoc) };
+    const replaceOne = vi.fn();
+    const materialCol = {
+      find: vi.fn(() => ({
+        sort: vi.fn().mockReturnThis(),
+        limit: vi.fn().mockReturnThis(),
+        toArray: vi.fn().mockResolvedValueOnce([materialDoc]).mockResolvedValue([]),
+      })),
+      replaceOne,
+      countDocuments: vi.fn().mockResolvedValue(0),
+      updateOne: vi.fn().mockResolvedValue({}),
+    };
+    const db = {
+      collection: (n) =>
+        ({ materials: materialCol, profiles: profileCol, repair_checkpoints: checkpointCol }[n] ??
+        makeDb().collection(n)),
+    };
+
+    const result = await repairMaterialsWithNoCreator({ db, actor: OPERATOR, authorize });
+    // The material is valid — it must NOT be marked orphaned.
+    expect(result.repaired).toBe(0);
+    expect(replaceOne).not.toHaveBeenCalled();
+  });
+
+  it('orphans material with userAddress when profile does not exist', async () => {
+    const materialDoc = { _id: 'material-2', userAddress: 'GMISSINGPROFILE', status: 'published' };
+    const checkpointCol = {
+      findOne: vi.fn().mockResolvedValue(null),
+      updateOne: vi.fn().mockResolvedValue({}),
+    };
+    const profileCol = { findOne: vi.fn().mockResolvedValue(null) };
+    const materialCol = {
+      find: vi.fn(() => ({
+        sort: vi.fn().mockReturnThis(),
+        limit: vi.fn().mockReturnThis(),
+        toArray: vi.fn().mockResolvedValueOnce([materialDoc]).mockResolvedValue([]),
+      })),
+      replaceOne: vi.fn().mockResolvedValue({}),
+      countDocuments: vi.fn().mockResolvedValue(0),
+      updateOne: vi.fn().mockResolvedValue({}),
+    };
+    const db = {
+      collection: (n) =>
+        ({ materials: materialCol, profiles: profileCol, repair_checkpoints: checkpointCol }[n] ??
+        makeDb().collection(n)),
+    };
+
+    const result = await repairMaterialsWithNoCreator({ db, actor: OPERATOR, authorize });
+    expect(result.repaired).toBe(1);
+  });
+
   it('skips already-orphaned materials', async () => {
     const materialDoc = { _id: 'm4', status: 'orphaned' };
     const materialCol = {
