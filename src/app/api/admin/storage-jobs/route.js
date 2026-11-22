@@ -10,6 +10,7 @@ import {
   inspectJob,
   listJobs,
   retryJob,
+  cancelJob,
 } from '@/lib/workers/backgroundWorker'
 import { runPinVerificationWorker, runRepairActions } from '@/lib/workers/pinVerificationWorker'
 import { runGarbageCollectionWorker, getGarbageCollectionStatus, estimateStorageRecovery } from '@/lib/workers/garbageCollectionWorker'
@@ -59,6 +60,38 @@ export async function POST(request) {
             jobId,
             status: retried.status,
             message: 'Job re-queued for execution',
+          })
+        }
+
+        // 1b. Cancel a pending/running job safely (#1102)
+        if (action === 'cancel-job') {
+          if (!jobId) {
+            return NextResponse.json({ error: 'jobId is required to cancel a job' }, { status: 400 })
+          }
+
+          const cancelled = await cancelJob(jobId, {
+            workerId: authorization.user?.sub || authorization.user?.id || 'admin',
+            reason: options.reason || 'cancelled_by_admin',
+          })
+
+          if (cancelled.reason === 'not_found') {
+            return NextResponse.json({ error: 'Job not found' }, { status: 404 })
+          }
+
+          auditLog({
+            event: 'storage_job_cancelled',
+            route: 'admin/storage-jobs',
+            method: 'POST',
+            jobId,
+            status: cancelled.job?.status,
+          })
+
+          return NextResponse.json({
+            success: cancelled.cancelled || String(cancelled.reason || '').startsWith('already_'),
+            jobId,
+            status: cancelled.job?.status || null,
+            reason: cancelled.reason || null,
+            cleanup: cancelled.cleanup || null,
           })
         }
 

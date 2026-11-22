@@ -1,17 +1,28 @@
-# Release readiness evidence
+# Release Readiness Evidence
 
-The release gate validates `release/readiness.json` for the exact commit being
-released. Every migration must be applied or explicitly marked unnecessary;
-applied migrations require a successful dry run and documented rollback. The
-gate also requires passing dependency and secret checks, release-candidate
-smoke tests, and a recent successful rollback rehearsal naming the restored
-known-good commit.
+Release readiness evidence is machine-checked by `scripts/release-readiness.mjs`.
 
-Run the same check locally with:
+## Evidence mode
 
 ```bash
-node scripts/release-readiness.mjs --evidence release/readiness.json --commit <commit-sha>
+node scripts/release-readiness.mjs --evidence release/readiness.json --commit <sha>
 ```
 
-Missing or stale evidence blocks the release. Evidence mode is read-only and
-does not execute migrations or mutate production data.
+The evidence file must include:
+
+- `release`, `commit`, `generatedAt`
+- `migrations[]`: each migration `applied` with `dryRunPassed` and `rollbackDocumented`, or explicitly `not_required`
+- `securityChecks.dependencyAudit` and `securityChecks.secretScan` as `passed`
+- `smokeTests.status` as `passed`
+- `rollbackRehearsal.status` as `passed`, recent, with `restoredToCommit`
+
+## Reproducible artifacts (#1104)
+
+Before release, generate and verify artifacts:
+
+```bash
+npm run release:artifacts
+npm run release:artifacts:verify
+```
+
+Attach `dist/release/SHA256SUMS`, `release-manifest.json`, `sbom.cdx.json`, and `provenance.json` to the release evidence/review.

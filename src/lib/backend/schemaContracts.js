@@ -75,6 +75,15 @@ export const COLLECTIONS = {
   // Migration / deployment runs and their rollback verification evidence. See
   // src/lib/migrations/rollbackVerification.js.
   rollbackVerifications: "rollback_verifications",
+  // #794/#834/#976/#1105: in-app notifications, delivery receipts, and preferences.
+  notifications: "notifications",
+  notificationPreferences: "notification_preferences",
+  notificationDeliveryReceipts: "notification_delivery_receipts",
+  // #789/#1102: durable background jobs with lease/retry/cancellation.
+  backgroundJobs: "background_jobs",
+  // #953/#1105: signed receipts for critical operations.
+  operationReceipts: "operation_receipts",
+  receipts: "operation_receipts",
 };
 
 export const REQUIRED_INDEXES = {
@@ -377,6 +386,30 @@ export const REQUIRED_INDEXES = {
   identity_link_challenges: [
     { keys: { challengeId: 1 }, options: { unique: true, name: "identity_link_challenges_id_idx" } },
     { keys: { expiresAt: 1 }, options: { expireAfterSeconds: 0, name: "identity_link_challenges_expiry_idx" } },
+  ],
+  notifications: [
+    { keys: { recipient: 1, dedupeKey: 1 }, options: { unique: true, name: "notifications_recipient_dedupe_idx" } },
+    { keys: { recipient: 1, read: 1, createdAt: -1 }, options: { name: "notifications_inbox_idx" } },
+    { keys: { recipient: 1, deliveryStatus: 1, lastAttemptAt: -1 }, options: { name: "notifications_delivery_idx", background: true } },
+  ],
+  notification_delivery_receipts: [
+    { keys: { receiptId: 1 }, options: { unique: true, name: "notification_delivery_receipts_receipt_idx" } },
+    { keys: { recipient: 1, notificationId: 1, createdAt: -1 }, options: { name: "notification_delivery_receipts_recipient_idx" } },
+  ],
+  notification_preferences: [
+    { keys: { recipient: 1, type: 1 }, options: { unique: true, name: "notification_preferences_recipient_type_idx" } },
+  ],
+  background_jobs: [
+    { keys: { jobId: 1 }, options: { unique: true, name: "background_jobs_job_id_idx" } },
+    { keys: { status: 1, scheduledFor: 1, createdAt: 1 }, options: { name: "background_jobs_runnable_idx" } },
+    { keys: { status: 1, lockedUntil: 1 }, options: { name: "background_jobs_lock_idx" } },
+    { keys: { idempotencyKey: 1 }, options: { unique: true, sparse: true, name: "background_jobs_idempotency_idx" } },
+    { keys: { name: 1, createdAt: -1 }, options: { name: "background_jobs_name_idx" } },
+  ],
+  operation_receipts: [
+    { keys: { receiptId: 1 }, options: { unique: true, name: "operation_receipts_receipt_id_idx" } },
+    { keys: { dedupeKey: 1 }, options: { unique: true, sparse: true, name: "operation_receipts_dedupe_idx" } },
+    { keys: { actor: 1, createdAt: -1 }, options: { name: "operation_receipts_actor_idx" } },
   ],
 };
 

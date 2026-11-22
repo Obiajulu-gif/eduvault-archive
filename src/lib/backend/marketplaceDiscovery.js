@@ -185,30 +185,26 @@ export const LANGUAGE_OPTIONS = [
 
 export function buildMarketplaceDiscoveryQuery(searchParams, { now = new Date() } = {}) {
   const query = {
-    visibility: "public",
     archived: { $ne: true },
     moderationStatus: { $ne: "suspended" },
-    // Soft-deleted listings stay in the collection so existing purchasers keep
-    // their download references, but they must not surface in public results.
-    // `$ne: true` rather than `false` so documents predating the field — which
-    // have no `isDeleted` at all — still match.
     isDeleted: { $ne: true },
-    // Listings by a suspended creator are hidden for the duration of the
-    // suspension. Denormalised onto the material so discovery stays a single
-    // indexed query instead of a per-result lookup against users.
     creatorSuspended: { $ne: true },
-    // Quarantine gate (issue #671): only materials that have passed malware
-    // scanning may be listed. Any material with a non-clean quarantine state
-    // (pending / rejected / manual_review / timeout / scanner_unavailable) is
-    // excluded from the marketplace. Legacy materials created before
-    // quarantine tracking existed carry no `quarantineState` field and are
-    // kept visible; newly uploaded materials get a state from the scanning
-    // pipeline and must be `clean` before they surface.
-    $or: [
-      { quarantineState: "clean" },
-      { quarantineState: { $exists: false } },
-    ],
+    // #1103: hidden records must not appear in public discovery.
+    isHidden: { $ne: true },
+    hidden: { $ne: true },
     $and: [
+      {
+        $or: [
+          { visibility: "public" },
+          { visibility: { $exists: false } },
+        ],
+      },
+      {
+        $or: [
+          { quarantineState: "clean" },
+          { quarantineState: { $exists: false } },
+        ],
+      },
       {
         $or: [
           { relevanceStatus: { $exists: false } },
