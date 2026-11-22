@@ -149,11 +149,20 @@ export function threeWayMerge(base, editA, editB) {
 }
 
 /**
+ * Strip internal version-vector fields from a document object.
+ */
+function stripVectorFields(doc) {
+  const { _versionVector, _baseVersionVector, _baseDocument, ...fields } = doc;
+  return fields;
+}
+
+/**
  * Resolve a concurrent edit against the current stored document.
  *
  * @param {object} opts
- * @param {object} opts.current         - Current document state (with version vector)
- * @param {object} opts.incomingEdit    - The edit being applied (with base vector at time of edit)
+ * @param {object} opts.current         - Current document state (with _versionVector)
+ * @param {object} opts.incomingEdit    - The edit being applied (with _baseVersionVector;
+ *                                        optionally _baseDocument for three-way merge)
  * @param {string} opts.editorId        - Logical node/session identifier for the editor
  * @param {ConflictStrategy} opts.strategy
  * @returns {{ status, document, conflicts, versionVector }}
@@ -175,41 +184,56 @@ export function resolveEdit({
     );
   }
 
-  if (relationship === "equal" || relationship === "behind") {
-    // Fast path: no concurrent modifications, apply directly
+  // "equal" is the only truly safe fast path: the document has not changed since
+  // the edit was based, so there is nothing to reconcile.
+  if (relationship === "equal") {
     const updatedVector = incrementVersionVector(currentVector, editorId);
-    const { _versionVector: _cv, _baseVersionVector: _bv, ...editFields } = incomingEdit;
-    const document = { ...current, ...editFields, _versionVector: updatedVector };
+    const document = { ...current, ...stripVectorFields(incomingEdit), _versionVector: updatedVector };
     return { status: ConflictResolutionStatus.MERGED, document, conflicts: [], versionVector: updatedVector };
   }
 
-  // Concurrent — edits happened in parallel
+  // "behind" means the edit is stale: the document has advanced past the base the
+  // editor worked from.  This is NOT safe to fast-path — it must go through the
+  // same strategy logic as a concurrent edit to avoid overwriting newer data.
+  //
+  // LAST_WRITE_WINS is the one strategy that intentionally discards server-side
+  // changes, so stale edits are still accepted there.
   if (strategy === ConflictStrategy.LAST_WRITE_WINS) {
     const updatedVector = mergeVersionVectors(currentVector, baseVector);
     const nextVector = incrementVersionVector(updatedVector, editorId);
-    const { _versionVector: _cv, _baseVersionVector: _bv, ...editFields } = incomingEdit;
-    const document = { ...current, ...editFields, _versionVector: nextVector };
+    const document = { ...current, ...stripVectorFields(incomingEdit), _versionVector: nextVector };
     return { status: ConflictResolutionStatus.MERGED, document, conflicts: [], versionVector: nextVector };
   }
 
+  // For REJECT: both "behind" (stale) and "concurrent" edits are rejected.
   if (strategy === ConflictStrategy.REJECT) {
+    const message =
+      relationship === "behind"
+        ? "Stale edit rejected: document has advanced past the base version"
+        : "Concurrent edit rejected by policy";
     return {
       status: ConflictResolutionStatus.REJECTED,
       document: null,
-      conflicts: [{ message: "Concurrent edit rejected by policy" }],
+      conflicts: [{ message }],
       versionVector: currentVector,
     };
   }
 
   // THREE_WAY_MERGE (default)
-  const { _versionVector: _cva, _baseVersionVector: _bva, ...currentFields } = current;
-  const { _versionVector: _cvb, _baseVersionVector: baseVecFromEdit, ...incomingFields } = incomingEdit;
+  //
+  // We need a real common-ancestor document to diff against.  Callers should
+  // include `_baseDocument` in the incoming edit — the snapshot of the document
+  // at _baseVersionVector.  Without it we fall back to an empty-object base,
+  // which is conservative: any field present in either current or the incoming
+  // edit will appear as a "change from base" and conflicts will be detected.
+  //
+  // The earlier bug was `base = current`, which made computeFieldDiff(base, current)
+  // always return an empty diff, so conflicting concurrent edits were never caught.
+  const baseDocument = incomingEdit._baseDocument ?? {};
+  const currentFields = stripVectorFields(current);
+  const incomingFields = stripVectorFields(incomingEdit);
 
-  // Reconstruct the base document from the common ancestor
-  // We use the base version vector to identify what fields were changed from the ancestor
-  const base = current; // best approximation available without storing full history
-
-  const { status, merged, conflicts } = threeWayMerge(base, current, { ...current, ...incomingFields });
+  const { status, merged, conflicts } = threeWayMerge(baseDocument, currentFields, incomingFields);
 
   if (status === ConflictResolutionStatus.CONFLICT) {
     return { status, document: null, conflicts, versionVector: currentVector };
