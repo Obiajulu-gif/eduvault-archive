@@ -64,17 +64,23 @@ const checksums = artifactFiles.map((abs) => {
 }).join('\n') + '\n';
 writeFileSync(path.join(outDir, 'SHA256SUMS'), checksums);
 
+const createdAt = process.env.SOURCE_DATE_EPOCH
+  ? new Date(Number(process.env.SOURCE_DATE_EPOCH) * 1000).toISOString()
+  : new Date().toISOString();
+
 const manifest = {
   schemaVersion: 1,
-  createdAt: new Date().toISOString(),
+  createdAt,
   git: {
     commit: git('git rev-parse HEAD'),
     ref: git('git rev-parse --abbrev-ref HEAD'),
     describe: git('git describe --always --dirty --tags'),
   },
-  node: process.version,
-  platform: process.platform,
-  arch: process.arch,
+  build: {
+    node: process.version,
+    platform: process.platform,
+    arch: process.arch,
+  },
   files: artifactFiles.map((abs) => ({
     path: path.relative(outDir, abs).replaceAll(path.sep, '/'),
     size: statSync(abs).size,
