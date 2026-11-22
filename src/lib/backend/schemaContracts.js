@@ -75,6 +75,12 @@ export const COLLECTIONS = {
   // Migration / deployment runs and their rollback verification evidence. See
   // src/lib/migrations/rollbackVerification.js.
   rollbackVerifications: "rollback_verifications",
+  // #Issue 2: Versioned migration notes and compatibility fixtures
+  migrationNotes: "migration_notes",
+  // #Issue 3: Deterministic recovery tests for interrupted multi-step operations
+  recoveryTests: "recovery_tests",
+  // #Issue 4: Learner data exports with permission-aware redaction
+  learnerExports: "learner_exports",
 };
 
 export const REQUIRED_INDEXES = {
@@ -249,6 +255,24 @@ export const REQUIRED_INDEXES = {
       },
     },
     { keys: { name: 1, startedAt: -1 }, options: { name: "rollback_verifications_name_started_idx" } },
+  ],
+  migration_notes: [
+    { keys: { migrationId: 1, version: 1 }, options: { unique: true, name: "migration_notes_unique_idx" } },
+    { keys: { targetCollections: 1, createdAt: 1 }, options: { name: "migration_notes_collection_idx" } },
+    { keys: { phase: 1 }, options: { name: "migration_notes_phase_idx" } },
+    { keys: { compatibilityLevel: 1 }, options: { name: "migration_notes_compat_idx" } },
+  ],
+  recovery_tests: [
+    { keys: { testId: 1 }, options: { unique: true, name: "recovery_tests_id_idx" } },
+    { keys: { operationType: 1, testedAt: -1 }, options: { name: "recovery_tests_operation_idx" } },
+    { keys: { interruptionPoint: 1, status: 1 }, options: { name: "recovery_tests_interruption_idx" } },
+    { keys: { status: 1, testedAt: -1 }, options: { name: "recovery_tests_status_idx" } },
+  ],
+  learner_exports: [
+    { keys: { exportId: 1 }, options: { unique: true, name: "learner_exports_id_idx" } },
+    { keys: { "subject.walletAddress": 1, generatedAt: -1 }, options: { name: "learner_exports_subject_idx" } },
+    { keys: { "requestedBy.id": 1, generatedAt: -1 }, options: { name: "learner_exports_requester_idx" } },
+    { keys: { permissionLevel: 1, generatedAt: -1 }, options: { name: "learner_exports_permission_idx" } },
   ],
   saved_materials: [
     { keys: { walletAddress: 1, savedAt: -1 } },
