@@ -8,7 +8,8 @@
  *   node scripts/orphan-repair.mjs [options]
  *
  * Options:
- *   --dry-run          Scan and report without writing any changes.
+ *   --live             Actually write changes. Omitting this flag runs a dry-run
+ *                      scan that reports what would change without touching any data.
  *   --type <type>      Repair only one type: material_no_creator |
  *                      purchase_no_entitlement | entitlement_no_material | all (default: all)
  *   --batch-size <n>   Documents per batch (default: 100).
@@ -35,7 +36,10 @@ import {
 
 function parseArgs(argv) {
   const args = {
-    dryRun: false,
+    // Default to dry-run: live writes require an explicit --live flag so
+    // an operator cannot accidentally rewrite production data by running
+    // `npm run orphan:repair` without thinking.
+    dryRun: true,
     type: 'all',
     batchSize: 100,
     actor: process.env.REPAIR_ACTOR ?? 'operator',
@@ -44,7 +48,11 @@ function parseArgs(argv) {
 
   for (let i = 0; i < argv.length; i++) {
     switch (argv[i]) {
+      case '--live':
+        args.dryRun = false;
+        break;
       case '--dry-run':
+        // Kept for backwards-compat; now also the default.
         args.dryRun = true;
         break;
       case '--type':
@@ -97,7 +105,11 @@ async function main() {
 
   console.log('EduVault Orphan Repair');
   console.log('======================');
-  console.log(`Mode    : ${args.dryRun ? 'DRY RUN (no writes)' : 'LIVE'}`);
+  if (args.dryRun) {
+    console.log('Mode    : DRY RUN (no writes) — pass --live to apply changes');
+  } else {
+    console.log('Mode    : LIVE — changes will be written to the database');
+  }
   console.log(`Type    : ${args.type}`);
   console.log(`Actor   : ${args.actor}`);
   console.log(`Batch   : ${args.batchSize}`);
@@ -135,7 +147,7 @@ async function main() {
       console.log('\n======================');
       console.log(`Total scanned : ${summary.scanned}`);
       console.log(`Total repaired: ${summary.repaired}`);
-      if (args.dryRun) console.log('No changes written (--dry-run).');
+      if (args.dryRun) console.log('No changes written (dry-run). Pass --live to apply.');
     } else {
       const repairFns = {
         [ORPHAN_TYPE.MATERIAL_NO_CREATOR]: repairMaterialsWithNoCreator,
