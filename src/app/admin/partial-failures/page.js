@@ -11,6 +11,8 @@ export default function PartialFailuresDashboardPage() {
   const [selectedFailure, setSelectedFailure] = useState(null);
   const [actionLoading, setActionLoading] = useState(false);
   const [message, setMessage] = useState(null);
+  const [triage, setTriage] = useState({ summary: {}, items: [] });
+  const [triageLoading, setTriageLoading] = useState(true);
 
   const fetchFailures = useCallback(async () => {
     setLoading(true);
@@ -35,6 +37,26 @@ export default function PartialFailuresDashboardPage() {
   useEffect(() => {
     fetchFailures();
   }, [fetchFailures]);
+
+  // Unresolved-only triage view (#1101): SLA age and recommended next action.
+  const fetchTriage = useCallback(async () => {
+    setTriageLoading(true);
+    try {
+      const res = await fetch('/api/admin/partial-failures/triage');
+      if (res.ok) {
+        const json = await res.json();
+        setTriage(json.data || { summary: {}, items: [] });
+      }
+    } catch (err) {
+      console.error('Failed to load unresolved-failures triage:', err);
+    } finally {
+      setTriageLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchTriage();
+  }, [fetchTriage]);
 
   const handleRetry = async (failureId) => {
     setActionLoading(true);
@@ -123,6 +145,88 @@ export default function PartialFailuresDashboardPage() {
             <div className="text-2xl font-bold mt-1 text-zinc-200">{data.summary?.byDomain?.integrations || 0}</div>
           </div>
         </div>
+
+        {/* Unresolved triage queue (#1101) */}
+        <section className="bg-zinc-900/40 border border-zinc-800/80 rounded-xl p-4" aria-label="Unresolved failure triage">
+          <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
+            <div>
+              <h2 className="text-sm font-semibold text-white uppercase tracking-wider">Unresolved Triage Queue</h2>
+              <p className="text-xs text-zinc-500 mt-1">
+                Oldest and most severe open failures first, with a recommended next action and SLA status.
+              </p>
+            </div>
+            <button
+              onClick={fetchTriage}
+              disabled={triageLoading}
+              className="text-xs font-medium px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 rounded-lg text-zinc-200 border border-zinc-700 transition disabled:opacity-50"
+            >
+              Refresh triage
+            </button>
+          </div>
+
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4 text-xs">
+            <div className="p-3 rounded-lg bg-rose-950/30 border border-rose-900/40">
+              <div className="text-rose-400 uppercase tracking-wider">SLA breached</div>
+              <div className="text-lg font-bold text-rose-200 mt-1">{triage.summary?.slaBreached || 0}</div>
+            </div>
+            <div className="p-3 rounded-lg bg-amber-950/30 border border-amber-900/40">
+              <div className="text-amber-400 uppercase tracking-wider">Needs user action</div>
+              <div className="text-lg font-bold text-amber-200 mt-1">{triage.summary?.requiresUserAction || 0}</div>
+            </div>
+            <div className="p-3 rounded-lg bg-indigo-950/30 border border-indigo-900/40">
+              <div className="text-indigo-400 uppercase tracking-wider">Safe to retry</div>
+              <div className="text-lg font-bold text-indigo-200 mt-1">{triage.summary?.retryable || 0}</div>
+            </div>
+            <div className="p-3 rounded-lg bg-zinc-950/60 border border-zinc-800">
+              <div className="text-zinc-400 uppercase tracking-wider">Oldest open</div>
+              <div className="text-lg font-bold text-zinc-200 mt-1">
+                {triage.summary?.oldestAgeMs ? `${Math.round(triage.summary.oldestAgeMs / 60000)}m` : '—'}
+              </div>
+            </div>
+          </div>
+
+          {triageLoading ? (
+            <div className="p-6 text-center text-xs text-zinc-500">Loading triage queue...</div>
+          ) : triage.items?.length === 0 ? (
+            <div className="p-6 text-center text-xs text-zinc-500">No unresolved failures need triage.</div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-xs">
+                <thead className="text-zinc-500 uppercase tracking-wider border-b border-zinc-800">
+                  <tr>
+                    <th className="py-2 px-3">Failure</th>
+                    <th className="py-2 px-3">Severity</th>
+                    <th className="py-2 px-3">Age</th>
+                    <th className="py-2 px-3">SLA</th>
+                    <th className="py-2 px-3">Next action</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-zinc-800/60">
+                  {triage.items.map((item) => (
+                    <tr key={`triage-${item.failureId}`} className="hover:bg-zinc-800/30">
+                      <td className="py-2 px-3 font-mono text-zinc-200">
+                        <div>{item.operation}</div>
+                        <div className="text-[10px] text-zinc-500">{item.failureId}</div>
+                      </td>
+                      <td className="py-2 px-3 text-zinc-300">{item.severity}</td>
+                      <td className="py-2 px-3 text-zinc-300">{Math.round(item.ageMs / 60000)}m</td>
+                      <td className="py-2 px-3">
+                        {item.slaBreached ? (
+                          <span className="text-rose-300">Breached</span>
+                        ) : (
+                          <span className="text-emerald-300">Within target</span>
+                        )}
+                      </td>
+                      <td className="py-2 px-3 text-zinc-300" title={item.nextAction?.reason}>
+                        {item.nextAction?.label || 'Inspect'}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </section>
 
         {/* Filter Controls */}
         <div className="flex flex-wrap gap-4 items-center justify-between bg-zinc-900/40 p-4 border border-zinc-800/80 rounded-xl">
