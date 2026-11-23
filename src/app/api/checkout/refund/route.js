@@ -5,6 +5,12 @@ import { NextResponse } from 'next/server';
 import { getDb } from '@/lib/mongodb';
 import { getUserFromCookie } from '@/lib/api/auth';
 import { requestRefund } from '@/lib/refunds/refundWorkflow';
+import {
+  applyRateLimitHeaders,
+  buildBlockedBody,
+  checkoutAbuseController,
+  extractClientIp,
+} from '@/lib/checkout/checkoutAbuseControl';
 import logger from '@/lib/logger';
 
 const REASON_STATUS = {
@@ -41,6 +47,25 @@ export async function POST(req) {
       return NextResponse.json({ error: 'Session has no wallet address' }, { status: 400 });
     }
 
+    const abuseCtx = {
+      mutation: 'refund',
+      wallet: walletAddress || user.sub,
+      ip: extractClientIp(req),
+      target: String(purchaseId),
+      idempotencyKey:
+        body.idempotencyKey || req.headers.get('idempotency-key') || req.headers.get('x-idempotency-key') || undefined,
+      path: '/api/checkout/refund',
+      method: 'POST',
+    };
+    const abuseDecision = checkoutAbuseController.evaluate(abuseCtx);
+    if (!abuseDecision.allowed) {
+      const blockedRes = NextResponse.json(
+        buildBlockedBody(abuseDecision, 'refund'),
+        { status: abuseDecision.statusCode || 429 }
+      );
+      return applyRateLimitHeaders(blockedRes, abuseDecision);
+    }
+
     const db = await getDb();
     const result = await requestRefund({
       db,
@@ -54,17 +79,21 @@ export async function POST(req) {
     });
 
     if (!result.success) {
+      checkoutAbuseController.recordOutcome(abuseCtx, false);
       const status = REASON_STATUS[result.reason] || 400;
-      return NextResponse.json({ error: result.reason }, { status });
+      const errRes = NextResponse.json({ error: result.reason }, { status });
+      return applyRateLimitHeaders(errRes, abuseDecision);
     }
 
-    return NextResponse.json(
+    checkoutAbuseController.recordOutcome(abuseCtx, true);
+    const okRes = NextResponse.json(
       {
         message: result.alreadyExists ? 'Refund claim already exists for this purchase' : 'Refund requested',
         refund: result.refund,
       },
       { status: result.alreadyExists ? 200 : 201 }
     );
+    return applyRateLimitHeaders(okRes, abuseDecision);
   } catch (error) {
     logger.error({ err: error.message }, 'Failed to process refund request');
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });

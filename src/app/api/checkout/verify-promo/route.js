@@ -2,6 +2,12 @@ export const dynamic = 'force-dynamic';
 
 import { NextResponse } from 'next/server';
 import { getDb } from '@/lib/mongodb';
+import {
+  applyRateLimitHeaders,
+  buildBlockedBody,
+  checkoutAbuseController,
+  extractClientIp,
+} from '@/lib/checkout/checkoutAbuseControl';
 
 /**
  * POST /api/checkout/verify-promo
@@ -27,6 +33,24 @@ export async function POST(req) {
       );
     }
 
+    const abuseCtx = {
+      mutation: 'verify_promo',
+      ip: extractClientIp(req),
+      target: materialId ? String(materialId) : 'global',
+      idempotencyKey:
+        body.idempotencyKey || req.headers.get('idempotency-key') || req.headers.get('x-idempotency-key') || undefined,
+      path: '/api/checkout/verify-promo',
+      method: 'POST',
+    };
+    const abuseDecision = checkoutAbuseController.evaluate(abuseCtx);
+    if (!abuseDecision.allowed) {
+      const blockedRes = NextResponse.json(
+        buildBlockedBody(abuseDecision, 'verify_promo'),
+        { status: abuseDecision.statusCode || 429 }
+      );
+      return applyRateLimitHeaders(blockedRes, abuseDecision);
+    }
+
     const normalizedCode = code.trim().toUpperCase();
     const db = await getDb();
     const promoCollection = db.collection('promo_codes');
@@ -34,10 +58,12 @@ export async function POST(req) {
     const promo = await promoCollection.findOne({ code: normalizedCode });
 
     if (!promo) {
-      return NextResponse.json(
+      checkoutAbuseController.recordOutcome(abuseCtx, false);
+      const invalidRes = NextResponse.json(
         { valid: false, error: 'invalid_code', message: 'Invalid promo code.' },
         { status: 200 }
       );
+      return applyRateLimitHeaders(invalidRes, abuseDecision);
     }
 
     if (promo.active === false) {
@@ -79,7 +105,8 @@ export async function POST(req) {
       );
     }
 
-    return NextResponse.json({
+    checkoutAbuseController.recordOutcome(abuseCtx, true);
+    const validRes = NextResponse.json({
       valid: true,
       code: normalizedCode,
       discountPercent,
@@ -88,6 +115,7 @@ export async function POST(req) {
       maxUses: promo.maxUses || null,
       usedCount: promo.usedCount || 0,
     }, { status: 200 });
+    return applyRateLimitHeaders(validRes, abuseDecision);
   } catch (err) {
     console.error('POST /api/checkout/verify-promo error:', err);
     return NextResponse.json({ error: 'Server error' }, { status: 500 });
