@@ -17,6 +17,13 @@ import { appendCriticalMutation } from '@/lib/backend/auditLedger';
 import { withTelemetryRoute, ACTOR_TYPES } from '@/lib/monitoring/telemetry';
 import { AppError, isAppError } from '@/lib/errors/AppError.js';
 import { renderErrorResponse, renderProblemResponse } from '@/lib/errors/renderErrorResponse.js';
+import {
+  applyRateLimitHeaders,
+  buildBlockedBody,
+  checkoutAbuseController,
+  extractClientIp,
+  verifyCheckoutActor,
+} from '@/lib/checkout/checkoutAbuseControl';
 
 function duplicateKey(error) {
   return error?.code === 11000;
@@ -144,7 +151,19 @@ async function handlePost(req) {
     const db = await getDb();
     const body = await req.json();
 
-    const { materialId, signedXdr, email, transactionHash, amount, asset, quoteId, action, buyerAddress: bodyBuyerAddress } = body;
+    const { materialId, signedXdr, email, transactionHash, amount, asset, quoteId, action, buyerAddress: bodyBuyerAddress, creatorAddress } = body;
+    const actorCheck = verifyCheckoutActor({
+      user,
+      claimedWallet: bodyBuyerAddress,
+      requireAuth: false,
+    });
+    if (!actorCheck.ok) {
+      return NextResponse.json(
+        { error: actorCheck.error, code: actorCheck.code, mutation: 'purchase' },
+        { status: actorCheck.status }
+      );
+    }
+
     const buyerAddress = normalizeBuyerAddress(
       user?.walletAddress || user?.address || user?.id || bodyBuyerAddress
     );
@@ -162,22 +181,51 @@ async function handlePost(req) {
       );
     }
 
+    const clientIp = extractClientIp(req);
+    const idempotencyKey =
+      body.idempotencyKey || req.headers.get('idempotency-key') || req.headers.get('x-idempotency-key') || undefined;
+    const abuseCtx = {
+      mutation: 'purchase',
+      wallet: buyerAddress,
+      ip: clientIp,
+      target: String(materialId),
+      counterparty: typeof creatorAddress === 'string' ? creatorAddress : undefined,
+      txHash: typeof transactionHash === 'string' ? transactionHash : undefined,
+      idempotencyKey,
+      path: '/api/purchase',
+      method: 'POST',
+    };
+    const abuseDecision = checkoutAbuseController.evaluate(abuseCtx);
+    if (!abuseDecision.allowed) {
+      const blockedRes = NextResponse.json(
+        buildBlockedBody(abuseDecision, 'purchase'),
+        { status: abuseDecision.statusCode || 429 }
+      );
+      return applyRateLimitHeaders(blockedRes, abuseDecision);
+    }
+
     if (action === 'quote') {
       const quote = await createCheckoutQuote(db, { materialId, buyerAddress });
-      return NextResponse.json({ quoteId: quote.quoteId, materialId: quote.materialId, ...quote.terms, expiresAt: quote.expiresAt }, { status: 201 });
+      checkoutAbuseController.recordOutcome(abuseCtx, true);
+      const quoteRes = NextResponse.json({ quoteId: quote.quoteId, materialId: quote.materialId, ...quote.terms, expiresAt: quote.expiresAt }, { status: 201 });
+      return applyRateLimitHeaders(quoteRes, abuseDecision);
     }
 
     const existing = await db.collection('purchases').findOne({ buyerAddress, materialId });
     if (existing && isCompletedPurchaseStatus(existing.status)) {
-      return respondForExistingPurchase(db, existing, { materialId, buyerAddress, paymentCompleted, transactionHash, signedXdr, amount, asset, email });
+      checkoutAbuseController.recordOutcome(abuseCtx, true);
+      const existingRes = await respondForExistingPurchase(db, existing, { materialId, buyerAddress, paymentCompleted, transactionHash, signedXdr, amount, asset, email });
+      return applyRateLimitHeaders(existingRes, abuseDecision);
     }
 
     if (paymentCompleted && !quoteId) {
-      return renderProblemResponse(
+      checkoutAbuseController.recordOutcome(abuseCtx, false);
+      const conflictRes = renderProblemResponse(
         "CONFLICT_STATE",
         req,
         "A valid checkout quote is required. Refresh the listing and try again."
       );
+      return applyRateLimitHeaders(conflictRes, abuseDecision);
     }
 
     let quote = null;
@@ -185,16 +233,18 @@ async function handlePost(req) {
       try {
         quote = await consumeCheckoutQuote(db, { quoteId, materialId, buyerAddress });
       } catch (error) {
+        checkoutAbuseController.recordOutcome(abuseCtx, false);
         const code = error?.code === "QUOTE_EXPIRED"
           ? "SETTLEMENT_QUOTE_EXPIRED"
           : "CONFLICT_STATE";
-        return renderProblemResponse(
+        const quoteErrRes = renderProblemResponse(
           code,
           req,
           code === "SETTLEMENT_QUOTE_EXPIRED"
             ? "Checkout quote expired. Refresh the listing to get a new quote."
             : "Checkout quote is invalid or already used."
         );
+        return applyRateLimitHeaders(quoteErrRes, abuseDecision);
       }
     }
 
@@ -273,10 +323,12 @@ async function handlePost(req) {
       broadcastPurchaseEvent(materialId, purchaseRecord);
     }
 
-    return NextResponse.json(
+    checkoutAbuseController.recordOutcome(abuseCtx, true);
+    const successRes = NextResponse.json(
       { success: paymentCompleted, purchaseId: result.insertedId, purchase: { ...purchaseRecord, _id: result.insertedId }, access },
       { status: paymentCompleted ? 201 : 202 }
     );
+    return applyRateLimitHeaders(successRes, abuseDecision);
   } catch (err) {
     console.error("POST /api/purchase error:", err);
     return renderErrorResponse(
