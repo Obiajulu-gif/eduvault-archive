@@ -45,6 +45,10 @@ import { MongoClient } from "mongodb";
 import { pathToFileURL } from "node:url";
 import { SENSITIVE_ACCESS_COLLECTION } from "../src/lib/security/sensitiveAccessLog.js";
 import { DOWNLOAD_ACCESS_LOG_COLLECTION } from "../src/lib/downloads/accessLog.js";
+import {
+  RETENTION_HOLDS_COLLECTION,
+  buildHoldExclusionFilter,
+} from "../src/lib/privacy/retentionHolds.js";
 
 // ---------------------------------------------------------------------------
 // Structured logger
@@ -92,6 +96,9 @@ export const RETENTION_POLICIES = {
 
   // Refund requests: keep indefinitely (financial/legal requirement)
   refund_requests: { retentionDays: null, protected: true },
+
+  // Retention holds: keep indefinitely (compliance/investigation auditability)
+  [RETENTION_HOLDS_COLLECTION]: { retentionDays: null, protected: true },
 
   // Entitlement cache: derived data, can be rebuilt - keep for 90 days of inactivity
   entitlement_cache: { retentionDays: 90, protectionCheck: "activeEntitlements" },
@@ -519,12 +526,13 @@ export async function cleanupCollection(db, collection, policy, dryRun, now) {
     return { collection, skipped: true, reason: protectionResult.reason };
   }
 
-  // Build retention query
-  const query = buildRetentionQuery(collection, policy, now);
-  if (!query) {
+  // Build retention query (always exclude records under active retention holds)
+  const baseQuery = buildRetentionQuery(collection, policy, now);
+  if (!baseQuery) {
     log("info", `No retention policy for ${collection}, skipping`);
     return { collection, skipped: true, reason: "no_retention_policy" };
   }
+  const query = { ...baseQuery, ...buildHoldExclusionFilter() };
 
   // Apply protection filters
   if (protectionResult.protections.length > 0) {
