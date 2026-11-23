@@ -9,6 +9,10 @@ import {
   getTreasuryBalance,
 } from '@/lib/stellar/refundService';
 import { deriveRefundTerms } from './refundPolicy';
+import {
+  applyRefundEntitlementPlan,
+  buildRefundEntitlementPlan,
+} from './entitlementReconciliation';
 import { recordRefundAuditEvent } from './refundAudit';
 import { notifyWalletRecipient } from '@/lib/notifications/notifications';
 import logger from '@/lib/logger';
@@ -495,39 +499,37 @@ export async function finalizeSettlement({
     }
   }
 
-  if (!current.entitlementRevoked) {
-    await revokeEntitlementFn(current.materialId, current.buyerAddress);
-    // Exactly-once mirroring: two overlapping finalizers (worker + reconciler,
-    // or two reconciler runs) can both reach this point, so the increment is
-    // gated on this refund not already being recorded on the purchase. Same
-    // single-document atomicity, and a crash-retry stays safe too.
-    await db.collection(COLLECTIONS.purchases).updateOne(
-      { _id: new ObjectId(current.purchaseId), appliedRefundIds: { $ne: String(refundId) } },
-      {
-        $set: {
-          settlementState: 'Refunded',
-          refundedAt: new Date(),
-          refundTransactionHash: current.txHash,
-          updatedAt: new Date(),
-        },
-        $inc: { refundedAmount: current.amount },
-        $push: { appliedRefundIds: String(refundId) },
-      }
-    );
-    await refundsCollection(db).updateOne(
-      { _id: refundId },
-      { $set: { entitlementRevoked: true, convergedAt: new Date() } }
-    );
+  const alreadyReconciled =
+    current.entitlementReconciliation?.status === 'applied' || current.entitlementRevoked === true;
+
+  if (!alreadyReconciled) {
+    const purchase = await db
+      .collection(COLLECTIONS.purchases)
+      .findOne({ _id: new ObjectId(current.purchaseId) });
+    if (!purchase) return { outcome: 'purchase_not_found', refund: current };
+
+    const plan = buildRefundEntitlementPlan({ purchase, refund: current });
+    await applyRefundEntitlementPlan({
+      db,
+      plan,
+      actor: { id: actor, role: 'system' },
+      allowSystem: true,
+      revokeFn: revokeEntitlementFn,
+    });
     await recordRefundAuditEvent({
       db,
       refundId,
       purchaseId: current.purchaseId,
       actor,
-      action: 'entitlement_revoked',
+      action: plan.action === 'revoke' ? 'entitlement_revoked' : 'entitlement_retained',
       previousStatus: REFUND_STATUS.SETTLED,
       newStatus: REFUND_STATUS.SETTLED,
     });
-    current = { ...current, entitlementRevoked: true };
+    current = await refundsCollection(db).findOne({ _id: refundId }) || {
+      ...current,
+      entitlementReconciliation: { planId: plan.planId, status: 'applied' },
+      entitlementRevoked: plan.action === 'revoke',
+    };
   }
 
   // #776: the money is back with the buyer — notify once per claim. The dedupe

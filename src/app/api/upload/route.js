@@ -1,4 +1,5 @@
 // Resolves #430: Implement a secure API route that receives file uploads and pins them to IPFS via Pinata.
+import { createHash } from 'node:crypto'
 import { NextResponse } from 'next/server'
 import { auditLog } from '@/lib/api/audit'
 import { requirePermission } from '@/lib/api/auth'
@@ -252,9 +253,11 @@ async function handlePost(request) {
           // unavailable the record stays pending (fail-closed) and the material
           // remains hidden rather than being published unsafely.
           try {
+            const byteHash = createHash('sha256').update(Buffer.from(await file.arrayBuffer())).digest('hex')
             const quarantine = await createQuarantineRecord({
               db,
               contentHash: uploadedFile.cid,
+              byteHash,
               fileName: file.name,
               mimeType: file.type,
               sizeBytes: file.size,
@@ -267,12 +270,15 @@ async function handlePost(request) {
               intent: {
                 type: 'indexer',
                 channel: 'scan_content',
+                action: 'scan_content',
                 payload: {
+                  action: 'scan_content',
                   contentHash: quarantine.contentHash,
+                  byteHash,
+                  expectedByteHash: byteHash,
                   fileName: quarantine.fileName,
                   mimeType: quarantine.mimeType,
                   sizeBytes: quarantine.sizeBytes,
-                  action: 'scan',
                 },
               },
             })
