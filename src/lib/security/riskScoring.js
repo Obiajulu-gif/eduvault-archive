@@ -38,6 +38,25 @@
 import crypto from "node:crypto";
 
 // ---------------------------------------------------------------------------
+// Authorization and Error Classes
+// ---------------------------------------------------------------------------
+
+export class RiskScoringAuthorizationError extends Error {
+  constructor(message = "Unauthorized risk scoring operation.") {
+    super(message);
+    this.name = "RiskScoringAuthorizationError";
+    this.status = 403;
+  }
+}
+
+export function assertRiskScoringAuthorized(actor) {
+  if (!actor || (actor.role !== "admin" && actor.role !== "operator" && actor.role !== "service")) {
+    throw new RiskScoringAuthorizationError("Only an admin, operator, or service identity may evaluate or configure risk scoring.");
+  }
+}
+
+
+// ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
 
@@ -136,9 +155,9 @@ const BUILT_IN_SIGNALS = [
     evaluate(ctx) {
       const amount = Number(ctx.amountUsd ?? ctx.amount ?? 0);
       if (amount >= 1000) return 1.0;
-      if (amount >= 500)  return 0.75;
-      if (amount >= 200)  return 0.45;
-      if (amount >= 100)  return 0.20;
+      if (amount >= 500)  return 0.80;
+      if (amount >= 200)  return 0.50;
+      if (amount >= 100)  return 0.25;
       return 0;
     },
     explain(ctx, contribution) {
@@ -223,7 +242,7 @@ const BUILT_IN_SIGNALS = [
   // --- Privileged / admin actions ------------------------------------------
   {
     id: "privileged_action",
-    weight: 0.25,
+    weight: 0.45,
     actions: new Set([
       HIGH_IMPACT_ACTIONS.ADMIN_ROLE_GRANT,
       HIGH_IMPACT_ACTIONS.ADMIN_BULK_MUTATION,
@@ -235,10 +254,10 @@ const BUILT_IN_SIGNALS = [
     evaluate(ctx) {
       // Base risk for any privileged action; boosted by scope
       const itemCount = Number(ctx.itemCount ?? ctx.affectedCount ?? 1);
-      if (itemCount >= 100) return 1.0;
-      if (itemCount >= 20)  return 0.75;
-      if (itemCount >= 5)   return 0.40;
-      return 0.20; // baseline: the action itself is inherently elevated
+      if (itemCount >= 50) return 1.0;
+      if (itemCount >= 20)  return 0.85;
+      if (itemCount >= 5)   return 0.50;
+      return 0.30; // baseline: the action itself is inherently elevated
     },
     explain(ctx, contribution) {
       const count = ctx.itemCount ?? ctx.affectedCount ?? 1;
@@ -366,7 +385,10 @@ export function createRiskScorer(options = {}) {
    *
    * @returns {RiskScoreResult}
    */
-  function score(action, ctx = {}) {
+  function score(action, ctx = {}, options = {}) {
+    if (options && options.actor) {
+      assertRiskScoringAuthorized(options.actor);
+    }
     if (typeof action !== "string" || !action) {
       throw new TypeError("action must be a non-empty string");
     }
@@ -386,7 +408,20 @@ export function createRiskScorer(options = {}) {
     let rawScore = 0;
 
     for (const sig of applicableSignals) {
-      const raw = clamp(sig.evaluate(ctx), 0, 1);
+      let raw = 0;
+      try {
+        raw = clamp(sig.evaluate(ctx), 0, 1);
+      } catch (err) {
+        contributors.push({
+          signalId:     sig.id,
+          weight:       sig.weight,
+          rawValue:     0,
+          contribution: 0,
+          error:        err?.message || "evaluation_failed",
+          rationale:    `Signal "${sig.id}" evaluation failed: ${err?.message || "error"}`,
+        });
+        continue;
+      }
       if (raw === 0) continue; // signal did not fire
 
       const contribution = raw * sig.weight * normFactor;
@@ -403,12 +438,16 @@ export function createRiskScorer(options = {}) {
 
     const finalScore = clamp(rawScore, 0, 1);
     const level      = resolveLevel(finalScore, thresholds);
+    const retryCount = Number(ctx.retryCount ?? ctx.attemptCount ?? ctx.attempt ?? 0);
+    const retryable  = level !== RISK_LEVELS.CRITICAL;
 
     return {
       action,
       score:          finalScore,
       level,
       gate:           GATE_ACTIONS[level],
+      retryable,
+      retryCount,
       contributors,
       /** Plain-English summary of the top signals for human reviewers. */
       explanation:    buildExplanation(action, finalScore, level, contributors),
@@ -471,8 +510,8 @@ export const defaultRiskScorer = createRiskScorer();
  * @param {object} ctx
  * @returns {RiskScoreResult}
  */
-export function scoreAction(action, ctx = {}) {
-  return defaultRiskScorer.score(action, ctx);
+export function scoreAction(action, ctx = {}, options = {}) {
+  return defaultRiskScorer.score(action, ctx, options);
 }
 
 /**

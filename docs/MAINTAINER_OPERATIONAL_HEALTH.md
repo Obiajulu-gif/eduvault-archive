@@ -117,3 +117,6 @@ node --test tests/analytics/trends.test.mjs
 ```
 
 The test suite covers date range resolution, bucket enumeration for day/week/month windows, empty data, large result sets, and CSV export shape.
+
+
+
