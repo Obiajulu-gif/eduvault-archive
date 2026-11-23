@@ -23,10 +23,10 @@ jobs:
           cache-dependency-path: package-lock.json
 
       - name: Install dependencies
-        run: npm install --legacy-peer-deps --package-lock=false --ignore-scripts --no-audit --no-fund
+        run: npm ci --ignore-scripts --no-audit --no-fund
 
       - name: Dependency audit
-        run: npm run audit:deps
+        run: npm audit --audit-level=critical
 
       - name: Secret and placeholder scan
         run: npm run scan:secrets
