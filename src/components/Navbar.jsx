@@ -196,8 +196,10 @@ export default function Navbar() {
 									</button>
 								</div>
 							</div>
+							<span className="hidden md:inline-flex">
+								<ConnectEVMWalletButton />
+							</span>
 						</div>
-						<ConnectEVMWalletButton />
 					) : (
 						<div className="flex items-center gap-2">
 							<WalletButton	/>

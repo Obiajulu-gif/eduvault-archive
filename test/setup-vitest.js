@@ -47,9 +47,13 @@ vi.mock('@/lib/checkout/checkoutIntentStore', () => ({
 }));
 
 // Mock entitlement creation
-vi.mock('@/lib/entitlement', () => ({
-    createEntitlement: vi.fn(async () => ({ success: true })),
-}));
+vi.mock('@/lib/entitlement', async (importOriginal) => {
+    const actual = await importOriginal();
+    return {
+        ...actual,
+        createEntitlement: vi.fn(async () => ({ success: true })),
+    };
+});
 
 // Mock email service
 vi.mock('@/lib/email', () => ({
