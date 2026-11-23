@@ -33,6 +33,21 @@ impl MockRegistry {
         env.storage()
             .persistent()
             .set(&MockRegistryKey::Material(material_id.clone()), &material);
+        if !env
+            .storage()
+            .persistent()
+            .has(&MockRegistryKey::Immutable(material_id.clone()))
+        {
+            let default_snapshot = MockImmutableSnapshot {
+                metadata_uri: soroban_sdk::String::from_str(&env, "ipfs://default-metadata"),
+                metadata_hash: BytesN::from_array(&env, &[11u8; 32]),
+                rights_hash: BytesN::from_array(&env, &[22u8; 32]),
+            };
+            env.storage().persistent().set(
+                &MockRegistryKey::Immutable(material_id.clone()),
+                &default_snapshot,
+            );
+        }
     }
 
     pub fn set_material_immutable(
@@ -44,9 +59,10 @@ impl MockRegistry {
         env.storage()
             .persistent()
             .set(&MockRegistryKey::Immutable(material_id.clone()), &snapshot);
-        env.storage()
-            .persistent()
-            .set(&MockRegistryKey::SaleTermsVersion(material_id), &sale_terms_version);
+        env.storage().persistent().set(
+            &MockRegistryKey::SaleTermsVersion(material_id),
+            &sale_terms_version,
+        );
     }
 
     pub fn get_material(
@@ -75,10 +91,7 @@ impl MockRegistry {
         })
     }
 
-    pub fn get_sale_terms_version(
-        env: Env,
-        material_id: BytesN<32>,
-    ) -> Result<u32, PurchaseError> {
+    pub fn get_sale_terms_version(env: Env, material_id: BytesN<32>) -> Result<u32, PurchaseError> {
         Ok(env
             .storage()
             .persistent()
@@ -1323,7 +1336,8 @@ fn rejects_unauthorized_platform_config_change() {
     let (_, client) = install_and_init_contract(&env, &admin, &registry, &treasury, 500);
 
     let new_treasury = Address::generate(&env);
-    let result = client.try_propose_platform_config(&unauthorized_user, &new_treasury, &600, &false);
+    let result =
+        client.try_propose_platform_config(&unauthorized_user, &new_treasury, &600, &false);
     assert_eq!(result, Err(Ok(PurchaseError::NotAuthorized)));
 }
 
@@ -1550,17 +1564,17 @@ fn setup_scholarship_test(
 #[test]
 fn test_earliest_expiry_first_consumption_order() {
     let env = Env::default();
-    let (admin, client, issuer, learner, material_id) = setup_scholarship_test(&env);
+    let (_admin, client, issuer, learner, material_id) = setup_scholarship_test(&env);
 
     // Issue three grants with different expiry dates
-    let current_ledger = env.ledger().sequence();
-    
+    let _current_ledger = env.ledger().sequence();
+
     // Grant 1: expires at ledger 100, 50 credits
     client.issue_scholarship_credits(&issuer, &learner, &50, &Some(100));
-    
-    // Grant 2: expires at ledger 200, 75 credits  
+
+    // Grant 2: expires at ledger 200, 75 credits
     client.issue_scholarship_credits(&issuer, &learner, &75, &Some(200));
-    
+
     // Grant 3: no expiry, 25 credits
     client.issue_scholarship_credits(&issuer, &learner, &25, &None);
 
@@ -1574,10 +1588,10 @@ fn test_earliest_expiry_first_consumption_order() {
     // (client.redeem_scholarship_credits auto-unwraps; a failed redemption
     // would panic here, so reaching the assertions implies success)
     let _result = client.redeem_scholarship_credits(&learner, &material_id);
-    
+
     // Remaining should be 50 (75 from grant 2 + 25 from grant 3 - consumed 0 from grant 2)
     assert_eq!(client.get_scholarship_credit_balance(&learner), 50);
-    
+
     // Grant 1 should be exhausted and inactive
     let grant = client.get_scholarship_grant(&0);
     assert_eq!(grant.remaining_credits, 0);
@@ -1591,23 +1605,23 @@ fn test_redemption_exactly_exhausting_one_grant_spillover() {
 
     // Set higher credit cost for this test
     client.set_scholarship_credit_cost(&admin, &material_id, &120);
-    
+
     // Issue two grants
-    client.issue_scholarship_credits(&issuer, &learner, &50, &Some(100));  // Grant 0
+    client.issue_scholarship_credits(&issuer, &learner, &50, &Some(100)); // Grant 0
     client.issue_scholarship_credits(&issuer, &learner, &100, &Some(200)); // Grant 1
 
     env.ledger().set_sequence_number(50);
-    
+
     // Redeem 120 credits - should exhaust first grant (50) and take 70 from second
     let result_data = client.redeem_scholarship_credits(&learner, &material_id);
     assert_eq!(result_data.credits_used, 120);
     assert_eq!(result_data.remaining_credits, 30); // 100 - 70 remaining from grant 1
-    
+
     // Grant 0 should be exhausted
     let grant0 = client.get_scholarship_grant(&0);
     assert_eq!(grant0.remaining_credits, 0);
     assert!(!grant0.active);
-    
+
     // Grant 1 should have 30 remaining
     let grant1 = client.get_scholarship_grant(&1);
     assert_eq!(grant1.remaining_credits, 30);
@@ -1621,13 +1635,16 @@ fn test_expired_grant_rejection() {
 
     // Issue grant that expires at ledger 100
     client.issue_scholarship_credits(&issuer, &learner, &200, &Some(100));
-    
+
     // Advance ledger past expiry
     env.ledger().set_sequence_number(101);
-    
+
     // Try to redeem - should fail with expired grant
     let result = client.try_redeem_scholarship_credits(&learner, &material_id);
-    assert_eq!(result, Err(Ok(PurchaseError::InsufficientScholarshipCredits)));
+    assert_eq!(
+        result,
+        Err(Ok(PurchaseError::InsufficientScholarshipCredits))
+    );
 }
 
 #[test]
@@ -1637,17 +1654,20 @@ fn test_revoked_grant_rejection() {
 
     // Issue grant
     client.issue_scholarship_credits(&issuer, &learner, &200, &None);
-    
+
     // Verify grant is active
     let grant = client.get_scholarship_grant(&0);
     assert!(grant.active);
-    
+
     // Revoke the grant
     client.revoke_scholarship_grant(&admin, &0);
-    
+
     // Try to redeem - should fail
     let result = client.try_redeem_scholarship_credits(&learner, &material_id);
-    assert_eq!(result, Err(Ok(PurchaseError::InsufficientScholarshipCredits)));
+    assert_eq!(
+        result,
+        Err(Ok(PurchaseError::InsufficientScholarshipCredits))
+    );
 }
 
 #[test]
@@ -1659,7 +1679,7 @@ fn test_too_many_active_grants_boundary() {
     for _ in 0..50 {
         client.issue_scholarship_credits(&issuer, &learner, &10, &None);
     }
-    
+
     // 51st grant should fail
     let result = client.try_issue_scholarship_credits(&issuer, &learner, &10, &None);
     assert_eq!(result, Err(Ok(PurchaseError::TooManyActiveGrants)));
@@ -1668,28 +1688,43 @@ fn test_too_many_active_grants_boundary() {
 #[test]
 fn test_content_not_scholarship_eligible() {
     let env = Env::default();
-    let (admin, client, issuer, learner, _) = setup_scholarship_test(&env);
+    let (_admin, client, issuer, learner, _) = setup_scholarship_test(&env);
 
     // Create material without scholarship cost set
-    let registry = env.register(MockRegistry, ());
+    let registry = client.get_platform_config().unwrap().registry;
     let non_eligible_material = bytes32(&env, 99);
     let material = MaterialRecord {
         material_id: non_eligible_material.clone(),
         creator: Address::generate(&env),
         paused: false,
         status: MaterialStatus::Active,
-        quotes: vec![&env, AssetQuote { asset: env.register(MockAsset, ()), amount: 1_000_000 }],
-        payout_shares: vec![&env, PayoutShare { recipient: Address::generate(&env), share_bps: 10_000 }],
+        quotes: vec![
+            &env,
+            AssetQuote {
+                asset: env.register(MockAsset, ()),
+                amount: 1_000_000,
+            },
+        ],
+        payout_shares: vec![
+            &env,
+            PayoutShare {
+                recipient: Address::generate(&env),
+                share_bps: 10_000,
+            },
+        ],
     };
     let registry_client = MockRegistryClient::new(&env, &registry);
     registry_client.set_material(&non_eligible_material, &material);
 
     // Issue credits
     client.issue_scholarship_credits(&issuer, &learner, &100, &None);
-    
+
     // Try to redeem against material with no scholarship cost
     let result = client.try_redeem_scholarship_credits(&learner, &non_eligible_material);
-    assert_eq!(result, Err(Ok(PurchaseError::ContentNotScholarshipEligible)));
+    assert_eq!(
+        result,
+        Err(Ok(PurchaseError::ContentNotScholarshipEligible))
+    );
 }
 
 #[test]
@@ -1700,10 +1735,10 @@ fn test_redemption_already_exists() {
     // Issue credits and redeem once
     client.issue_scholarship_credits(&issuer, &learner, &200, &None);
     client.redeem_scholarship_credits(&learner, &material_id);
-    
+
     // Issue more credits
     client.issue_scholarship_credits(&issuer, &learner, &200, &None);
-    
+
     // Try to redeem again for same material - should fail
     let result = client.try_redeem_scholarship_credits(&learner, &material_id);
     assert_eq!(result, Err(Ok(PurchaseError::RedemptionAlreadyExists)));
@@ -1716,9 +1751,12 @@ fn test_insufficient_scholarship_credits() {
 
     // Issue only 50 credits but need 100
     client.issue_scholarship_credits(&issuer, &learner, &50, &None);
-    
+
     let result = client.try_redeem_scholarship_credits(&learner, &material_id);
-    assert_eq!(result, Err(Ok(PurchaseError::InsufficientScholarshipCredits)));
+    assert_eq!(
+        result,
+        Err(Ok(PurchaseError::InsufficientScholarshipCredits))
+    );
 }
 
 #[test]
@@ -1728,10 +1766,10 @@ fn test_scholarship_grant_expired_error() {
 
     // Issue grant that expires at ledger 100
     client.issue_scholarship_credits(&issuer, &learner, &100, &Some(100));
-    
+
     // Advance past expiry
     env.ledger().set_sequence_number(101);
-    
+
     // Try to revoke expired grant - should fail with ScholarshipGrantExpired
     let result = client.try_revoke_scholarship_grant(&admin, &0);
     assert_eq!(result, Err(Ok(PurchaseError::ScholarshipGrantExpired)));
@@ -1745,7 +1783,7 @@ fn test_scholarship_grant_inactive_error() {
     // Issue and then revoke grant
     client.issue_scholarship_credits(&issuer, &learner, &100, &None);
     client.revoke_scholarship_grant(&admin, &0);
-    
+
     // Try to revoke again - should fail with ScholarshipGrantInactive
     let result = client.try_revoke_scholarship_grant(&admin, &0);
     assert_eq!(result, Err(Ok(PurchaseError::ScholarshipGrantInactive)));
@@ -1758,10 +1796,10 @@ fn test_grant_already_processed_error() {
 
     // Issue exactly enough credits
     client.issue_scholarship_credits(&issuer, &learner, &100, &None);
-    
+
     // Redeem (this should consume the grant fully)
     client.redeem_scholarship_credits(&learner, &material_id);
-    
+
     // The grant should now be inactive with 0 remaining credits
     let grant = client.get_scholarship_grant(&0);
     assert!(!grant.active);
@@ -1771,19 +1809,20 @@ fn test_grant_already_processed_error() {
 #[test]
 fn test_mixed_expiry_grants_consumption() {
     let env = Env::default();
-    let (_, client, issuer, learner, material_id) = setup_scholarship_test(&env);
+    let (admin, client, issuer, learner, material_id) = setup_scholarship_test(&env);
+    client.set_scholarship_credit_cost(&admin, &material_id, &90);
 
     // Create grants with mixed expiry: some expire, some don't
-    client.issue_scholarship_credits(&issuer, &learner, &30, &Some(50));  // Will expire
-    client.issue_scholarship_credits(&issuer, &learner, &40, &None);      // No expiry
+    client.issue_scholarship_credits(&issuer, &learner, &30, &Some(50)); // Will expire
+    client.issue_scholarship_credits(&issuer, &learner, &40, &None); // No expiry
     client.issue_scholarship_credits(&issuer, &learner, &50, &Some(200)); // Far future
-    
+
     // Advance past first grant expiry
     env.ledger().set_sequence_number(51);
-    
+
     // Should now have 90 credits (40 + 50, first grant expired)
     assert_eq!(client.get_scholarship_credit_balance(&learner), 90);
-    
+
     // Redemption should work with remaining credits
     let _result = client.redeem_scholarship_credits(&learner, &material_id);
 }
@@ -1797,32 +1836,32 @@ fn test_scholarship_balance_computation_across_grants() {
     client.issue_scholarship_credits(&issuer, &learner, &25, &None);
     client.issue_scholarship_credits(&issuer, &learner, &35, &Some(100));
     client.issue_scholarship_credits(&issuer, &learner, &40, &Some(200));
-    
+
     // Total should be sum of all grants
     assert_eq!(client.get_scholarship_credit_balance(&learner), 100);
-    
+
     // Advance past first expiry
     env.ledger().set_sequence_number(101);
-    
+
     // Should exclude expired grant
     assert_eq!(client.get_scholarship_credit_balance(&learner), 65); // 25 + 40
 }
 
-#[test]  
+#[test]
 fn test_time_based_expiry_edge_case() {
     let env = Env::default();
-    let (_, client, issuer, learner, material_id) = setup_scholarship_test(&env);
+    let (_, client, issuer, learner, _material_id) = setup_scholarship_test(&env);
 
     // Issue grant that expires exactly at current ledger + 1
     let current = env.ledger().sequence();
     client.issue_scholarship_credits(&issuer, &learner, &100, &Some(current + 1));
-    
+
     // Should still be valid at current ledger
     assert_eq!(client.get_scholarship_credit_balance(&learner), 100);
-    
+
     // Advance to expiry ledger
     env.ledger().set_sequence_number(current + 1);
-    
+
     // Should now be expired (expires_at <= current_ledger)
     assert_eq!(client.get_scholarship_credit_balance(&learner), 0);
 }
@@ -1861,6 +1900,7 @@ fn test_invalid_expiry() {
     let (_, client, issuer, learner, _) = setup_scholarship_test(&env);
 
     // Try to set expiry in the past
+    env.ledger().set_sequence_number(100);
     let current = env.ledger().sequence();
     let result = client.try_issue_scholarship_credits(&issuer, &learner, &100, &Some(current - 1));
     assert_eq!(result, Err(Ok(PurchaseError::InvalidExpiry)));
@@ -1884,7 +1924,7 @@ fn test_scholarship_grant_not_found() {
 #[test]
 fn test_unauthorized_scholarship_operations() {
     let env = Env::default();
-    let (admin, client, issuer, learner, material_id) = setup_scholarship_test(&env);
+    let (_admin, client, issuer, learner, material_id) = setup_scholarship_test(&env);
 
     let unauthorized = Address::generate(&env);
 
@@ -1905,6 +1945,8 @@ fn test_unauthorized_scholarship_operations() {
 #[test]
 fn test_max_grants_consumption_performance() {
     let env = Env::default();
+    env.cost_estimate().disable_resource_limits();
+    env.cost_estimate().budget().reset_unlimited();
     let (admin, client, issuer, learner, material_id) = setup_scholarship_test(&env);
 
     // Set higher cost requiring consumption across multiple grants
@@ -1913,7 +1955,11 @@ fn test_max_grants_consumption_performance() {
     // Issue exactly 50 grants (MAX limit) with 10 credits each = 500 total
     for i in 0..50 {
         // Vary expiry to test earliest-first logic across all grants
-        let expiry = if i % 5 == 0 { None } else { Some(1000 + i as u32) };
+        let expiry = if i % 5 == 0 {
+            None
+        } else {
+            Some(1000 + i as u32)
+        };
         client.issue_scholarship_credits(&issuer, &learner, &10, &expiry);
     }
 
@@ -1945,6 +1991,7 @@ fn setup_bulk_purchase_test(
     u64, // first_purchase_id
 ) {
     env.mock_all_auths();
+    env.cost_estimate().disable_resource_limits();
 
     let admin = Address::generate(env);
     let registry = env.register(MockRegistry, ());
@@ -2006,13 +2053,21 @@ fn setup_bulk_purchase_test(
     );
     let first_purchase_id = result.first_purchase_id;
 
-    (admin, client, purchaser, creator, material_id, recipients, first_purchase_id)
+    (
+        admin,
+        client,
+        purchaser,
+        creator,
+        material_id,
+        recipients,
+        first_purchase_id,
+    )
 }
 
 #[test]
 fn test_bulk_refund_full_batch() {
     let env = Env::default();
-    let (admin, client, purchaser, _, material_id, recipients, first_purchase_id) = 
+    let (admin, client, purchaser, _, material_id, recipients, first_purchase_id) =
         setup_bulk_purchase_test(&env, 5);
 
     // Verify all recipients have entitlements
@@ -2044,7 +2099,7 @@ fn test_bulk_refund_full_batch() {
 #[test]
 fn test_bulk_refund_partial_batch() {
     let env = Env::default();
-    let (admin, client, purchaser, _, material_id, recipients, first_purchase_id) = 
+    let (admin, client, purchaser, _, material_id, recipients, first_purchase_id) =
         setup_bulk_purchase_test(&env, 5);
 
     // Manually refund the first 2 purchases individually
@@ -2054,7 +2109,7 @@ fn test_bulk_refund_partial_batch() {
     // Now try bulk refund - should skip the first 2, refund the remaining 3
     let refund_result = client.refund_bulk_purchase(&admin, &purchaser, &material_id, &25);
     assert_eq!(refund_result.refunded_count, 3); // Only 3 remaining were refunded
-    assert_eq!(refund_result.skipped_count, 2);  // 2 were already refunded
+    assert_eq!(refund_result.skipped_count, 2); // 2 were already refunded
     assert_eq!(refund_result.total_refund_amount, 3 * 950_000); // 3 * seller_net
 
     // Verify all entitlements are still revoked
@@ -2067,13 +2122,20 @@ fn test_bulk_refund_partial_batch() {
 #[test]
 fn test_bulk_refund_resource_limit_boundary() {
     let env = Env::default();
-    let (admin, client, purchaser, _, material_id, _, first_purchase_id) = 
+    env.cost_estimate().disable_resource_limits();
+    env.cost_estimate().budget().reset_unlimited();
+    let (admin, client, purchaser, _, material_id, _, first_purchase_id) =
         setup_bulk_purchase_test(&env, 50); // MAX_BULK_LICENSE_RECIPIENTS
 
+    env.cost_estimate().disable_resource_limits();
+    env.cost_estimate().budget().reset_unlimited();
     // Request refund with limit higher than MAX_MAINTENANCE_BATCH
     let refund_result = client.refund_bulk_purchase(&admin, &purchaser, &material_id, &100);
     // Should be capped at MAX_MAINTENANCE_BATCH (25)
-    assert_eq!(refund_result.refunded_count + refund_result.skipped_count, 25);
+    assert_eq!(
+        refund_result.refunded_count + refund_result.skipped_count,
+        25
+    );
     assert_eq!(refund_result.refunded_count, 25);
     assert_eq!(refund_result.skipped_count, 0);
 
@@ -2095,8 +2157,7 @@ fn test_bulk_refund_resource_limit_boundary() {
 #[test]
 fn test_bulk_refund_authorization() {
     let env = Env::default();
-    let (admin, client, purchaser, _, material_id, _, _) = 
-        setup_bulk_purchase_test(&env, 3);
+    let (_admin, client, purchaser, _, material_id, _, _) = setup_bulk_purchase_test(&env, 3);
 
     let unauthorized = Address::generate(&env);
 
@@ -2124,7 +2185,7 @@ fn test_bulk_refund_nonexistent_bulk_purchase() {
 #[test]
 fn test_bulk_refund_with_disputes() {
     let env = Env::default();
-    let (admin, client, purchaser, _, material_id, recipients, first_purchase_id) = 
+    let (admin, client, purchaser, _, material_id, recipients, first_purchase_id) =
         setup_bulk_purchase_test(&env, 5);
 
     // Open dispute on the first purchase
@@ -2135,7 +2196,7 @@ fn test_bulk_refund_with_disputes() {
     // Bulk refund should skip the disputed purchase
     let refund_result = client.refund_bulk_purchase(&admin, &purchaser, &material_id, &25);
     assert_eq!(refund_result.refunded_count, 4); // 4 pending purchases refunded
-    assert_eq!(refund_result.skipped_count, 1);  // 1 disputed purchase skipped
+    assert_eq!(refund_result.skipped_count, 1); // 1 disputed purchase skipped
 
     // Verify the disputed purchase is still in Disputed state
     let settlement = client.get_settlement(&first_purchase_id).unwrap();
@@ -2145,13 +2206,13 @@ fn test_bulk_refund_with_disputes() {
 #[test]
 fn test_get_bulk_purchase_record() {
     let env = Env::default();
-    let (_, client, purchaser, _, material_id, recipients, first_purchase_id) = 
+    let (_, client, purchaser, _, material_id, _recipients, first_purchase_id) =
         setup_bulk_purchase_test(&env, 3);
 
     // Query the bulk purchase record
     let bulk_record = client.get_bulk_purchase(&purchaser, &material_id);
     assert!(bulk_record.is_some());
-    
+
     let record = bulk_record.unwrap();
     assert_eq!(record.purchaser, purchaser);
     assert_eq!(record.material_id, material_id);
@@ -3715,8 +3776,7 @@ fn purchase_snapshot_preserves_metadata_after_sale_terms_change() {
         &1,
     );
 
-    let (_contract_id, client) =
-        install_and_init_contract(&env, &admin, &registry, &treasury, 500);
+    let (_contract_id, client) = install_and_init_contract(&env, &admin, &registry, &treasury, 500);
     client.set_asset_allowed(&admin, &asset, &AssetKind::Token, &true);
 
     let purchase_id = client.purchase(
@@ -3888,7 +3948,9 @@ fn setup_conformance_bulk_purchase(
     )
 }
 
-fn setup_conformance_single_purchase(env: &Env) -> (
+fn setup_conformance_single_purchase(
+    env: &Env,
+) -> (
     Address,
     PurchaseManagerClient<'_>,
     Address,
@@ -4089,7 +4151,8 @@ fn test_platform_config_multistep_approval() {
 
     // transfer admin to admin2
     client.transfer_admin(&admin, &admin2, &86400);
-    env.ledger().set_timestamp(env.ledger().timestamp().saturating_add(86401));
+    env.ledger()
+        .set_timestamp(env.ledger().timestamp().saturating_add(86401));
     client.accept_admin(&admin2);
 
     // admin2 approves the proposal
@@ -4410,7 +4473,6 @@ fn simulate_purchase_does_not_mutate_state_or_require_auth() {
     assert!(!client.has_entitlement(&material_id, &buyer));
 }
 
-
 // ============================================================
 // Property / Invariant Tests (Issue: fuzz/property test suite)
 // ============================================================
@@ -4468,21 +4530,33 @@ fn prop_setup_with_price(
 ) {
     env.mock_all_auths();
 
-    let admin    = Address::generate(env);
+    let admin = Address::generate(env);
     let registry = env.register(MockRegistry, ());
     let treasury = Address::generate(env);
-    let buyer    = Address::generate(env);
-    let creator  = Address::generate(env);
-    let asset    = env.register(MockAsset, ());
+    let buyer = Address::generate(env);
+    let creator = Address::generate(env);
+    let asset = env.register(MockAsset, ());
 
     let material_id = bytes32(env, 1);
     let material = MaterialRecord {
         material_id: material_id.clone(),
         creator: creator.clone(),
-        paused:  false,
-        status:  MaterialStatus::Active,
-        quotes: soroban_sdk::vec![env, AssetQuote { asset: asset.clone(), amount: price }],
-        payout_shares: soroban_sdk::vec![env, PayoutShare { recipient: creator.clone(), share_bps: 10_000 }],
+        paused: false,
+        status: MaterialStatus::Active,
+        quotes: soroban_sdk::vec![
+            env,
+            AssetQuote {
+                asset: asset.clone(),
+                amount: price
+            }
+        ],
+        payout_shares: soroban_sdk::vec![
+            env,
+            PayoutShare {
+                recipient: creator.clone(),
+                share_bps: 10_000
+            }
+        ],
     };
     MockRegistryClient::new(env, &registry).set_material(&material_id, &material);
     MockRegistryClient::new(env, &registry).set_material_immutable(
@@ -4490,15 +4564,24 @@ fn prop_setup_with_price(
         &MockImmutableSnapshot {
             metadata_uri: soroban_sdk::String::from_str(env, "ipfs://prop-test"),
             metadata_hash: bytes32(env, 11),
-            rights_hash:   bytes32(env, 22),
+            rights_hash: bytes32(env, 22),
         },
         &1,
     );
 
-    let (contract_id, client) = install_and_init_contract(env, &admin, &registry, &treasury, platform_fee_bps);
+    let (contract_id, client) =
+        install_and_init_contract(env, &admin, &registry, &treasury, platform_fee_bps);
     client.set_asset_allowed(&admin, &asset, &AssetKind::Token, &true);
 
-    (contract_id, client, admin, buyer, creator, asset, material_id)
+    (
+        contract_id,
+        client,
+        admin,
+        buyer,
+        creator,
+        asset,
+        material_id,
+    )
 }
 
 // ── P1 + P4: refund ≤ escrow seller_net (no negative balance, no over-refund)
@@ -4513,7 +4596,11 @@ fn property_p1_p4_refund_never_exceeds_escrowed_seller_net() {
             prop_setup_with_price(&env, price, fee_bps);
 
         let purchase_id = client.purchase(
-            &buyer, &material_id, &asset, &price, &sample_transaction_id(&env),
+            &buyer,
+            &material_id,
+            &asset,
+            &price,
+            &sample_transaction_id(&env),
         );
 
         let escrow = client.get_escrow_record(&purchase_id).unwrap();
@@ -4532,7 +4619,8 @@ fn property_p1_p4_refund_never_exceeds_escrowed_seller_net() {
         assert!(
             settlement.refunded_amount <= seller_net,
             "seed={seed}: refunded_amount {} > seller_net {}",
-            settlement.refunded_amount, seller_net
+            settlement.refunded_amount,
+            seller_net
         );
 
         // Invariant: refunded_amount ≥ 0 (no negative refund).
@@ -4554,12 +4642,22 @@ fn property_p2_duplicate_entitlement_always_rejected() {
             prop_setup_with_price(&env, price, 500);
 
         // First purchase succeeds.
-        client.purchase(&buyer, &material_id, &asset, &price, &sample_transaction_id(&env));
+        client.purchase(
+            &buyer,
+            &material_id,
+            &asset,
+            &price,
+            &sample_transaction_id(&env),
+        );
         assert!(client.has_entitlement(&material_id, &buyer));
 
         // Second purchase for the same buyer + material must be rejected.
         let dup = client.try_purchase(
-            &buyer, &material_id, &asset, &price, &sample_transaction_id(&env),
+            &buyer,
+            &material_id,
+            &asset,
+            &price,
+            &sample_transaction_id(&env),
         );
         assert_eq!(
             dup,
@@ -4579,7 +4677,11 @@ fn property_p3_second_refund_always_returns_refund_not_allowed() {
             prop_setup_with_price(&env, price, 500);
 
         let purchase_id = client.purchase(
-            &buyer, &material_id, &asset, &price, &sample_transaction_id(&env),
+            &buyer,
+            &material_id,
+            &asset,
+            &price,
+            &sample_transaction_id(&env),
         );
 
         // First refund succeeds.
@@ -4599,9 +4701,9 @@ fn property_p3_second_refund_always_returns_refund_not_allowed() {
 #[test]
 fn property_p5_p6_fee_arithmetic_is_sound_for_all_tiers_and_prices() {
     let tiers = [
-        (CreatorTier::Default, 500u32),  // 5 % platform fee
-        (CreatorTier::Tier1,   250u32),  // 2.5 %
-        (CreatorTier::Tier2,   150u32),  // 1.5 %
+        (CreatorTier::Default, 500u32), // 5 % platform fee
+        (CreatorTier::Tier1, 250u32),   // 2.5 %
+        (CreatorTier::Tier2, 150u32),   // 1.5 %
     ];
 
     for (tier, expected_fee_bps) in tiers {
@@ -4617,7 +4719,11 @@ fn property_p5_p6_fee_arithmetic_is_sound_for_all_tiers_and_prices() {
             }
 
             let purchase_id = client.purchase(
-                &buyer, &material_id, &asset, &price, &sample_transaction_id(&env),
+                &buyer,
+                &material_id,
+                &asset,
+                &price,
+                &sample_transaction_id(&env),
             );
 
             let escrow = client.get_escrow_record(&purchase_id).unwrap();
@@ -4631,7 +4737,8 @@ fn property_p5_p6_fee_arithmetic_is_sound_for_all_tiers_and_prices() {
             assert!(
                 escrow.platform_fee <= price,
                 "tier={tier:?} seed={seed}: platform_fee {} > gross {}",
-                escrow.platform_fee, price
+                escrow.platform_fee,
+                price
             );
             // P6: seller_net + platform_fee == gross.
             assert_eq!(
@@ -4639,7 +4746,8 @@ fn property_p5_p6_fee_arithmetic_is_sound_for_all_tiers_and_prices() {
                 price,
                 "tier={tier:?} seed={seed}: money not conserved: \
                  {0} + {1} ≠ {price}",
-                escrow.seller_net, escrow.platform_fee
+                escrow.seller_net,
+                escrow.platform_fee
             );
             // P5 exact: fee matches the tier's bps.
             let expected_fee = (price * expected_fee_bps as i128) / 10_000;
@@ -4658,11 +4766,11 @@ fn property_p7_purchase_ids_are_sequential_and_unique() {
     let env = Env::default();
     env.mock_all_auths();
 
-    let admin    = Address::generate(&env);
+    let admin = Address::generate(&env);
     let registry = env.register(MockRegistry, ());
     let treasury = Address::generate(&env);
-    let creator  = Address::generate(&env);
-    let asset    = env.register(MockAsset, ());
+    let creator = Address::generate(&env);
+    let asset = env.register(MockAsset, ());
 
     let (_, client) = install_and_init_contract(&env, &admin, &registry, &treasury, 500);
     client.set_asset_allowed(&admin, &asset, &AssetKind::Token, &true);
@@ -4670,15 +4778,27 @@ fn property_p7_purchase_ids_are_sequential_and_unique() {
     // Register 16 distinct materials and purchase each with a fresh buyer.
     let mut prev_id: Option<u64> = None;
     for seq in 0u8..16 {
-        let buyer       = Address::generate(&env);
+        let buyer = Address::generate(&env);
         let material_id = bytes32(&env, 100u8.wrapping_add(seq));
         let material = MaterialRecord {
             material_id: material_id.clone(),
             creator: creator.clone(),
             paused: false,
             status: MaterialStatus::Active,
-            quotes: soroban_sdk::vec![&env, AssetQuote { asset: asset.clone(), amount: 100_000 }],
-            payout_shares: soroban_sdk::vec![&env, PayoutShare { recipient: creator.clone(), share_bps: 10_000 }],
+            quotes: soroban_sdk::vec![
+                &env,
+                AssetQuote {
+                    asset: asset.clone(),
+                    amount: 100_000
+                }
+            ],
+            payout_shares: soroban_sdk::vec![
+                &env,
+                PayoutShare {
+                    recipient: creator.clone(),
+                    share_bps: 10_000
+                }
+            ],
         };
         MockRegistryClient::new(&env, &registry).set_material(&material_id, &material);
         MockRegistryClient::new(&env, &registry).set_material_immutable(
@@ -4686,19 +4806,25 @@ fn property_p7_purchase_ids_are_sequential_and_unique() {
             &MockImmutableSnapshot {
                 metadata_uri: soroban_sdk::String::from_str(&env, "ipfs://seq"),
                 metadata_hash: bytes32(&env, seq),
-                rights_hash:   bytes32(&env, seq.wrapping_add(1)),
+                rights_hash: bytes32(&env, seq.wrapping_add(1)),
             },
             &1,
         );
 
         let pid = client.purchase(
-            &buyer, &material_id, &asset, &100_000, &sample_transaction_id(&env),
+            &buyer,
+            &material_id,
+            &asset,
+            &100_000,
+            &sample_transaction_id(&env),
         );
 
         if let Some(prev) = prev_id {
             assert_eq!(
-                pid, prev + 1,
-                "seq={seq}: expected purchase_id {}, got {pid}", prev + 1
+                pid,
+                prev + 1,
+                "seq={seq}: expected purchase_id {}, got {pid}",
+                prev + 1
             );
         }
         prev_id = Some(pid);
@@ -4715,12 +4841,18 @@ fn property_p8_reconcile_denied_after_refund_across_prices() {
             prop_setup_with_price(&env, price, 500);
 
         let purchase_id = client.purchase(
-            &buyer, &material_id, &asset, &price, &sample_transaction_id(&env),
+            &buyer,
+            &material_id,
+            &asset,
+            &price,
+            &sample_transaction_id(&env),
         );
 
         // Before refund: reconcile_entitlement grants access.
         assert!(
-            client.try_reconcile_entitlement(&material_id, &buyer).is_ok(),
+            client
+                .try_reconcile_entitlement(&material_id, &buyer)
+                .is_ok(),
             "seed={seed}: expected access before refund"
         );
 
@@ -4728,7 +4860,9 @@ fn property_p8_reconcile_denied_after_refund_across_prices() {
 
         // After refund: reconcile_entitlement denies access.
         assert!(
-            client.try_reconcile_entitlement(&material_id, &buyer).is_err(),
+            client
+                .try_reconcile_entitlement(&material_id, &buyer)
+                .is_err(),
             "seed={seed}: expected denial after refund"
         );
         // has_entitlement must also return false.
@@ -4748,12 +4882,18 @@ fn property_p9_bulk_purchase_rejects_over_max_recipients() {
 
     // Build a recipient list that is exactly one over the documented limit.
     let mut recipients = soroban_sdk::Vec::new(&env);
-    for _ in 0..=MAX_BULK_LICENSE_RECIPIENTS {  // MAX + 1 entries
+    for _ in 0..=MAX_BULK_LICENSE_RECIPIENTS {
+        // MAX + 1 entries
         recipients.push_back(Address::generate(&env));
     }
 
     let result = client.try_purchase_bulk_licenses(
-        &buyer, &material_id, &asset, &100_000, &sample_transaction_id(&env), &recipients,
+        &buyer,
+        &material_id,
+        &asset,
+        &100_000,
+        &sample_transaction_id(&env),
+        &recipients,
     );
     assert_eq!(
         result,
@@ -4779,7 +4919,11 @@ fn property_p10_expired_quote_blocks_purchase_fresh_quote_allows_it() {
         env.ledger().set(ledger);
 
         let expired_result = client.try_purchase(
-            &buyer, &material_id, &asset, &price, &sample_transaction_id(&env),
+            &buyer,
+            &material_id,
+            &asset,
+            &price,
+            &sample_transaction_id(&env),
         );
         assert_eq!(
             expired_result,
@@ -4789,7 +4933,13 @@ fn property_p10_expired_quote_blocks_purchase_fresh_quote_allows_it() {
 
         // Re-quoting must allow a fresh purchase.
         client.record_quote(&buyer, &material_id, &asset);
-        client.purchase(&buyer, &material_id, &asset, &price, &sample_transaction_id(&env));
+        client.purchase(
+            &buyer,
+            &material_id,
+            &asset,
+            &price,
+            &sample_transaction_id(&env),
+        );
         assert!(
             client.has_entitlement(&material_id, &buyer),
             "seed={seed}: fresh quote after expiry should allow purchase"
@@ -4810,7 +4960,11 @@ fn property_p11_dispute_window_boundary_is_exact() {
             prop_setup_with_price(&env, 100_000, 500);
 
         let purchase_id = client.purchase(
-            &buyer, &material_id, &asset, &100_000, &sample_transaction_id(&env),
+            &buyer,
+            &material_id,
+            &asset,
+            &100_000,
+            &sample_transaction_id(&env),
         );
         let escrow = client.get_escrow_record(&purchase_id).unwrap();
         let purchase_ledger = escrow.purchase_ledger;
@@ -4852,13 +5006,15 @@ fn property_p12_partial_bulk_refund_preserves_remaining_entitlements() {
     for batch_size in 3u32..=10 {
         let env = Env::default();
         env.mock_all_auths();
+        env.cost_estimate().disable_resource_limits();
+        env.cost_estimate().budget().reset_unlimited();
 
-        let admin    = Address::generate(&env);
+        let admin = Address::generate(&env);
         let registry = env.register(MockRegistry, ());
         let treasury = Address::generate(&env);
         let purchaser = Address::generate(&env);
-        let creator  = Address::generate(&env);
-        let asset    = env.register(MockAsset, ());
+        let creator = Address::generate(&env);
+        let asset = env.register(MockAsset, ());
 
         let material_id = bytes32(&env, 1);
         let material = MaterialRecord {
@@ -4866,8 +5022,20 @@ fn property_p12_partial_bulk_refund_preserves_remaining_entitlements() {
             creator: creator.clone(),
             paused: false,
             status: MaterialStatus::Active,
-            quotes: soroban_sdk::vec![&env, AssetQuote { asset: asset.clone(), amount: 100_000 }],
-            payout_shares: soroban_sdk::vec![&env, PayoutShare { recipient: creator.clone(), share_bps: 10_000 }],
+            quotes: soroban_sdk::vec![
+                &env,
+                AssetQuote {
+                    asset: asset.clone(),
+                    amount: 100_000
+                }
+            ],
+            payout_shares: soroban_sdk::vec![
+                &env,
+                PayoutShare {
+                    recipient: creator.clone(),
+                    share_bps: 10_000
+                }
+            ],
         };
         let reg_client = MockRegistryClient::new(&env, &registry);
         reg_client.set_material(&material_id, &material);
@@ -4876,7 +5044,7 @@ fn property_p12_partial_bulk_refund_preserves_remaining_entitlements() {
             &MockImmutableSnapshot {
                 metadata_uri: soroban_sdk::String::from_str(&env, "ipfs://bulk-prop"),
                 metadata_hash: bytes32(&env, 11),
-                rights_hash:   bytes32(&env, 22),
+                rights_hash: bytes32(&env, 22),
             },
             &1,
         );
@@ -4890,20 +5058,29 @@ fn property_p12_partial_bulk_refund_preserves_remaining_entitlements() {
         }
 
         let result = client.purchase_bulk_licenses(
-            &purchaser, &material_id, &asset, &100_000, &sample_transaction_id(&env), &recipients,
+            &purchaser,
+            &material_id,
+            &asset,
+            &100_000,
+            &sample_transaction_id(&env),
+            &recipients,
         );
 
         // Refund only (batch_size - 1) of the purchases.
         let limit = batch_size - 1;
         let refund_result = client.refund_bulk_purchase(&admin, &purchaser, &material_id, &limit);
-        assert_eq!(refund_result.refunded_count, limit,
-            "batch_size={batch_size}: expected {limit} refunds");
+        assert_eq!(
+            refund_result.refunded_count, limit,
+            "batch_size={batch_size}: expected {limit} refunds"
+        );
 
         // Exactly one recipient must still hold their entitlement.
-        let still_entitled: u32 = (0..batch_size).filter(|i| {
-            let r = recipients.get_unchecked(*i);
-            client.has_entitlement(&material_id, &r)
-        }).count() as u32;
+        let still_entitled: u32 = (0..batch_size)
+            .filter(|i| {
+                let r = recipients.get_unchecked(*i);
+                client.has_entitlement(&material_id, &r)
+            })
+            .count() as u32;
         assert_eq!(
             still_entitled, 1,
             "batch_size={batch_size}: expected 1 remaining entitlement, \
@@ -4912,10 +5089,11 @@ fn property_p12_partial_bulk_refund_preserves_remaining_entitlements() {
 
         // The corresponding settlement must still be Pending.
         let first_pid = result.first_purchase_id;
-        let last_pid  = first_pid + (batch_size as u64 - 1);
+        let last_pid = first_pid + (batch_size as u64 - 1);
         let last_settlement = client.get_settlement(&last_pid).unwrap();
         assert_eq!(
-            last_settlement.state, SettlementState::Pending,
+            last_settlement.state,
+            SettlementState::Pending,
             "batch_size={batch_size}: last settlement should remain Pending"
         );
     }

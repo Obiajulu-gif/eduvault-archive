@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useMemo } from "react";
 import { FaCopy, FaCheck, FaTimes, FaShareAlt, FaLink } from "react-icons/fa";
 
 /**
@@ -12,13 +12,12 @@ export default function ShareModal({ isOpen, onClose, materialTitle, baseUrl }) 
   const [customSource, setCustomSource] = useState("");
   const [campaign, setCampaign] = useState("");
   const [medium, setMedium] = useState("social");
-  const [generatedUrl, setGeneratedUrl] = useState("");
   const [copied, setCopied] = useState(false);
 
   // Compute base URL if not passed explicitly
   const effectiveBaseUrl = baseUrl || (typeof window !== "undefined" ? window.location.href.split('?')[0] : "");
 
-  useEffect(() => {
+  const generatedUrl = useMemo(() => {
     try {
       const url = new URL(effectiveBaseUrl || "https://eduvault.app");
       const activeSource = source === "custom" ? customSource.trim() : source;
@@ -35,9 +34,9 @@ export default function ShareModal({ isOpen, onClose, materialTitle, baseUrl }) 
         url.searchParams.set("utm_medium", medium.trim());
       }
 
-      setGeneratedUrl(url.toString());
+      return url.toString();
     } catch {
-      setGeneratedUrl(effectiveBaseUrl);
+      return effectiveBaseUrl || "";
     }
   }, [effectiveBaseUrl, source, customSource, campaign, medium]);
 

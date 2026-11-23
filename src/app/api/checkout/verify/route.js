@@ -141,55 +141,57 @@ export async function POST(req) {
           );
         }
 
-const { receipt } = await createReceipt({
-        operation: 'checkout.verify',
-        actor: actor,
-        status: 'denied',
-        summary: 'Wallet address in signed payload did not match the session wallet',
-        references: { sessionAddress, payloadAddress },
-        metadata: { reason: result.reason, warnings: result.warnings, clearSession: Boolean(result.clearSession) },
-        idempotencyKey,
-      });
+        const { receipt } = await createReceipt({
+          operation: 'checkout.verify',
+          actor: actor,
+          status: 'denied',
+          summary: 'Wallet address in signed payload did not match the session wallet',
+          references: { sessionAddress, payloadAddress },
+          metadata: { reason: result.reason, warnings: result.warnings, clearSession: Boolean(result.clearSession) },
+          idempotencyKey,
+        });
 
-      if (result.clearSession) {
+        if (result.clearSession) {
+          return NextResponse.json(
+            {
+              error: 'Wallet address in signed payload does not match session wallet',
+              reason: result.reason,
+              warnings: result.warnings,
+              clearSession: true,
+              receiptId: receipt._id,
+            },
+            { status: 403 }
+          );
+        }
+
         return NextResponse.json(
           {
-error: 'Wallet address in signed payload does not match session wallet',
+            error: 'Wallet address in signed payload does not match session wallet',
             reason: result.reason,
             warnings: result.warnings,
-            clearSession: true,
             receiptId: receipt._id,
           },
           { status: 403 }
         );
       }
 
-return NextResponse.json(
-        {
-          error: 'Wallet address in signed payload does not match session wallet',
-          reason: result.reason,
-          warnings: result.warnings,
-          receiptId: receipt._id,
-        },
-        { status: 403 }
+      const { receipt } = await createReceipt({
+        operation: 'checkout.verify',
+        actor,
+        status: 'verified',
+        summary: 'Wallet address in signed payload matched the session wallet',
+        references: { sessionAddress, payloadAddress },
+        metadata: { warnings: result.warnings },
+        idempotencyKey,
+      });
+
+      return NextResponse.json(
+        { valid: true, address: sessionAddress, receiptId: receipt._id },
+        { status: 200 }
       );
     } finally {
       await releaseLock(lock);
     }
-const { receipt } = await createReceipt({
-      operation: 'checkout.verify',
-      actor,
-      status: 'verified',
-      summary: 'Wallet address in signed payload matched the session wallet',
-      references: { sessionAddress, payloadAddress },
-      metadata: { warnings: result.warnings },
-      idempotencyKey,
-    });
-
-    return NextResponse.json(
-      { valid: true, address: sessionAddress, receiptId: receipt._id },
-      { status: 200 }
-    );
   } catch (err) {
     logger.error({ err: err.message }, 'POST /api/checkout/verify error');
     return NextResponse.json({ error: 'Server error' }, { status: 500 });

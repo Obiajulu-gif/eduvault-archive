@@ -209,7 +209,7 @@ export async function GET(request) {
     let purchases = [];
     if (materialIdStrings.length > 0) {
       purchases = await db.collection("purchases")
-        .find({ materialId: { $in": materialIdStrings } })
+        .find({ materialId: { $in: materialIdStrings } })
         .sort({ purchasedAt: -1, createdAt: -1 })
         .toArray();
     }
@@ -252,7 +252,6 @@ export async function GET(request) {
         amount: -Number(p.amount || 0),
       });
     }
-    const records = [...buckets.values()];
 
     for (const a of domainActivity) {
       const date = normalizeDate(a.createdAt || a.updatedAt);

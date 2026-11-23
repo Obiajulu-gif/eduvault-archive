@@ -24,7 +24,7 @@
     "test:all": "npm run test:contracts && npm run test:backend && npm run test:frontend",
     "test:contracts": "hardhat test",
     "test:integration": "vitest run test/integration",
-    "test:backend": "npx tsx --test tests/backend/*.test.mjs",
+    "test:backend": "npx -y tsx --test tests/backend/*.test.mjs",
     "test:fuzz": "npx tsx --test tests/backend/fuzz.test.mjs",
     "test:concurrency": "vitest run test/concurrency",
     "audit:deps": "npm audit --audit-level=critical",
@@ -46,7 +46,11 @@
     "health:check": "node scripts/check-dependency-health.mjs",
     "diagnostics:contributor": "node scripts/contributor-diagnostics.mjs",
     "drift:events": "node scripts/detect-event-drift.mjs --dry-run",
-    "recovery:checks": "node scripts/incident-recovery-checks.mjs --dry-run"
+    "recovery:checks": "node scripts/incident-recovery-checks.mjs --dry-run",
+    "repair:search": "node scripts/repair-search-index.mjs",
+    "repair:search:apply": "node scripts/repair-search-index.mjs --apply",
+    "repair:ipfs": "node scripts/repair-ipfs-content.mjs",
+    "repair:ipfs:apply": "node scripts/repair-ipfs-content.mjs --apply"
   },
   "dependencies": {
     "@creit-tech/stellar-wallets-kit": "npm:@jsr/creit-tech__stellar-wallets-kit@^2.1.0",
@@ -62,7 +66,7 @@
     "framer-motion": "^12.38.0",
     "jsonwebtoken": "^9.0.3",
     "mongodb": "^6.21.0",
-    "next": "^16.2.7",
+    "next": "^16.4.6",
     "nodemailer": "^8.0.7",
     "pdfkit": "^0.20.1",
     "pinata": "^2.5.5",

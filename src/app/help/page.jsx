@@ -83,7 +83,7 @@ export default function HelpCenterPage() {
         <div className="space-y-10">
           {Object.keys(faqsByCategory).length === 0 ? (
             <div className="text-center py-10 bg-white rounded-xl border border-gray-200">
-              <p className="text-gray-500 text-lg">No results found for "{searchQuery}"</p>
+              <p className="text-gray-500 text-lg">No results found for &quot;{searchQuery}&quot;</p>
               <button
                 onClick={() => setSearchQuery("")}
                 className="mt-4 text-blue-600 hover:text-blue-800 font-medium"

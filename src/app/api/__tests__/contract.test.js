@@ -47,7 +47,7 @@ function validate(value, rawSchema, path = '$') {
   if (schema.allOf) return schema.allOf.flatMap((s) => validate(value, s, path));
   if (schema.oneOf) {
     const results = schema.oneOf.map((s) => validate(value, s, path));
-    return results.some((r) => r.length === 0) ? [] : [`${path}: matches no oneOf branch (${results.flat().join('; ')})`)];
+    return results.some((r) => r.length === 0) ? [] : [`${path}: matches no oneOf branch (${results.flat().join('; ')})`];
   }
   const errors = [];
   if (schema.type) {
