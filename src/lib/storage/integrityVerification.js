@@ -2,7 +2,7 @@
 // Detects and handles hash/CID mismatches
 
 import { createHash } from 'node:crypto'
-import { resolveFromGateways } from './pinningService.js'
+import { resolveFromGatewaysWithIntegrity } from './pinningService.js'
 
 export const IntegrityStatus = {
   VERIFIED: 'verified',
@@ -66,7 +66,6 @@ export async function sampledVerifyMaterial(providers, material, options = {}) {
   const {
     samplingRate = 0.05, // 5% sampling by default
     fetchImpl = fetch,
-    timeoutMs = 30000,
   } = options
 
   if (!material?.storage?.cid) {
@@ -104,24 +103,15 @@ export async function sampledVerifyMaterial(providers, material, options = {}) {
 
   try {
     // Fetch content from gateway
-    const retrievedResult = await resolveFromGateways(cid, providers, fetchImpl)
-    const response = await fetchImpl(retrievedResult.url, {
-      timeout: timeoutMs,
-    })
-
-    if (!response.ok) {
-      return {
-        material: material._id,
-        cid,
-        status: IntegrityStatus.UNREACHABLE,
-        details: `Gateway returned ${response.status}`,
-        verified: false,
-      }
-    }
-
-    const contentBuffer = await response.arrayBuffer()
+    const retrievedResult = await resolveFromGatewaysWithIntegrity(
+      cid,
+      providers,
+      storedHash,
+      hashAlgorithm,
+      fetchImpl,
+    )
     const verificationResult = await verifyContentIntegrity(
-      contentBuffer,
+      retrievedResult.content,
       storedHash,
       hashAlgorithm
     )

@@ -14,9 +14,9 @@
   ],
   "private": true,
   "scripts": {
-    "dev": "next dev",
-    "build": "next build --webpack",
-    "start": "next start",
+    "dev": "node init && next dev",
+    "build": "node init && next build --webpack",
+    "start": "node init && next start",
     "lint": "eslint",
     "typecheck": "echo 'Typecheck not applicable yet (JS codebase without checkJS)'",
     "test": "vitest",

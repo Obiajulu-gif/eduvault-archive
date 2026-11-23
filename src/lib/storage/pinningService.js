@@ -1,4 +1,5 @@
 import { validateGatewayUrl, validatePinataResponse } from '@/lib/api/storage'
+import { createHash } from 'node:crypto'
 
 export class PinningQuorumError extends Error {
   constructor(message, results = []) {
@@ -81,4 +82,41 @@ export async function resolveFromGateways(cid, providers, fetchImpl = fetch) {
     }
   }
   throw new Error(`No healthy gateway for ${cid}: ${failures.join(', ')}`)
+}
+
+/**
+ * Resolve a gateway only after verifying that its bytes match the stored hash.
+ * A healthy HTTP response is not sufficient: a stale or corrupted replica
+ * must be treated as a failed gateway so the next provider can be tried.
+ */
+export async function resolveFromGatewaysWithIntegrity(
+  cid,
+  providers,
+  expectedHash,
+  algorithm = 'sha256',
+  fetchImpl = fetch,
+) {
+  if (!expectedHash) throw new Error('Expected content hash is required')
+
+  const failures = []
+  for (const provider of providers) {
+    try {
+      const url = await provider.gatewayUrl(cid)
+      const response = await fetchImpl(url, { method: 'GET' })
+      if (!response.ok) {
+        failures.push(`${provider.name}:${response.status}`)
+        continue
+      }
+      const content = Buffer.from(await response.arrayBuffer())
+      const actualHash = createHash(algorithm).update(content).digest('hex')
+      if (actualHash !== expectedHash) {
+        failures.push(`${provider.name}:integrity_mismatch`)
+        continue
+      }
+      return { url, provider: provider.name, content }
+    } catch (error) {
+      failures.push(`${provider.name}:${error.message}`)
+    }
+  }
+  throw new Error(`No gateway passed integrity verification for ${cid}: ${failures.join(', ')}`)
 }
