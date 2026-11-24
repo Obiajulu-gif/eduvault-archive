@@ -39,6 +39,25 @@ const dataAllTime = [
   { name: "Jun", revenue: 7500, sales: 280 },
 ];
 
+const CustomTooltip = ({ active, payload, label }) => {
+  if (active && payload && payload.length) {
+    return (
+      <div className="bg-gray-900/90 border border-gray-700/50 backdrop-blur-md p-4 rounded-xl shadow-xl">
+        <p className="text-gray-300 font-medium mb-1">{label}</p>
+        <p className="text-emerald-400 font-bold text-lg">
+          ${payload[0].value}
+        </p>
+        {payload[1] && (
+          <p className="text-blue-400 text-sm mt-1">
+            {payload[1].value} Sales
+          </p>
+        )}
+      </div>
+    );
+  }
+  return null;
+};
+
 export default function RevenueChart() {
   const [timeRange, setTimeRange] = useState("30");
   const [chartType, setChartType] = useState("area");
@@ -57,25 +76,6 @@ export default function RevenueChart() {
   };
 
   const chartData = getData();
-
-  const CustomTooltip = ({ active, payload, label }) => {
-    if (active && payload && payload.length) {
-      return (
-        <div className="bg-gray-900/90 border border-gray-700/50 backdrop-blur-md p-4 rounded-xl shadow-xl">
-          <p className="text-gray-300 font-medium mb-1">{label}</p>
-          <p className="text-emerald-400 font-bold text-lg">
-            ${payload[0].value}
-          </p>
-          {payload[1] && (
-            <p className="text-blue-400 text-sm mt-1">
-              {payload[1].value} Sales
-            </p>
-          )}
-        </div>
-      );
-    }
-    return null;
-  };
 
   return (
     <div className="bg-gray-900/40 border border-gray-800/50 backdrop-blur-sm rounded-2xl p-6">

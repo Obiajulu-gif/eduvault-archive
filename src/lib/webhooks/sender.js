@@ -1,8 +1,8 @@
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
-import { getDb } from '@/lib/mongodb';
-import { logger } from '@/lib/logger';
-import { ensureCorrelationId } from '@/lib/monitoring/telemetry';
-import { validateWebhookDestination, safeFetch, SsrfError } from './ssrfGuard';
+import { getDb } from '../mongodb.js';
+import { logger } from '../logger.js';
+import { ensureCorrelationId } from '../monitoring/telemetry.js';
+import { validateWebhookDestination, safeFetch, SsrfError } from './ssrfGuard.js';
 
 const replayCache = new Map();
 const DEFAULT_REPLAY_TTL_SECONDS = 300;
@@ -386,7 +386,7 @@ export async function sendWebhookWithRetry(url, payload, retries = 3, { signingS
   return false;
 }
 
-import { enqueueSideEffect, getNextCausalLink } from '@/lib/backend/outbox';
+import { enqueueSideEffect, getNextCausalLink } from '../backend/outbox.js';
 
 export async function broadcastPurchaseEvent(materialId, purchaseData) {
   try {
