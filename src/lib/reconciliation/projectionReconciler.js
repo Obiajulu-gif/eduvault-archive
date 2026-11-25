@@ -12,6 +12,93 @@
  */
 
 import { appendAuditRecord } from '../backend/auditLedger.js';
+import { AppError } from '../errors/AppError.js';
+
+export const DEFAULT_AUTHORIZED_ROLES = Object.freeze(['admin', 'operator', 'system']);
+
+const defaultSleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Verifies that actor is authorized to inspect or repair projection state.
+ * Fails closed on missing or unauthorized roles.
+ */
+export function authorizeProjectionReconciliation({
+  actor,
+  scope,
+  authorizedRoles = DEFAULT_AUTHORIZED_ROLES,
+  authorize,
+} = {}) {
+  if (typeof authorize === 'function') {
+    const allowed = authorize({ actor, scope });
+    if (!allowed) {
+      throw new AppError('AUTH_FORBIDDEN', {
+        message: 'Actor is not authorized to reconcile projections.',
+        details: { scope: scope ?? 'all' },
+      });
+    }
+    return;
+  }
+
+  const role = typeof actor === 'string' ? actor : actor?.role;
+  if (!role || !authorizedRoles.includes(role)) {
+    throw new AppError('AUTH_FORBIDDEN', {
+      message: 'Insufficient role for projection reconciliation.',
+      details: { role: role ?? null, requiredRoles: authorizedRoles },
+    });
+  }
+}
+
+async function withRetries(fn, { maxRetries = 2, retryDelayMs = 10, sleep = defaultSleep } = {}) {
+  let attempts = 0;
+  let lastError;
+  while (attempts <= maxRetries) {
+    try {
+      const value = await fn(attempts);
+      return { value, retries: attempts };
+    } catch (error) {
+      lastError = error;
+      if (attempts >= maxRetries) break;
+      attempts += 1;
+      if (retryDelayMs > 0) await sleep(retryDelayMs * attempts);
+    }
+  }
+  const err = lastError instanceof Error ? lastError : new Error(String(lastError));
+  err.retriesAttempted = attempts;
+  throw err;
+}
+
+/**
+ * Restores projections to their pre-repair state using the captured rollback snapshot.
+ *
+ * @param {object} db - Database instance
+ * @param {Array<object>} rollbackSnapshot - Entries captured during runProjectionReconciliation
+ * @returns {Promise<{ restoredCount: number, prunedCount: number }>}
+ */
+export async function rollbackProjectionRepairs(db, rollbackSnapshot = []) {
+  if (!db || typeof db.collection !== 'function') {
+    throw new TypeError('Valid database instance is required for rollback');
+  }
+
+  let restoredCount = 0;
+  let prunedCount = 0;
+
+  for (const entry of rollbackSnapshot) {
+    const col = db.collection(entry.collection);
+    if (entry.existedBefore && entry.previousDoc) {
+      await col.updateOne(
+        entry.query,
+        { $set: entry.previousDoc },
+        { upsert: true }
+      );
+      restoredCount += 1;
+    } else {
+      await col.deleteOne(entry.query);
+      prunedCount += 1;
+    }
+  }
+
+  return { restoredCount, prunedCount };
+}
 
 export const DRIFT_CATEGORY = Object.freeze({
   MISSING_PROJECTION: 'MISSING_PROJECTION',
@@ -217,7 +304,12 @@ async function reconcileSearchScope(db, options = {}) {
  * @param {object} params.db - Database instance
  * @param {'all'|'entitlements'|'search'} [params.scope='all']
  * @param {boolean} [params.dryRun=true]
- * @param {string} [params.actor='system']
+ * @param {string|object} [params.actor='system']
+ * @param {number} [params.maxRetries=2]
+ * @param {number} [params.retryDelayMs=10]
+ * @param {(ms: number) => Promise<void>} [params.sleep]
+ * @param {(ctx: { actor: any, scope?: string }) => boolean} [params.authorize]
+ * @param {Array<string>} [params.authorizedRoles]
  * @returns {Promise<object>} Reconciliation report with drift items and actions
  */
 export async function runProjectionReconciliation({
@@ -225,7 +317,14 @@ export async function runProjectionReconciliation({
   scope = 'all',
   dryRun = true,
   actor = 'system',
+  maxRetries = 2,
+  retryDelayMs = 10,
+  sleep = defaultSleep,
+  authorize,
+  authorizedRoles = DEFAULT_AUTHORIZED_ROLES,
 } = {}) {
+  authorizeProjectionReconciliation({ actor, scope, authorizedRoles, authorize });
+
   if (!db || typeof db.collection !== 'function') {
     throw new TypeError('Valid database instance is required for reconciliation');
   }
@@ -256,6 +355,9 @@ export async function runProjectionReconciliation({
     driftItems: allDrift,
     repairedCount: 0,
     errorsCount: 0,
+    retriedCount: 0,
+    failedItems: [],
+    rollbackSnapshot: [],
   };
 
   if (dryRun) {
@@ -263,40 +365,87 @@ export async function runProjectionReconciliation({
     return report;
   }
 
-  // Explicit execution mode: apply planned repairs
+  // Pre-repair capture of rollback snapshot
+  for (const item of allDrift) {
+    if (item.scope === 'entitlements') {
+      const [matId, buyer] = item.targetId.split(':');
+      const query = { materialId: matId, buyerAddress: buyer };
+      const cacheCol = db.collection('entitlement_cache');
+      let prev = null;
+      if (typeof cacheCol.findOne === 'function') {
+        prev = await cacheCol.findOne(query);
+      }
+      report.rollbackSnapshot.push({
+        collection: 'entitlement_cache',
+        query,
+        existedBefore: Boolean(prev),
+        previousDoc: prev ? { ...prev } : null,
+      });
+    } else if (item.scope === 'search') {
+      const query = { materialId: item.targetId };
+      const searchCol = db.collection('search_index');
+      let prev = null;
+      if (typeof searchCol.findOne === 'function') {
+        prev = await searchCol.findOne(query);
+      }
+      report.rollbackSnapshot.push({
+        collection: 'search_index',
+        query,
+        existedBefore: Boolean(prev),
+        previousDoc: prev ? { ...prev } : null,
+      });
+    }
+  }
+
+  // Explicit execution mode: apply planned repairs with retry resilience
   for (const item of allDrift) {
     try {
-      if (item.scope === 'entitlements') {
-        const cacheCol = db.collection('entitlement_cache');
-        if (item.plannedAction === REPAIR_ACTION.UPSERT_PROJECTION || item.plannedAction === REPAIR_ACTION.RESYNC_FIELDS) {
-          const [matId, buyer] = item.targetId.split(':');
-          await cacheCol.updateOne(
-            { materialId: matId, buyerAddress: buyer },
-            { $set: item.repairPayload },
-            { upsert: true }
-          );
-          report.repairedCount++;
-        } else if (item.plannedAction === REPAIR_ACTION.PRUNE_ORPHAN) {
-          const [matId, buyer] = item.targetId.split(':');
-          await cacheCol.deleteOne({ materialId: matId, buyerAddress: buyer });
-          report.repairedCount++;
-        }
-      } else if (item.scope === 'search') {
-        const searchCol = db.collection('search_index');
-        if (item.plannedAction === REPAIR_ACTION.UPSERT_PROJECTION) {
-          await searchCol.updateOne(
-            { materialId: item.targetId },
-            { $set: item.repairPayload },
-            { upsert: true }
-          );
-          report.repairedCount++;
-        } else if (item.plannedAction === REPAIR_ACTION.PRUNE_ORPHAN) {
-          await searchCol.deleteOne({ materialId: item.targetId });
-          report.repairedCount++;
-        }
-      }
+      const repairOp = await withRetries(
+        async () => {
+          if (item.scope === 'entitlements') {
+            const cacheCol = db.collection('entitlement_cache');
+            if (item.plannedAction === REPAIR_ACTION.UPSERT_PROJECTION || item.plannedAction === REPAIR_ACTION.RESYNC_FIELDS) {
+              const [matId, buyer] = item.targetId.split(':');
+              await cacheCol.updateOne(
+                { materialId: matId, buyerAddress: buyer },
+                { $set: item.repairPayload },
+                { upsert: true }
+              );
+              return true;
+            } else if (item.plannedAction === REPAIR_ACTION.PRUNE_ORPHAN) {
+              const [matId, buyer] = item.targetId.split(':');
+              await cacheCol.deleteOne({ materialId: matId, buyerAddress: buyer });
+              return true;
+            }
+          } else if (item.scope === 'search') {
+            const searchCol = db.collection('search_index');
+            if (item.plannedAction === REPAIR_ACTION.UPSERT_PROJECTION) {
+              await searchCol.updateOne(
+                { materialId: item.targetId },
+                { $set: item.repairPayload },
+                { upsert: true }
+              );
+              return true;
+            } else if (item.plannedAction === REPAIR_ACTION.PRUNE_ORPHAN) {
+              await searchCol.deleteOne({ materialId: item.targetId });
+              return true;
+            }
+          }
+          return false;
+        },
+        { maxRetries, retryDelayMs, sleep }
+      );
+      report.retriedCount += repairOp.retries;
+      report.repairedCount++;
     } catch (err) {
+      report.retriedCount += err.retriesAttempted ?? 0;
       report.errorsCount++;
+      report.failedItems.push({
+        targetId: item.targetId,
+        scope: item.scope,
+        category: item.category,
+        error: err.message,
+      });
     }
   }
 
@@ -306,7 +455,7 @@ export async function runProjectionReconciliation({
       db,
       operationId: `audit-recon-${Date.now()}`,
       action: 'reconciliation.projections_repaired',
-      actor,
+      actor: typeof actor === 'string' ? actor : actor?.id ?? actor?.role ?? 'unknown',
       target: { type: 'reconciliation_job', scope },
       result: report.errorsCount === 0 ? 'success' : 'partial',
       intent: {
