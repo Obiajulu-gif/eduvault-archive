@@ -47,6 +47,8 @@
     "diagnostics:contributor": "node scripts/contributor-diagnostics.mjs",
     "drift:events": "node scripts/detect-event-drift.mjs --dry-run",
     "recovery:checks": "node scripts/incident-recovery-checks.mjs --dry-run",
+    "orphan:repair": "node scripts/orphan-repair.mjs",
+    "orphan:repair:dry": "node scripts/orphan-repair.mjs --dry-run",
     "repair:search": "node scripts/repair-search-index.mjs",
     "repair:search:apply": "node scripts/repair-search-index.mjs --apply",
     "repair:ipfs": "node scripts/repair-ipfs-content.mjs",
