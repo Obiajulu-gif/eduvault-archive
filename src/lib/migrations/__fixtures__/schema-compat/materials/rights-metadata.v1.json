@@ -1,0 +1,16 @@
+{
+  "_id": "compat-mat-rights-0001",
+  "title": "Licensing Workshop Recordings",
+  "description": "Legacy listing whose creator set rights metadata before v2 made it a schema field.",
+  "category": "Law",
+  "subject": "Intellectual Property",
+  "level": "intermediate",
+  "price": 12,
+  "asset": "USDC",
+  "userAddress": "GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5",
+  "visibility": "public",
+  "rightsMetadata": {
+    "commercialUse": true
+  },
+  "createdAt": "2026-02-10T00:00:00.000Z"
+}

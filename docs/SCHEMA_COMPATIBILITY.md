@@ -114,3 +114,86 @@ versions on every path, and header negotiation:
 ```bash
 npm run test:backend
 ```
+
+## Registry-driven compatibility tests (#1083)
+
+The tests above cover `materials` by hand. The harness in
+[`src/lib/backend/schemaCompatHarness.js`](../src/lib/backend/schemaCompatHarness.js)
+derives its checks from the registry. Every collection passed to
+`registerRecordSchema` is therefore tested automatically, and a collection
+registered **without fixtures fails the gate**.
+
+| Check | Guarantee |
+| --- | --- |
+| `chain` | Every step `min+1..latest` has `up` and `down`. A missing `validate` on latest is a warning. |
+| `pure` | `readRecord` never mutates the stored document. Fixtures are deep-frozen, so nested mutation throws. |
+| `stamp` | A record read or written at version *t* declares `schemaVersion: t` |
+| `validate` | The latest shape satisfies the latest `validate()` |
+| `round-trip` | `up` then `down` returns the original record, so rollback and pinned reads lose no data |
+| `idempotent` | Re-reading an already upgraded record is a no-op, so retried reads and backfills cannot double-apply |
+| `deterministic` | The same input always yields byte-identical output |
+| `reject` | Versions outside `[min, latest]` (fixtures and a synthetic `latest+1`) fail with `UnsupportedSchemaVersionError` on read and write |
+
+Fixtures live in
+[`src/lib/backend/schemaCompatFixtures.js`](../src/lib/backend/schemaCompatFixtures.js):
+the legacy v1 pack (#890) plus
+[`__fixtures__/schema-compat/`](../src/lib/migrations/__fixtures__/schema-compat/README.md).
+`clean.v2.golden.json` pins the exact output of reading the clean v1 record at
+latest. Any change to `migrationV2.up` output must update it deliberately.
+
+```bash
+npm run schema:compat                       # CI gate, no database needed
+npx tsx --test tests/backend/schema-compat-harness.test.mjs
+```
+
+### Adding a schema version
+
+1. Add migration `n` with `up`, `down` and `validate`, and bump `latest`.
+2. Add at least one fixture stored at the new version. Regenerate the golden
+   file only if the change to existing output is intended.
+3. `npm run schema:compat` must pass. A lossy `down` fails `round-trip`, and
+   that is a real rollback bug, not a test to loosen.
+
+### Bugs found by the harness and fixed here
+
+- **Rollback lost creator-set `rightsMetadata`.** `migrationV2.up` merges a v1
+  record's existing `rightsMetadata` over the defaults, but `down` deleted the
+  field. As a result, `runCatalogMigration({ rollback: true })` and v1-pinned
+  reads silently dropped it.
+  - `up` now keeps the original as `legacyRightsMetadata`, only when one
+    existed, and `down` restores it.
+  - Records without `rightsMetadata` (all existing fixtures and the golden file)
+    are byte-for-byte unchanged.
+  - Records already migrated by the old `up` cannot be recovered by this
+    change; they never stored the original.
+- **Retired versions were still accepted.** `readRecord` and `writeRecord` only
+  rejected versions above `latest`. A record or payload below a raised `min`
+  was silently upgraded, contrary to step 4 above. Both paths now return
+  `UnsupportedSchemaVersionError` (400). `materials` has `min = 1`, so current
+  behaviour is unchanged.
+
+### Retiring a version safely (authorized preflight)
+
+Raising `min` is the only breaking step in the strategy. Before raising it, run
+the read-only preflight. It requires the `schema:retire` permission (admins
+hold it through `*`):
+
+```js
+const result = await checkSchemaFloorRaise({ db, collection: "materials", newMin: 2, actor });
+// { safe, remaining, sampleIds, nextStep }
+```
+
+```bash
+MONGODB_URI=... npm run schema:compat -- --collection materials --retire-below 2 --operator ops-jane
+# exit 0 = safe, 2 = records remain below the floor, 1 = error
+```
+
+The preflight counts:
+- unversioned records, which are read as the current `min` and would be
+  misread once `min` is raised;
+- string-typed versions such as `"1"`;
+- numeric versions below the floor.
+
+It never changes the registry. Raising `min` remains a reviewed code change. If
+`remaining > 0`, backfill first (e.g. `runCatalogMigration`) and re-run. The
+check is repeatable.

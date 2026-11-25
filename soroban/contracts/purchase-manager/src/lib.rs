@@ -392,7 +392,7 @@ enum DataKey {
     /// maintenance counter is defined in one place; the index entries
     /// themselves stay in `auth`'s own storage namespace.
     AdminRoleIndexCount,
-    /// Bulk purchase correlation: `BulkPurchase(purchaser, material_id)` -> 
+    /// Bulk purchase correlation: `BulkPurchase(purchaser, material_id)` ->
     /// `(first_purchase_id, recipient_count)` to enable batch operations.
     BulkPurchase((Address, BytesN<32>)),
 
@@ -966,9 +966,7 @@ impl PurchaseManager {
 
         let purchase_id = get_and_increment_purchase_nonce(&env)?;
         let current_ledger = env.ledger().sequence();
-        let immutable = config
-            .registry
-            .get_material_immutable(&env, &material_id)?;
+        let immutable = config.registry.get_material_immutable(&env, &material_id)?;
 
         if platform_fee > 0 {
             transfer_asset(&env, &buyer, &config.treasury, &asset, platform_fee)?;
@@ -1434,7 +1432,11 @@ impl PurchaseManager {
     /// Set (or bump) the refund signer version (#666). A bump disables all
     /// authorizations signed with older versions — the compromise recovery
     /// workflow. Returns the new active version.
-    pub fn set_refund_signer_version(env: Env, admin: Address, version: u32) -> Result<u32, PurchaseError> {
+    pub fn set_refund_signer_version(
+        env: Env,
+        admin: Address,
+        version: u32,
+    ) -> Result<u32, PurchaseError> {
         auth::require_admin(&env, &admin)?;
         if version == 0 {
             return Err(PurchaseError::NotAuthorized);
@@ -1812,8 +1814,8 @@ impl PurchaseManager {
         match resolution {
             DisputeResolution::RefundBuyer => {
                 // Use the shared refund logic
-                let refund_result = perform_single_refund(&env, purchase_id)?;
-                
+                let refund_result = perform_single_refund(&env, purchase_id, true)?;
+
                 if !refund_result.refunded {
                     return Err(PurchaseError::InsufficientEscrowBalance);
                 }
@@ -1891,15 +1893,17 @@ impl PurchaseManager {
     ) -> Result<(), PurchaseError> {
         auth::require_admin(&env, &admin)?;
 
-        let refund_result = perform_single_refund(&env, purchase_id)?;
-        
+        let refund_result = perform_single_refund(&env, purchase_id, false)?;
+
         if !refund_result.refunded {
             // Map the skip reasons to appropriate errors
             match refund_result.reason_skipped {
                 Some("settlement_not_found") => return Err(PurchaseError::SettlementNotPending),
                 Some("already_settled") => return Err(PurchaseError::RefundNotAllowed),
                 Some("already_claimed") => return Err(PurchaseError::EscrowAlreadyClaimed),
-                Some("buyer_not_found") | Some("entitlement_not_found") | Some("entitlement_inactive") => {
+                Some("buyer_not_found")
+                | Some("entitlement_not_found")
+                | Some("entitlement_inactive") => {
                     return Err(PurchaseError::NotAuthorized);
                 }
                 _ => return Err(PurchaseError::RefundNotAllowed),
@@ -1921,15 +1925,26 @@ impl PurchaseManager {
     ) -> Result<(), PurchaseError> {
         auth::require_admin(&env, &admin)?;
 
-        let refund_result = perform_single_refund(&env, purchase_id)?;
-        
+        let actual_buyer: Address = env
+            .storage()
+            .persistent()
+            .get(&DataKey::PurchaseBuyer(purchase_id))
+            .ok_or(PurchaseError::NotAuthorized)?;
+        if actual_buyer != buyer {
+            return Err(PurchaseError::NotAuthorized);
+        }
+
+        let refund_result = perform_single_refund(&env, purchase_id, false)?;
+
         if !refund_result.refunded {
             // Map the skip reasons to appropriate errors
             match refund_result.reason_skipped {
                 Some("settlement_not_found") => return Err(PurchaseError::SettlementNotPending),
                 Some("already_settled") => return Err(PurchaseError::RefundNotAllowed),
                 Some("already_claimed") => return Err(PurchaseError::EscrowAlreadyClaimed),
-                Some("buyer_not_found") | Some("entitlement_not_found") | Some("entitlement_inactive") => {
+                Some("buyer_not_found")
+                | Some("entitlement_not_found")
+                | Some("entitlement_inactive") => {
                     return Err(PurchaseError::NotAuthorized);
                 }
                 _ => return Err(PurchaseError::RefundNotAllowed),
@@ -2037,7 +2052,9 @@ impl PurchaseManager {
             proposer: admin.clone(),
         };
 
-        env.storage().instance().set(&DataKey::PendingPlatformConfig, &pending_config);
+        env.storage()
+            .instance()
+            .set(&DataKey::PendingPlatformConfig, &pending_config);
 
         PlatformConfigProposedEvent {
             treasury,
@@ -2051,10 +2068,7 @@ impl PurchaseManager {
     }
 
     /// Approve pending platform configuration (admin only, must be different from proposer)
-    pub fn approve_platform_config(
-        env: Env,
-        admin: Address,
-    ) -> Result<(), PurchaseError> {
+    pub fn approve_platform_config(env: Env, admin: Address) -> Result<(), PurchaseError> {
         auth::require_admin(&env, &admin)?;
 
         let pending_config: PendingPlatformConfigState = env
@@ -2078,7 +2092,9 @@ impl PurchaseManager {
         };
 
         put_platform_config(&env, &new_config);
-        env.storage().instance().remove(&DataKey::PendingPlatformConfig);
+        env.storage()
+            .instance()
+            .remove(&DataKey::PendingPlatformConfig);
 
         PlatformConfigUpdatedEvent {
             old_treasury: current_config.treasury,
@@ -2855,6 +2871,13 @@ impl PurchaseManager {
             return Err(PurchaseError::ScholarshipGrantInactive);
         }
 
+        let current_ledger = env.ledger().sequence();
+        if let Some(expires_at) = grant.expires_at {
+            if current_ledger >= expires_at {
+                return Err(PurchaseError::ScholarshipGrantExpired);
+            }
+        }
+
         let credits_to_revoke = grant.remaining_credits;
         if credits_to_revoke <= 0 {
             return Err(PurchaseError::ScholarshipGrantInactive);
@@ -2952,8 +2975,10 @@ impl PurchaseManager {
             .ok_or(PurchaseError::MaterialNotFound)?; // Bulk purchase not found
 
         // Bound the operation to prevent resource exhaustion
-        let limit = limit.min(MAX_MAINTENANCE_BATCH).min(bulk_record.recipient_count);
-        
+        let limit = limit
+            .min(MAX_MAINTENANCE_BATCH)
+            .min(bulk_record.recipient_count);
+
         let mut refunded_count = 0u32;
         let mut skipped_count = 0u32;
         let mut total_refund_amount = 0i128;
@@ -2961,10 +2986,10 @@ impl PurchaseManager {
         // Process each purchase ID in the bulk purchase
         let mut purchase_id = bulk_record.first_purchase_id;
         let mut processed = 0u32;
-        
+
         while processed < limit {
-            let refund_result = perform_single_refund(&env, purchase_id);
-            
+            let refund_result = perform_single_refund(&env, purchase_id, false);
+
             match refund_result {
                 Ok(result) => {
                     if result.refunded {
@@ -3020,33 +3045,51 @@ impl PurchaseManager {
 
 /// Internal helper function that performs a single purchase refund.
 /// Factors out common refund logic used by refund_purchase, resolve_dispute, and refund_bulk_purchase.
-fn perform_single_refund(env: &Env, purchase_id: u64) -> Result<SingleRefundResult, PurchaseError> {
+fn perform_single_refund(
+    env: &Env,
+    purchase_id: u64,
+    allow_disputed: bool,
+) -> Result<SingleRefundResult, PurchaseError> {
     // Check if settlement exists and is in Pending state
     let settlement = match get_settlement_record_internal(env, purchase_id) {
         Some(s) => s,
-        None => return Ok(SingleRefundResult {
-            refunded: false,
-            refund_amount: 0,
-            reason_skipped: Some("settlement_not_found"),
-        }),
+        None => {
+            return Ok(SingleRefundResult {
+                refunded: false,
+                refund_amount: 0,
+                reason_skipped: Some("settlement_not_found"),
+            })
+        }
     };
 
-    if settlement.state != SettlementState::Pending {
+    let valid_state = match settlement.state {
+        SettlementState::Pending => true,
+        SettlementState::Disputed => allow_disputed,
+        _ => false,
+    };
+
+    if !valid_state {
         return Ok(SingleRefundResult {
             refunded: false,
             refund_amount: 0,
-            reason_skipped: Some("already_settled"),
+            reason_skipped: Some(if settlement.state == SettlementState::Disputed {
+                "disputed"
+            } else {
+                "already_settled"
+            }),
         });
     }
 
     // Check escrow record
     let mut escrow = match get_escrow_record_internal(env, purchase_id) {
         Some(e) => e,
-        None => return Ok(SingleRefundResult {
-            refunded: false,
-            refund_amount: 0,
-            reason_skipped: Some("escrow_not_found"),
-        }),
+        None => {
+            return Ok(SingleRefundResult {
+                refunded: false,
+                refund_amount: 0,
+                reason_skipped: Some("escrow_not_found"),
+            })
+        }
     };
 
     if escrow.claimed {
@@ -3064,26 +3107,26 @@ fn perform_single_refund(env: &Env, purchase_id: u64) -> Result<SingleRefundResu
         .get(&DataKey::PurchaseBuyer(purchase_id))
     {
         Some(b) => b,
-        None => return Ok(SingleRefundResult {
-            refunded: false,
-            refund_amount: 0,
-            reason_skipped: Some("buyer_not_found"),
-        }),
+        None => {
+            return Ok(SingleRefundResult {
+                refunded: false,
+                refund_amount: 0,
+                reason_skipped: Some("buyer_not_found"),
+            })
+        }
     };
 
     // Check entitlement
     let entitlement_key = DataKey::Entitlement((escrow.material_id.clone(), buyer.clone()));
-    let entitlement: EntitlementRecord = match env
-        .storage()
-        .persistent()
-        .get(&entitlement_key)
-    {
+    let entitlement: EntitlementRecord = match env.storage().persistent().get(&entitlement_key) {
         Some(e) => e,
-        None => return Ok(SingleRefundResult {
-            refunded: false,
-            refund_amount: 0,
-            reason_skipped: Some("entitlement_not_found"),
-        }),
+        None => {
+            return Ok(SingleRefundResult {
+                refunded: false,
+                refund_amount: 0,
+                reason_skipped: Some("entitlement_not_found"),
+            })
+        }
     };
 
     if !entitlement.active {
@@ -3102,18 +3145,12 @@ fn perform_single_refund(env: &Env, purchase_id: u64) -> Result<SingleRefundResu
     if refund_amount > 0 {
         let contract_address = env.current_contract_address();
         let balance = SacToken::new(env, &escrow.asset).balance(&contract_address);
-        
+
         if balance < refund_amount {
             return Err(PurchaseError::InsufficientEscrowBalance);
         }
 
-        transfer_asset(
-            env,
-            &contract_address,
-            &buyer,
-            &escrow.asset,
-            refund_amount,
-        )?;
+        transfer_asset(env, &contract_address, &buyer, &escrow.asset, refund_amount)?;
     }
 
     // Mark escrow as claimed
@@ -3123,7 +3160,9 @@ fn perform_single_refund(env: &Env, purchase_id: u64) -> Result<SingleRefundResu
     // Revoke entitlement
     let mut updated_entitlement = entitlement;
     updated_entitlement.active = false;
-    env.storage().persistent().set(&entitlement_key, &updated_entitlement);
+    env.storage()
+        .persistent()
+        .set(&entitlement_key, &updated_entitlement);
 
     // Update settlement to Refunded
     let mut updated_settlement = settlement;
@@ -3325,16 +3364,14 @@ fn validate_checkout(
         return Err(PurchaseError::MaterialNotActive);
     }
 
-    let quote = find_quote(&material.quotes, asset)
-        .ok_or(PurchaseError::AssetNotAcceptedForMaterial)?;
+    let quote =
+        find_quote(&material.quotes, asset).ok_or(PurchaseError::AssetNotAcceptedForMaterial)?;
 
     if quote.amount != expected_amount || quote.amount <= 0 {
         return Err(PurchaseError::InvalidQuoteAmount);
     }
 
-    let sale_terms_version = config
-        .registry
-        .get_sale_terms_version(env, material_id)?;
+    let sale_terms_version = config.registry.get_sale_terms_version(env, material_id)?;
 
     // Bind the purchase to the buyer's recorded quote (#681, #701): if the
     // creator changed price or asset, the sale-terms version moved, or the

@@ -40,7 +40,9 @@ export function evaluateMaterialSearchAccess(material) {
     return { searchable: false, reason: "legal_tombstone", permanent: true };
   }
   if (material.isDeleted === true) return { searchable: false, reason: "soft_deleted", permanent: false };
-  if (material.archived === true) return { searchable: false, reason: "archived", permanent: false };
+  if (material.archived === true || material.isArchived === true || material.searchVisibility === "hidden") {
+    return { searchable: false, reason: "archived", permanent: false };
+  }
   if (material.visibility !== "public") return { searchable: false, reason: "not_public", permanent: false };
   if (material.creatorSuspended === true) return { searchable: false, reason: "creator_suspended", permanent: false };
   if (RESTRICTED_MODERATION_STATUSES.has(material.moderationStatus)) {
@@ -124,6 +126,29 @@ export async function enqueueMaterialSearchProjection({
     sourceId: materialId,
     deliveryId: `material-search:${materialId}:${version}:${reason || "material_changed"}`,
     intent: buildMaterialSearchIntent(material, { reason, now }),
+  });
+}
+
+export async function enqueueMaterialSearchDeletion({
+  db,
+  material,
+  reason = "material_deleted",
+  session,
+  enqueue,
+  now = new Date(),
+}) {
+  const markedMaterial = {
+    ...material,
+    isDeleted: material?.isDeleted ?? true,
+    archived: material?.archived ?? true,
+  };
+  return enqueueMaterialSearchProjection({
+    db,
+    material: markedMaterial,
+    reason,
+    session,
+    enqueue,
+    now,
   });
 }
 
