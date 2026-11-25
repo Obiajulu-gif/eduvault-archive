@@ -76,7 +76,15 @@ export function useCheckoutRecovery({ walletAddress = null, storage, ttlMs, now 
   }, [readNow, storageRef, ttlMs, walletAddress]);
 
   useEffect(() => {
-    refresh();
+    // Read after the current commit so React Compiler does not treat a
+    // synchronous setState in an effect as a cascading render.
+    let active = true;
+    queueMicrotask(() => {
+      if (active) refresh();
+    });
+    return () => {
+      active = false;
+    };
   }, [refresh]);
 
   const begin = useCallback(
@@ -95,7 +103,7 @@ export function useCheckoutRecovery({ walletAddress = null, storage, ttlMs, now 
         return null;
       }
     },
-    [refresh, storageRef],
+    [readNow, refresh, storageRef],
   );
 
   const trackStage = useCallback(
@@ -109,7 +117,7 @@ export function useCheckoutRecovery({ walletAddress = null, storage, ttlMs, now 
         return null;
       }
     },
-    [refresh, storageRef],
+    [readNow, refresh, storageRef],
   );
 
   const forget = useCallback(() => {
