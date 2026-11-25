@@ -1,6 +1,6 @@
 /**
  * Deterministic sorting contract for mixed-status records and events
- * (Issue #887, extended for events and resumable paging).
+ * (Issue #887, extended for events and resumable paging #1141).
  *
  * Records (sortRecords):
  *   1. Status precedence (active records first, deleted last)
@@ -195,10 +195,12 @@ function sortWith(items, comparator) {
  * @param {string} [options.timestampField='createdAt'] - Field to sort by
  * @param {boolean} [options.descending=true] - Newest first when true
  * @param {object} [options.statusPrecedence] - Custom status precedence map
+ * @param {(record: object) => boolean} [options.isVisible] - Authorization filter, applied before sorting
  * @returns {Array} New sorted array (does not mutate input)
  */
 export function sortRecords(records, options = {}) {
-  return sortWith(records, createRecordComparator(options));
+  const visible = typeof options.isVisible === "function" && Array.isArray(records) ? records.filter(options.isVisible) : records;
+  return sortWith(visible, createRecordComparator(options));
 }
 
 /**
@@ -209,10 +211,12 @@ export function sortRecords(records, options = {}) {
  * @param {string} [options.timestampField] - Field to sort by; default is the first present of occurredAt, timestamp, createdAt, at
  * @param {boolean} [options.descending=false] - Newest first when true
  * @param {object} [options.statusRank] - Custom lifecycle rank map
+ * @param {(event: object) => boolean} [options.isVisible] - Authorization filter, applied before sorting
  * @returns {Array} New sorted array (does not mutate input)
  */
 export function sortEvents(events, options = {}) {
-  return sortWith(events, createEventComparator(options));
+  const visible = typeof options.isVisible === "function" && Array.isArray(events) ? events.filter(options.isVisible) : events;
+  return sortWith(visible, createEventComparator(options));
 }
 
 function comparatorFor(kind, options) {

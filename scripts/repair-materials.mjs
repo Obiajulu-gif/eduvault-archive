@@ -16,12 +16,30 @@
  *   MONGODB_URI=$URI node scripts/repair-materials.mjs --target <id>      # dry-run specific
  *   MONGODB_URI=$URI node scripts/repair-materials.mjs --target <id> --apply
  *
+ * Checkpointed plan workflow (#1084, recommended for production — see
+ * docs/repair-plans.md). Every plan command requires --operator <id> (or
+ * REPAIR_OPERATOR) for attribution:
+ *   ... --plan <planId>                                  # resumable dry-run; prints planHash
+ *   ... --plan-status <planId>                           # report for review
+ *   ... --apply-plan <planId> --plan-hash <hash>         # apply exactly the reviewed plan
+ *   ... --rollback-plan <planId> --reason "<why>"        # restore before-values
+ *
  * Required env vars:
  *   MONGODB_URI  — MongoDB connection string
  * Optional env vars:
  *   MONGODB_DB   — database name (default: eduvault)
  *   DRY_RUN      — set to "true" to force dry-run
  */
+
+import { MongoClient } from "mongodb";
+
+import {
+  applyRepairPlan,
+  planRepair,
+  rollbackRepairPlan,
+  summarizePlan,
+} from "../src/lib/maintenance/repairPlan.js";
+import { MATERIAL_REPAIR_RULE_VERSION, detectMaterialRepair } from "../src/lib/maintenance/materialRepairRules.js";
 
 function log(level, message, extra = {}) {
   process.stdout.write(`${JSON.stringify({ level, message, timestamp: new Date().toISOString(), ...extra })}\n`);
@@ -126,9 +144,9 @@ export async function repairMaterial(db, materialId, { dryRun = true } = {}) {
     repairedAt: new Date(),
     previousValues: fixes.reduce((acc, f) => { acc[f.field] = f.oldValue; return acc; }, {}),
   };
-  await auditColl.insertOne(auditRecord);
+  const inserted = await auditColl.insertOne(auditRecord);
 
-  return { ok: true, materialId, repaired: true, fixes, auditRecordId: auditRecord._id };
+  return { ok: true, materialId, repaired: true, fixes, auditRecordId: inserted?.insertedId ?? auditRecord._id };
 }
 
 export async function writeAuditRecord(db, record) {
@@ -168,7 +186,42 @@ export async function runRepair({ mongoClient, targetId = null, dryRun = true, d
   };
 }
 
-const isDirectCli = process.argv[1] && process.argv[1].includes("repair-materials");
+function argValue(argv, flag) {
+  const index = argv.indexOf(flag);
+  return index !== -1 ? argv[index + 1] ?? null : null;
+}
+
+/**
+ * Runs one checkpointed plan command (#1084). Returns null when argv holds no
+ * plan command, so the legacy direct-repair path keeps its behaviour.
+ *
+ * The CLI's authorization boundary is the database credential in MONGODB_URI;
+ * an operator id is still mandatory so every plan, apply and rollback is
+ * attributed in `repair_plans` and the audit ledger.
+ */
+export async function runPlanCommand({ db, argv, operator }) {
+  const planId = argValue(argv, "--plan") ?? argValue(argv, "--plan-status") ?? argValue(argv, "--apply-plan") ?? argValue(argv, "--rollback-plan");
+  if (!planId) return null;
+  if (!operator) throw new Error("Plan commands require --operator <id> or REPAIR_OPERATOR");
+  const common = { db, planId, actor: operator, authorize: (actor) => typeof actor === "string" && actor.trim().length > 0 };
+
+  if (argv.includes("--plan")) {
+    return planRepair({
+      ...common,
+      collectionName: "materials",
+      detect: detectMaterialRepair,
+      ruleVersion: MATERIAL_REPAIR_RULE_VERSION,
+      batchSize: Number(argValue(argv, "--batch-size")) || 100,
+    });
+  }
+  if (argv.includes("--plan-status")) return summarizePlan(db, planId);
+  if (argv.includes("--apply-plan")) {
+    return applyRepairPlan({ ...common, expectedPlanHash: argValue(argv, "--plan-hash") });
+  }
+  return rollbackRepairPlan({ ...common, reason: argValue(argv, "--reason") });
+}
+
+const isDirectCli = process.argv[1] && /repair-materials\.mjs$/.test(process.argv[1]);
 
 if (isDirectCli) {
   (async () => {
@@ -186,6 +239,17 @@ if (isDirectCli) {
     const client = new MongoClient(mongoUri, { serverSelectionTimeoutMS: 10000 });
     try {
       await client.connect();
+
+      const planResult = await runPlanCommand({
+        db: client.db(dbName),
+        argv: process.argv,
+        operator: argValue(process.argv, "--operator") || process.env.REPAIR_OPERATOR || null,
+      });
+      if (planResult) {
+        log("info", "Repair plan command completed", planResult);
+        process.exit(0);
+      }
+
       log("info", "Repair started", { dryRun, targetId, db: dbName });
 
       const result = await runRepair({ mongoClient: client, targetId, dryRun, dbName });
@@ -207,7 +271,7 @@ if (isDirectCli) {
 
       process.exit(0);
     } catch (err) {
-      log("error", "Repair failed", { error: err.message });
+      log("error", "Repair failed", { error: err.message, code: err.code ?? null });
       process.exit(1);
     } finally {
       await client.close().catch(() => {});

@@ -139,8 +139,6 @@ export async function POST(request) {
           return NextResponse.json({ error: quotaError.message, resource: quotaError.resource }, { status: 429 });
         }
 
-        const now = new Date();
-        const importBatchId = randomUUID();
         const quarantineCol = db.collection("quarantine");
 
         // A stable human-readable label for the import source, so a maintainer

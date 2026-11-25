@@ -142,7 +142,6 @@ const diff = computePermissionDiff({
       )
     }
 
-    const actor = admin.walletAddress || admin.sub
     await users.updateOne(
       { _id: new ObjectId(userId), role: target.role },
       { $set: { role, updatedAt: new Date() } },

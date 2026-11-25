@@ -2,7 +2,7 @@
 
 Running a rollback is not the same as being back where you started. A rollback can half-apply, run against data the forward step never saw, or leave indexes and checkpoints behind. This feature proves the data is restored after a failed migration or deployment, and refuses to continue when it is not.
 
-Code: `src/lib/migrations/rollbackVerification.js`. CLI: `scripts/verify-rollback.mjs` (`npm run verify:rollback`). Tests: `src/lib/migrations/__tests__/rollbackVerification.test.js`. It complements the [Migration Safety Framework](MIGRATION_SAFETY_FRAMEWORK.md) (dry-run, checkpoints, rollback notes) and the pre-release `checkRollbackReadiness` (is a recent backup available?). Those say a way back exists; this proves you used it correctly.
+Code: `src/lib/migrations/rollbackVerification.js`. CLI: `scripts/verify-rollback.mjs` (`npm run verify:rollback`). Tests: `tests/backend/rollback-verification.test.mjs`. It complements the [Migration Safety Framework](MIGRATION_SAFETY_FRAMEWORK.md) (dry-run, checkpoints, rollback notes) and the pre-release `checkRollbackReadiness` (is a recent backup available?). Those say a way back exists; this proves you used it correctly.
 
 ## How it works
 
