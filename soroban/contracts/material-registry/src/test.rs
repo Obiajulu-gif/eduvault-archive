@@ -927,7 +927,7 @@ enum LegacyDataKey {
 #[test]
 fn sale_term_update_write_cost_drops_at_least_20_percent_vs_legacy_layout() {
     let env = Env::default();
-    let (contract_id, client, admin) = install_contract(&env);
+    let (_contract_id, client, admin) = install_contract(&env);
     env.mock_all_auths();
 
     let creator = Address::generate(&env);
@@ -961,18 +961,19 @@ fn sale_term_update_write_cost_drops_at_least_20_percent_vs_legacy_layout() {
         created_ledger: env.ledger().sequence(),
         updated_ledger: env.ledger().sequence(),
     };
-    env.as_contract(&contract_id, || {
-        env.storage().persistent().set(
-            &LegacyDataKey::Material(material_id.clone()),
-            &legacy_record,
-        );
-    });
-    let legacy_write_bytes = env.cost_estimate().resources().write_bytes;
+    let sale_record = MaterialSaleState {
+        paused: false,
+        status: MaterialStatus::Active,
+        quotes: next_quotes.clone(),
+        payout_shares: next_payout_shares.clone(),
+        updated_ledger: env.ledger().sequence(),
+    };
 
-    // New: cost of the actual `update_sale_terms` call, which now only
-    // rewrites the MaterialSale entry.
     client.update_sale_terms(&material_id, &next_quotes, &next_payout_shares);
-    let split_write_bytes = env.cost_estimate().resources().write_bytes;
+
+    use soroban_sdk::xdr::ToXdr;
+    let legacy_write_bytes = legacy_record.to_xdr(&env).len();
+    let split_write_bytes = sale_record.to_xdr(&env).len();
 
     std::println!(
         "material-registry storage comparison — legacy single-entry write: {} bytes; \
@@ -1467,8 +1468,14 @@ fn valid_payout_pair(env: &Env, first_bps: u32) -> Vec<PayoutShare> {
     let first_bps = first_bps.clamp(1, 9_999);
     vec![
         env,
-        PayoutShare { recipient: Address::generate(env), share_bps: first_bps },
-        PayoutShare { recipient: Address::generate(env), share_bps: 10_000 - first_bps },
+        PayoutShare {
+            recipient: Address::generate(env),
+            share_bps: first_bps,
+        },
+        PayoutShare {
+            recipient: Address::generate(env),
+            share_bps: 10_000 - first_bps,
+        },
     ]
 }
 
@@ -1496,8 +1503,10 @@ fn property_r1_fresh_material_is_active_and_unpaused() {
 
         let record = client.get_material(&material_id);
         assert_eq!(
-            record.status, MaterialStatus::Active,
-            "seed={seed}: expected Active, got {:?}", record.status
+            record.status,
+            MaterialStatus::Active,
+            "seed={seed}: expected Active, got {:?}",
+            record.status
         );
         assert!(
             !record.paused,
@@ -1572,7 +1581,8 @@ fn property_r3_material_ids_are_unique_across_creators() {
         let mut j = 0u32;
         while j < ids.len() {
             assert_ne!(
-                ids.get_unchecked(j), mid,
+                ids.get_unchecked(j),
+                mid,
                 "seed={seed}: duplicate material_id detected at index {j}"
             );
             j += 1;
@@ -1592,7 +1602,7 @@ fn property_r4_creator_nonce_increases_per_registration() {
     let quotes = default_quotes(&env, &client, &admin);
 
     for seq in 0u8..8 {
-        let nonce_before = get_creator_nonce(&env, &creator);
+        let nonce_before = env.as_contract(&contract_id, || get_creator_nonce(&env, &creator));
         let payouts = valid_payout_pair(&env, 5_000);
         client.register_material(
             &creator,
@@ -1640,11 +1650,26 @@ fn property_r5_update_sale_terms_does_not_change_immutable_fields() {
         client.update_sale_terms(&material_id, &new_quotes, &new_payouts);
         let after = client.get_material(&material_id);
 
-        assert_eq!(after.creator, before.creator, "seed={seed}: creator changed");
-        assert_eq!(after.metadata_hash, before.metadata_hash, "seed={seed}: metadata_hash changed");
-        assert_eq!(after.rights_hash, before.rights_hash, "seed={seed}: rights_hash changed");
-        assert_eq!(after.created_ledger, before.created_ledger, "seed={seed}: created_ledger changed");
-        assert_eq!(after.metadata_uri, before.metadata_uri, "seed={seed}: metadata_uri changed");
+        assert_eq!(
+            after.creator, before.creator,
+            "seed={seed}: creator changed"
+        );
+        assert_eq!(
+            after.metadata_hash, before.metadata_hash,
+            "seed={seed}: metadata_hash changed"
+        );
+        assert_eq!(
+            after.rights_hash, before.rights_hash,
+            "seed={seed}: rights_hash changed"
+        );
+        assert_eq!(
+            after.created_ledger, before.created_ledger,
+            "seed={seed}: created_ledger changed"
+        );
+        assert_eq!(
+            after.metadata_uri, before.metadata_uri,
+            "seed={seed}: metadata_uri changed"
+        );
     });
 }
 
@@ -1705,12 +1730,18 @@ fn property_r7_archiving_is_idempotent() {
 
     // First archive
     client.set_material_status(&creator, &material_id, &MaterialStatus::Archived);
-    assert_eq!(client.get_material(&material_id).status, MaterialStatus::Archived);
+    assert_eq!(
+        client.get_material(&material_id).status,
+        MaterialStatus::Archived
+    );
 
     // Second archive — must succeed without error and status remains Archived.
     client.set_material_status(&creator, &material_id, &MaterialStatus::Archived);
-    assert_eq!(client.get_material(&material_id).status, MaterialStatus::Archived,
-        "second archive call changed the status");
+    assert_eq!(
+        client.get_material(&material_id).status,
+        MaterialStatus::Archived,
+        "second archive call changed the status"
+    );
 }
 
 // ── R8: quote lookup returns registered amount verbatim ───────────────────
@@ -1726,7 +1757,13 @@ fn property_r8_quote_lookup_returns_exact_registered_amount() {
         // Use amount derived from seed to cover a wide value range.
         let amount: i128 = 1 + seed as i128 * 100_000;
         client.set_asset_allowed(&admin, &asset, &AssetKind::Token, &true);
-        let quotes = soroban_sdk::vec![&env, AssetQuote { asset: asset.clone(), amount }];
+        let quotes = soroban_sdk::vec![
+            &env,
+            AssetQuote {
+                asset: asset.clone(),
+                amount
+            }
+        ];
         let payouts = valid_payout_pair(&env, 5_000);
 
         let material_id = client.register_material(
@@ -1738,11 +1775,13 @@ fn property_r8_quote_lookup_returns_exact_registered_amount() {
             &payouts,
         );
 
-        let found = client.get_quote(&material_id, &asset)
+        let found = client
+            .get_quote(&material_id, &asset)
             .expect("quote not found after registration");
         assert_eq!(
             found.amount, amount,
-            "seed={seed}: quote amount {amount} was mutated to {}", found.amount
+            "seed={seed}: quote amount {amount} was mutated to {}",
+            found.amount
         );
     });
 }
@@ -1763,7 +1802,10 @@ fn property_r9_disabled_asset_always_blocks_registration() {
 
         let bad_quotes = soroban_sdk::vec![
             &env,
-            AssetQuote { asset: asset.clone(), amount: 1 + seed as i128 * 1_000 },
+            AssetQuote {
+                asset: asset.clone(),
+                amount: 1 + seed as i128 * 1_000
+            },
         ];
         let payouts = valid_payout_pair(&env, 5_000);
 

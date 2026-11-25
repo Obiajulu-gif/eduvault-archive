@@ -1,0 +1,25 @@
+{
+  "_id": "compat-mat-native-0002",
+  "schemaVersion": 2,
+  "title": "Stellar Payments Lab",
+  "description": "Listing created after the v2 rollout, written directly in the v2 shape.",
+  "category": "Computer Science",
+  "subject": "Blockchain",
+  "level": "advanced",
+  "price": 0,
+  "asset": "XLM",
+  "userAddress": "GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN7",
+  "visibility": "public",
+  "pricingTier": "free",
+  "sorobanEntitlementConfig": {
+    "contractId": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABSC4",
+    "tokenStandard": "SEP-0041",
+    "transferrable": false
+  },
+  "rightsMetadata": {
+    "commercialUse": false,
+    "educationalOnly": true,
+    "distributionAllowed": true
+  },
+  "createdAt": "2026-10-01T00:00:00.000Z"
+}
