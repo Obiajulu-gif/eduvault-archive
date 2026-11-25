@@ -9,6 +9,7 @@ import {
 } from "@/lib/transactions/checkoutRecovery";
 
 const NOW = 1_700_000_000_000;
+const NOW_FN = () => NOW;
 const WALLET = "GCUSTOMER...";
 
 const ITEMS = [{ id: "mat-1", title: "Lecture notes", price: 4 }];
@@ -25,7 +26,7 @@ function makeStorage(initial = {}) {
 function renderRecovery(storage, walletAddress = WALLET) {
   return renderHook(
     ({ wallet }) =>
-      useCheckoutRecovery({ storage, walletAddress: wallet, now: () => NOW }),
+      useCheckoutRecovery({ storage, walletAddress: wallet, now: NOW_FN }),
     { initialProps: { wallet: walletAddress } },
   );
 }

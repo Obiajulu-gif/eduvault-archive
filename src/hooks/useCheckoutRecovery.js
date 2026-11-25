@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import {
   CHECKOUT_RECOVERY_TTL_MS,
@@ -38,9 +38,7 @@ export function useCheckoutRecovery({ walletAddress = null, storage, ttlMs, now 
   const [status, setStatus] = useState(RecoveryStatus.Idle);
   const [decision, setDecision] = useState(null);
   const storageRef = useMemo(() => resolveCheckoutStorage(storage), [storage]);
-  const readAt = useRef(clock);
-
-  readAt.current = () => clock(now);
+  const readNow = useCallback(() => clock(now), [now]);
 
   const refresh = useCallback(() => {
     if (!storageRef) {
@@ -48,13 +46,13 @@ export function useCheckoutRecovery({ walletAddress = null, storage, ttlMs, now 
       setDecision(
         classifyCheckoutRecovery(
           { status: "unavailable" },
-          { now: readAt.current(), ttlMs: ttlMs ?? CHECKOUT_RECOVERY_TTL_MS, walletAddress },
+          { now: readNow(), ttlMs: ttlMs ?? CHECKOUT_RECOVERY_TTL_MS, walletAddress },
         ),
       );
       return null;
     }
 
-    const at = readAt.current();
+    const at = readNow();
     const result = readCheckoutRecovery(at, storageRef);
     const next = classifyCheckoutRecovery(result, {
       now: at,
@@ -75,7 +73,7 @@ export function useCheckoutRecovery({ walletAddress = null, storage, ttlMs, now 
     }
 
     return next;
-  }, [storageRef, ttlMs, walletAddress]);
+  }, [readNow, storageRef, ttlMs, walletAddress]);
 
   useEffect(() => {
     refresh();
@@ -87,7 +85,7 @@ export function useCheckoutRecovery({ walletAddress = null, storage, ttlMs, now 
       try {
         const record = saveCheckoutRecovery(
           { items, walletAddress: attemptWallet, intent },
-          readAt.current(),
+          readNow(),
           storageRef,
         );
         refresh();
@@ -104,7 +102,7 @@ export function useCheckoutRecovery({ walletAddress = null, storage, ttlMs, now 
     (stage, patch = {}) => {
       if (!storageRef) return null;
       try {
-        const record = recordCheckoutSigningStage(stage, patch, readAt.current(), storageRef);
+        const record = recordCheckoutSigningStage(stage, patch, readNow(), storageRef);
         refresh();
         return record;
       } catch {
