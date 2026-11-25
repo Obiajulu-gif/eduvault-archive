@@ -75,12 +75,11 @@ export const COLLECTIONS = {
   // Migration / deployment runs and their rollback verification evidence. See
   // src/lib/migrations/rollbackVerification.js.
   rollbackVerifications: "rollback_verifications",
-  // #Issue 2: Versioned migration notes and compatibility fixtures
-  migrationNotes: "migration_notes",
-  // #Issue 3: Deterministic recovery tests for interrupted multi-step operations
-  recoveryTests: "recovery_tests",
-  // #Issue 4: Learner data exports with permission-aware redaction
-  learnerExports: "learner_exports",
+  entitlementReconciliations: "entitlement_reconciliations",
+  uploadSessions: "upload_sessions",
+  uploadChunks: "upload_chunks",
+  scanProvenance: "scan_provenance",
+  payoutSettlementReconciliations: "payout_settlement_reconciliations",
 };
 
 export const REQUIRED_INDEXES = {
@@ -256,23 +255,28 @@ export const REQUIRED_INDEXES = {
     },
     { keys: { name: 1, startedAt: -1 }, options: { name: "rollback_verifications_name_started_idx" } },
   ],
-  migration_notes: [
-    { keys: { migrationId: 1, version: 1 }, options: { unique: true, name: "migration_notes_unique_idx" } },
-    { keys: { targetCollections: 1, createdAt: 1 }, options: { name: "migration_notes_collection_idx" } },
-    { keys: { phase: 1 }, options: { name: "migration_notes_phase_idx" } },
-    { keys: { compatibilityLevel: 1 }, options: { name: "migration_notes_compat_idx" } },
+  entitlement_reconciliations: [
+    { keys: { planId: 1 }, options: { unique: true, name: "entitlement_reconciliations_plan_idx" } },
+    { keys: { refundId: 1 }, options: { unique: true, name: "entitlement_reconciliations_refund_idx" } },
+    { keys: { status: 1, createdAt: -1 }, options: { name: "entitlement_reconciliations_status_idx", background: true } },
   ],
-  recovery_tests: [
-    { keys: { testId: 1 }, options: { unique: true, name: "recovery_tests_id_idx" } },
-    { keys: { operationType: 1, testedAt: -1 }, options: { name: "recovery_tests_operation_idx" } },
-    { keys: { interruptionPoint: 1, status: 1 }, options: { name: "recovery_tests_interruption_idx" } },
-    { keys: { status: 1, testedAt: -1 }, options: { name: "recovery_tests_status_idx" } },
+  upload_sessions: [
+    { keys: { uploader: 1, state: 1, expiresAt: 1 }, options: { name: "upload_sessions_owner_state_idx", background: true } },
+    { keys: { expiresAt: 1 }, options: { name: "upload_sessions_expiry_idx", background: true } },
   ],
-  learner_exports: [
-    { keys: { exportId: 1 }, options: { unique: true, name: "learner_exports_id_idx" } },
-    { keys: { "subject.walletAddress": 1, generatedAt: -1 }, options: { name: "learner_exports_subject_idx" } },
-    { keys: { "requestedBy.id": 1, generatedAt: -1 }, options: { name: "learner_exports_requester_idx" } },
-    { keys: { permissionLevel: 1, generatedAt: -1 }, options: { name: "learner_exports_permission_idx" } },
+  upload_chunks: [
+    { keys: { sessionId: 1, chunkIndex: 1 }, options: { unique: true, name: "upload_chunks_session_chunk_idx" } },
+  ],
+  scan_provenance: [
+    { keys: { idempotencyKey: 1 }, options: { unique: true, name: "scan_provenance_idempotency_idx" } },
+    { keys: { evidenceId: 1 }, options: { unique: true, name: "scan_provenance_evidence_idx" } },
+    { keys: { byteHash: 1, contentHash: 1 }, options: { name: "scan_provenance_content_idx", background: true } },
+    { keys: { contentHash: 1, scannedAt: -1 }, options: { name: "scan_provenance_timeline_idx", background: true } },
+  ],
+  payout_settlement_reconciliations: [
+    { keys: { eventId: 1 }, options: { unique: true, name: "payout_settlement_event_idx" } },
+    { keys: { payoutId: 1, createdAt: -1 }, options: { name: "payout_settlement_payout_idx", background: true } },
+    { keys: { status: 1, updatedAt: -1 }, options: { name: "payout_settlement_status_idx", background: true } },
   ],
   saved_materials: [
     { keys: { walletAddress: 1, savedAt: -1 } },

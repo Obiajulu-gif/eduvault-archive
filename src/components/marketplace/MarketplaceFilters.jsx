@@ -35,13 +35,13 @@ export default function MarketplaceFilters({
   onPageReset,
 }) {
   const [searchInput, setSearchInput] = useState(searchQuery);
+  const [prevSearchQuery, setPrevSearchQuery] = useState(searchQuery);
   const debounceRef = useRef(null);
 
-  useEffect(() => {
-    clearTimeout(debounceRef.current);
-    debounceRef.current = null;
+  if (prevSearchQuery !== searchQuery) {
+    setPrevSearchQuery(searchQuery);
     setSearchInput(searchQuery);
-  }, [searchQuery]);
+  }
 
   useEffect(() => () => clearTimeout(debounceRef.current), []);
 

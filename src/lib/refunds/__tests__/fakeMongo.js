@@ -62,7 +62,10 @@ function setPath(doc, path, value) {
   target[parts[parts.length - 1]] = value;
 }
 
-function applyUpdate(doc, update) {
+function applyUpdate(doc, update, { inserting = false } = {}) {
+  if (inserting && update.$setOnInsert) {
+    for (const [path, value] of Object.entries(update.$setOnInsert)) setPath(doc, path, value);
+  }
   if (update.$set) {
     for (const [path, value] of Object.entries(update.$set)) setPath(doc, path, value);
   }
@@ -137,9 +140,15 @@ export function createFakeCollection({ uniqueKey } = {}) {
       };
       return cursor;
     },
-    async updateOne(query, update) {
+    async updateOne(query, update, options = {}) {
       const doc = docs.find((d) => matches(d, query));
-      if (!doc) return { matchedCount: 0 };
+      if (!doc) {
+        if (!options.upsert) return { matchedCount: 0 };
+        const inserted = { _id: query._id || update.$set?._id || new ObjectId() };
+        applyUpdate(inserted, update, { inserting: true });
+        docs.push(inserted);
+        return { matchedCount: 0, upsertedCount: 1, upsertedId: inserted._id };
+      }
       applyUpdate(doc, update);
       return { matchedCount: 1 };
     },

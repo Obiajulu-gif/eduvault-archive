@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useState, useCallback } from "react";
 import { FaDownload, FaExternalLinkAlt, FaShoppingBag, FaSpinner, FaCheckCircle, FaUndoAlt } from "react-icons/fa";
 import { MdOutlineSchool } from "react-icons/md";
@@ -52,13 +53,13 @@ function EmptyState() {
       <p className="text-sm text-gray-500 max-w-xs mb-6">
         Head over to the marketplace to discover and purchase educational materials.
       </p>
-      <a
+      <Link
         href="/marketplace"
         className="inline-flex items-center gap-2 px-5 py-2.5 bg-blue-600 text-white text-sm font-medium rounded-full hover:bg-blue-700 transition-colors"
       >
         <FaShoppingBag size={14} />
         Browse Marketplace
-      </a>
+      </Link>
     </div>
   );
 }
