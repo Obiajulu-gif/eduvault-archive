@@ -42,7 +42,7 @@ export const dynamic = "force-dynamic";
 // equivalent payloads (whitespace, casing, default ports, trailing slashes,
 // duplicates) produce the same stored representation. Non-canonical input
 // is either normalized or rejected consistently.
- export async function PUT request) {
+export async function PUT(request) {
   try {
     const authorization = await requirePermission(request, "creator:manage");
     if (!authorization.ok) {

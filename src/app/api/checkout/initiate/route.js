@@ -105,7 +105,7 @@ async function handlePost(req) {
     const issuerAddress = typeof asset === 'object' ? asset.issuer : undefined;
     const trustlineCheck = await checkBuyerTrustline(buyerAddress, assetCode, issuerAddress);
 
-    if (!trustlineCheck.hasPtrustline) {
+    if (!trustlineCheck.hasTrustline) {
       return NextResponse.json({
         error: 'missing_trustline',
         message: trustlineCheck.instructions.message,
@@ -146,7 +146,7 @@ async function handlePost(req) {
       expiresAt: new Date(now.getTime() + CHECKOUT_INTENT_EXPIRY),
     };
 
-const { intent: storedIntent, duplicate } = await insertCheckoutIntent(db, checkoutIntent);
+    const { intent: storedIntent, duplicate } = await insertCheckoutIntent(db, checkoutIntent);
 
     // Emit a signed receipt for the checkout intent. Repeated requests for
     // the same checkout id are idempotent and return the existing receipt.
@@ -164,12 +164,17 @@ const { intent: storedIntent, duplicate } = await insertCheckoutIntent(db, check
         totalAmount: checkoutWithTax.totalAmount,
         taxAmount: checkoutWithTax.taxAmount,
         discountCode: storedIntent.discountCode,
+      },
+      idempotencyKey: String(storedIntent._id),
+      db,
+    });
 
     return NextResponse.json(
       {
         success: true,
         duplicate,
         checkoutId: storedIntent._id,
+        receiptId: receipt?._id,
         checkout: {
           ...checkoutWithTax,
           checkoutId: storedIntent._id,
@@ -178,25 +183,6 @@ const { intent: storedIntent, duplicate } = await insertCheckoutIntent(db, check
           discountPercentage: storedIntent.discountPercentage,
           discountAmount: storedIntent.discountAmount,
           originalAmount: storedIntent.originalAmount,
-        },
-      },
-idempotencyKey: String(result.insertedId),
-      db,
-    });
-
-    return NextResponse.json(
-      {
-        success: true,
-        checkoutId: result.insertedId,
-        receiptId: receipt._id,
-        checkout: {
-          ...checkoutWithTax,
-          checkoutId: result.insertedId,
-          expiresAt: checkoutIntent.expiresAt,
-          discountCode: checkoutIntent.discountCode,
-          discountPercentage: checkoutIntent.discountPercentage,
-          discountAmount: checkoutIntent.discountAmount,
-          originalAmount: checkoutIntent.originalAmount,
         },
       },
       { status: duplicate ? 200 : 201 }

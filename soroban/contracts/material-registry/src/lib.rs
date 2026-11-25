@@ -316,9 +316,10 @@ impl MaterialRegistry {
             .get::<_, u32>(&DataKey::SaleTermsVersion(material_id.clone()))
             .unwrap_or(0)
             + 1;
-        env.storage()
-            .instance()
-            .set(&DataKey::SaleTermsVersion(material_id.clone()), &next_version);
+        env.storage().instance().set(
+            &DataKey::SaleTermsVersion(material_id.clone()),
+            &next_version,
+        );
 
         MaterialSaleTermsUpdatedEvent {
             material_id,

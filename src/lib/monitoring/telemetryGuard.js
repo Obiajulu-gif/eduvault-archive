@@ -20,6 +20,15 @@
  *   so `kept + suppressed` always equals the true volume.
  * - Redaction of secret-shaped values lives in telemetry.js
  *   (`redactSensitive`); this module only bounds structure and shape.
+ * - Trace-coherent sampling (#1086): an optional head-sampling rate keyed on
+ *   the correlation id keeps or drops *whole traces*, so a request and its
+ *   retries (same correlation id) get the same decision. It applies to
+ *   successes only — failures are never trace-sampled — and its drops are
+ *   tallied exactly like token-bucket drops. Default rate 1 = disabled.
+ * - Sampling overrides (#1086): time-boxed, per-operation or per-trace rate
+ *   changes for incident debugging. This module only stores and applies them;
+ *   authorization, validation and audit live in telemetry.js
+ *   (`applyTelemetrySamplingOverride`). Overrides can change *sampling* only.
  */
 
 export const OVERFLOW_LABEL = "__overflow__";
@@ -84,7 +93,33 @@ export const DEFAULT_GUARD_CONFIG = Object.freeze({
   failure: Object.freeze({ burst: 300, refillPerSec: 150 }),
   global: Object.freeze({ burst: 2000, refillPerSec: 1000, failureReserveRatio: 0.2 }),
   fields: Object.freeze({ maxKeys: 40, maxArrayLength: 50, maxDepth: 5 }),
+  // Head-sampling rate for successful records, keyed on correlationId (1 = keep all).
+  traceSampleRate: 1,
+  // Per-operation head-sampling rates, e.g. { "catalog.search": 0.1 }.
+  operationSampleRates: Object.freeze({}),
+  maxOverrides: 20,
 });
+
+/** Clamp a sampling rate into [0, 1]; anything unusable means "keep everything". */
+export function normalizeSampleRate(value, fallback = 1) {
+  const rate = typeof value === "string" && value.trim() !== "" ? Number(value) : value;
+  if (typeof rate !== "number" || !Number.isFinite(rate)) return fallback;
+  return Math.min(1, Math.max(0, rate));
+}
+
+/**
+ * Deterministic position of a trace in [0, 1): FNV-1a over the correlation id.
+ * Same id → same position on every instance and every retry, no randomness.
+ */
+export function traceSamplePosition(correlationId) {
+  let hash = 0x811c9dc5;
+  const text = String(correlationId);
+  for (let i = 0; i < text.length; i += 1) {
+    hash ^= text.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193) >>> 0;
+  }
+  return hash / 0x100000000;
+}
 
 /**
  * Validate one label value.
@@ -208,7 +243,11 @@ export function createTelemetryGuard({ now = () => Date.now(), config: overrides
     failure: { ...DEFAULT_GUARD_CONFIG.failure, ...overrides.failure },
     global: { ...DEFAULT_GUARD_CONFIG.global, ...overrides.global },
     fields: { ...DEFAULT_GUARD_CONFIG.fields, ...overrides.fields },
+    operationSampleRates: { ...DEFAULT_GUARD_CONFIG.operationSampleRates, ...overrides.operationSampleRates },
   };
+  config.traceSampleRate = normalizeSampleRate(config.traceSampleRate);
+
+  const samplingOverrides = new Map(); // id -> { id, operation?, correlationId?, rate, expiresAt }
 
   const series = new Map(); // seriesKey -> entry
   const errorCodes = new Map(); // errorCode -> lastSeen
@@ -217,6 +256,7 @@ export function createTelemetryGuard({ now = () => Date.now(), config: overrides
   const stats = {
     accepted: 0,
     sampledOut: 0,
+    traceSampledOut: 0,
     overflowed: 0,
     lostSuppressed: 0,
     labelRejections: {},
@@ -317,6 +357,39 @@ export function createTelemetryGuard({ now = () => Date.now(), config: overrides
     return true;
   }
 
+  function pruneOverrides(t) {
+    for (const [id, override] of samplingOverrides) {
+      if (override.expiresAt <= t) samplingOverrides.delete(id);
+    }
+  }
+
+  /**
+   * Effective head-sampling rate for a successful record. Precedence: a trace
+   * override, then the highest matching operation override, then the static
+   * per-operation rate, then the global trace rate.
+   */
+  function effectiveSampleRate(record, t) {
+    pruneOverrides(t);
+    let operationOverride = null;
+    for (const override of samplingOverrides.values()) {
+      if (override.correlationId && override.correlationId === record.correlationId) return override.rate;
+      if (override.operation && override.operation === record.operation) {
+        operationOverride = Math.max(operationOverride ?? 0, override.rate);
+      }
+    }
+    if (operationOverride !== null) return operationOverride;
+    const configured = config.operationSampleRates[record.operation];
+    return configured !== undefined ? normalizeSampleRate(configured) : config.traceSampleRate;
+  }
+
+  function traceKept(record, t) {
+    const rate = effectiveSampleRate(record, t);
+    if (rate >= 1) return true;
+    // No correlation id → no trace to keep coherent; fail open for visibility.
+    if (!record.correlationId) return true;
+    return traceSamplePosition(record.correlationId) < rate;
+  }
+
   /**
    * Apply label validation, cardinality limits, sampling, and field bounds.
    * @returns {{emit: boolean, record: object}}
@@ -353,6 +426,14 @@ export function createTelemetryGuard({ now = () => Date.now(), config: overrides
     const value = typeof next.value === "number" ? next.value : 0;
     entry.total += 1;
     if (isFailure) entry.failures += 1;
+
+    if (!isFailure && !traceKept(next, t)) {
+      entry.suppressedCount += 1;
+      entry.suppressedValue += value;
+      stats.sampledOut += 1;
+      stats.traceSampledOut += 1;
+      return { emit: false, record: next };
+    }
 
     if (!keepDecision(entry, isFailure, t)) {
       entry.suppressedCount += 1;
@@ -423,12 +504,59 @@ export function createTelemetryGuard({ now = () => Date.now(), config: overrides
     globalBucket.updated = now();
     stats.accepted = 0;
     stats.sampledOut = 0;
+    stats.traceSampledOut = 0;
     stats.overflowed = 0;
     stats.lostSuppressed = 0;
     stats.labelRejections = {};
     stats.fieldsDropped = { keys: 0, items: 0 };
     lastSummaryAt = now();
+    samplingOverrides.clear();
   }
 
-  return { process, summaryDue, drainSummaries, getStats, reset, config };
+  /**
+   * Store a validated override. Returns `{ status: "created" | "unchanged" }`
+   * or throws when the table is full. Callers own validation and authorization.
+   */
+  function setSamplingOverride(override) {
+    const t = now();
+    pruneOverrides(t);
+    const existing = samplingOverrides.get(override.id);
+    if (existing) return { status: "unchanged", override: { ...existing } };
+    if (samplingOverrides.size >= config.maxOverrides) {
+      const error = new Error(`At most ${config.maxOverrides} sampling overrides may be active`);
+      error.code = "TELEMETRY_OVERRIDE_LIMIT";
+      throw error;
+    }
+    const stored = { ...override, createdAt: t };
+    samplingOverrides.set(override.id, stored);
+    return { status: "created", override: { ...stored } };
+  }
+
+  function getSamplingOverride(id) {
+    pruneOverrides(now());
+    const found = samplingOverrides.get(id);
+    return found ? { ...found } : null;
+  }
+
+  function clearSamplingOverride(id) {
+    return samplingOverrides.delete(id);
+  }
+
+  function listSamplingOverrides() {
+    pruneOverrides(now());
+    return [...samplingOverrides.values()].map((override) => ({ ...override }));
+  }
+
+  return {
+    process,
+    summaryDue,
+    drainSummaries,
+    getStats,
+    reset,
+    config,
+    setSamplingOverride,
+    getSamplingOverride,
+    clearSamplingOverride,
+    listSamplingOverrides,
+  };
 }

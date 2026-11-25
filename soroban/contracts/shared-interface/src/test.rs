@@ -180,7 +180,11 @@ fn assert_valid_schema(event: &EventSchema) {
 fn event_schema_snapshots_are_valid_and_complete() {
     // At minimum the publish, sale-update, purchase, refund and entitlement
     // lifecycle events must be snapshotted.
-    assert!(ALL.len() >= 5, "expected 5+ event schemas, got {}", ALL.len());
+    assert!(
+        ALL.len() >= 5,
+        "expected 5+ event schemas, got {}",
+        ALL.len()
+    );
 
     for expected in [
         "material.registered",
@@ -251,7 +255,13 @@ fn purchase_event_schema_snapshot() {
     assert_eq!(ev.name, "purchase.completed");
     assert_eq!(
         ev.topics,
-        &["purchase", "completed", "purchase_id", "material_id", "buyer"]
+        &[
+            "purchase",
+            "completed",
+            "purchase_id",
+            "material_id",
+            "buyer"
+        ]
     );
     assert_eq!(
         ev.fields,
@@ -280,7 +290,10 @@ fn bulk_purchase_event_schema_snapshot() {
         ev.topics,
         &["purchase", "bulk_completed", "purchaser", "material_id"]
     );
-    assert_eq!(ev.fields, &["recipient_count", "unit_price", "total_paid", "asset"]);
+    assert_eq!(
+        ev.fields,
+        &["recipient_count", "unit_price", "total_paid", "asset"]
+    );
 }
 
 #[test]
@@ -289,9 +302,18 @@ fn refund_event_schema_snapshot() {
     assert_eq!(ev.name, "purchase.refunded");
     assert_eq!(
         ev.topics,
-        &["purchase", "refunded", "purchase_id", "material_id", "buyer"]
+        &[
+            "purchase",
+            "refunded",
+            "purchase_id",
+            "material_id",
+            "buyer"
+        ]
     );
-    assert_eq!(ev.fields, &["asset", "refund_amount", "entitlement_revoked"]);
+    assert_eq!(
+        ev.fields,
+        &["asset", "refund_amount", "entitlement_revoked"]
+    );
     // The entitlement-revoked column must stay on the refund event.
     assert!(ev.fields.contains(&"entitlement_revoked"));
 }
@@ -363,10 +385,7 @@ fn property_max_refund_never_exceeds_original_payment() {
         }
 
         // Invariant 2: refund ≥ 0 always.
-        assert!(
-            refund >= 0,
-            "seed={seed}: refund {refund} is negative"
-        );
+        assert!(refund >= 0, "seed={seed}: refund {refund} is negative");
     });
 }
 
@@ -502,15 +521,43 @@ fn property_payout_share_round_trips_across_bps_values() {
 #[test]
 fn property_enum_discriminants_are_stable_across_full_value_range() {
     // MaterialStatus
-    assert_eq!(MaterialStatus::Active as u32, 0, "MaterialStatus::Active discriminant changed");
-    assert_eq!(MaterialStatus::Paused as u32, 1, "MaterialStatus::Paused discriminant changed");
-    assert_eq!(MaterialStatus::Archived as u32, 2, "MaterialStatus::Archived discriminant changed");
+    assert_eq!(
+        MaterialStatus::Active as u32,
+        0,
+        "MaterialStatus::Active discriminant changed"
+    );
+    assert_eq!(
+        MaterialStatus::Paused as u32,
+        1,
+        "MaterialStatus::Paused discriminant changed"
+    );
+    assert_eq!(
+        MaterialStatus::Archived as u32,
+        2,
+        "MaterialStatus::Archived discriminant changed"
+    );
 
     // AssetKind
-    assert_eq!(AssetKind::Native as u32, 0, "AssetKind::Native discriminant changed");
-    assert_eq!(AssetKind::Token as u32, 1, "AssetKind::Token discriminant changed");
-    assert_eq!(AssetKind::CreatorToken as u32, 2, "AssetKind::CreatorToken discriminant changed");
-    assert_eq!(AssetKind::InstitutionAsset as u32, 3, "AssetKind::InstitutionAsset discriminant changed");
+    assert_eq!(
+        AssetKind::Native as u32,
+        0,
+        "AssetKind::Native discriminant changed"
+    );
+    assert_eq!(
+        AssetKind::Token as u32,
+        1,
+        "AssetKind::Token discriminant changed"
+    );
+    assert_eq!(
+        AssetKind::CreatorToken as u32,
+        2,
+        "AssetKind::CreatorToken discriminant changed"
+    );
+    assert_eq!(
+        AssetKind::InstitutionAsset as u32,
+        3,
+        "AssetKind::InstitutionAsset discriminant changed"
+    );
 }
 
 // ── Invariant: MIN_ADMIN_TRANSFER_DELAY_SECS is always exactly 3600 (1 hour).
@@ -540,20 +587,32 @@ fn property_all_event_schemas_always_carry_entitlement_lifecycle_columns() {
     // Not seed-dependent: sweeping over ALL indices instead.
     for (i, schema) in events::ALL.iter().enumerate() {
         assert!(!schema.name.is_empty(), "schema[{i}]: empty name");
-        assert!(schema.topics.len() >= 2, "schema[{i}] '{}': fewer than 2 topics", schema.name);
-        assert!(!schema.fields.is_empty(), "schema[{i}] '{}': no payload fields", schema.name);
+        assert!(
+            schema.topics.len() >= 2,
+            "schema[{i}] '{}': fewer than 2 topics",
+            schema.name
+        );
+        assert!(
+            !schema.fields.is_empty(),
+            "schema[{i}] '{}': no payload fields",
+            schema.name
+        );
     }
 
     // The two cross-contract entitlement columns must appear on their
     // respective events and must not have been silently removed.
-    let purchase_schema = events::ALL.iter().find(|e| e.name == "purchase.completed")
+    let purchase_schema = events::ALL
+        .iter()
+        .find(|e| e.name == "purchase.completed")
         .expect("purchase.completed schema missing from events::ALL");
     assert!(
         purchase_schema.fields.contains(&"entitlement_active"),
         "purchase.completed is missing 'entitlement_active' payload field"
     );
 
-    let refund_schema = events::ALL.iter().find(|e| e.name == "purchase.refunded")
+    let refund_schema = events::ALL
+        .iter()
+        .find(|e| e.name == "purchase.refunded")
         .expect("purchase.refunded schema missing from events::ALL");
     assert!(
         refund_schema.fields.contains(&"entitlement_revoked"),

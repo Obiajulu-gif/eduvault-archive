@@ -372,7 +372,7 @@ export async function GET(request) {
         .aggregate([
           {
             $match: {
-              materialId: { $in": materialIdStrings },
+              materialId: { $in: materialIdStrings },
               status: { $in: ["failed", "error", "rejected"] },
               createdAt: { $gte: trendFrom, $lte: trendTo },
             },
@@ -392,7 +392,7 @@ export async function GET(request) {
         .aggregate([
           {
             $match: {
-              materialId: { $in": materialIdStrings },
+              materialId: { $in: materialIdStrings },
               status: { $in: ["recovered", "refunded", "retried"] },
               createdAt: { $gte: trendFrom, $lte: trendTo },
             },
