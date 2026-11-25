@@ -78,7 +78,6 @@ export default function UploadWizard() {
     clearTransaction,
   } = useTransactionCenter();
 
-  const chainMismatch = address && chainId && !isChainSupported(chainId);
 
   useEffect(() => {
     async function loadTaxonomy() {

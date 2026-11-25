@@ -194,6 +194,7 @@ npm run test:contracts
 - [Backend Contracts](docs/backend-contracts.md)
 - [Record Provenance](docs/provenance.md)
 - [Stellar Purchase Flow](docs/stellar-purchase-flow.md)
+- [Checkout Signing Recovery](docs/checkout-signing-recovery.md)
 - [Stellar Wallet Setup](docs/stellar-wallet-setup.md)
 - [Creator Publishing Guide](docs/creator-publishing-guide.md)
 - [Soroban Contract Architecture](docs/soroban-contract-architecture.md)
