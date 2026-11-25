@@ -1,5 +1,6 @@
 export const dynamic = 'force-dynamic'
 
+import { createHash } from 'node:crypto'
 import { NextResponse } from 'next/server'
 import { auditLog } from '@/lib/api/audit'
 import { withApiHardening } from '@/lib/api/hardening'
@@ -154,11 +155,13 @@ export async function POST(request) {
 
         // Concurrent upload execution via Promise.allSettled
         const uploadPromises = files.map(async (file, index) => {
+          const byteHash = createHash('sha256').update(Buffer.from(await file.arrayBuffer())).digest('hex')
           const uploadedFile = await pinata.upload.public.file(file)
           const gatewayUrl = await pinata.gateways.public.convert(uploadedFile.cid)
           const quarantine = await createQuarantineRecord({
             db,
             contentHash: uploadedFile.cid,
+            byteHash,
             fileName: file.name,
             mimeType: file.type,
             sizeBytes: file.size,
@@ -172,12 +175,15 @@ export async function POST(request) {
             intent: {
               type: 'indexer',
               channel: 'scan_content',
+              action: 'scan_content',
               payload: {
+                action: 'scan_content',
                 contentHash: quarantine.contentHash,
+                byteHash,
+                expectedByteHash: byteHash,
                 fileName: quarantine.fileName,
                 mimeType: quarantine.mimeType,
                 sizeBytes: quarantine.sizeBytes,
-                action: 'scan',
               },
             },
           })

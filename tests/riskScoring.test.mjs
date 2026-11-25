@@ -13,6 +13,8 @@ import {
   RISK_LEVELS,
   GATE_ACTIONS,
   DEFAULT_THRESHOLDS,
+  assertRiskScoringAuthorized,
+  RiskScoringAuthorizationError,
 } from "../src/lib/security/riskScoring.js";
 
 // ---------------------------------------------------------------------------
@@ -262,5 +264,93 @@ describe("score bounds", () => {
     });
     assert.equal(result.level, RISK_LEVELS.LOW);
     assert.equal(result.gate, GATE_ACTIONS[RISK_LEVELS.LOW]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Normal, Failure, Retry, and Authorization paths (#1155)
+// ---------------------------------------------------------------------------
+
+describe("riskScoring — failure paths", () => {
+  it("rejects non-string or empty action with TypeError", () => {
+    assert.throws(() => scoreAction(null, {}), TypeError);
+    assert.throws(() => scoreAction("", {}), TypeError);
+    assert.throws(() => scoreAction(123, {}), TypeError);
+  });
+
+  it("rejects non-object context with TypeError", () => {
+    assert.throws(() => scoreAction(HIGH_IMPACT_ACTIONS.PURCHASE_HIGH_VALUE, null), TypeError);
+    assert.throws(() => scoreAction(HIGH_IMPACT_ACTIONS.PURCHASE_HIGH_VALUE, "string-ctx"), TypeError);
+  });
+
+  it("gracefully catches throwing custom signal evaluate() without failing evaluation", () => {
+    const scorer = createRiskScorer({
+      extraSignals: [{
+        id: "buggy_signal",
+        weight: 0.1,
+        actions: null,
+        evaluate: () => { throw new Error("Database timeout in signal"); },
+        explain: () => "Failed",
+      }],
+    });
+
+    const result = scorer.score(HIGH_IMPACT_ACTIONS.PURCHASE_HIGH_VALUE, lowRiskCtx());
+    assert.ok(result);
+    assert.equal(result.level, RISK_LEVELS.LOW);
+    const buggySig = result.contributors.find((c) => c.signalId === "buggy_signal");
+    assert.ok(buggySig);
+    assert.equal(buggySig.contribution, 0);
+    assert.ok(buggySig.error.includes("Database timeout"));
+  });
+});
+
+describe("riskScoring — retry paths", () => {
+  it("marks low and medium risk actions as retryable", () => {
+    const result = scoreAction(HIGH_IMPACT_ACTIONS.PURCHASE_HIGH_VALUE, lowRiskCtx());
+    assert.equal(result.retryable, true);
+    assert.equal(result.retryCount, 0);
+  });
+
+  it("marks critical risk actions as not retryable", () => {
+    const extremeCtx = {
+      actorAccountAgeDays: 0,
+      amountUsd: 10000,
+      actorPreviousPurchases: 0,
+      newDevice: true,
+      actorActionCountLastHour: 50,
+      geoAnomaly: true,
+      retryCount: 4,
+    };
+    const result = scoreAction(HIGH_IMPACT_ACTIONS.PURCHASE_HIGH_VALUE, extremeCtx);
+    assert.equal(result.level, RISK_LEVELS.CRITICAL);
+    assert.equal(result.retryable, false);
+    assert.equal(result.retryCount, 4);
+    assert.equal(result.gate, "block");
+  });
+});
+
+describe("riskScoring — authorization paths", () => {
+  it("assertRiskScoringAuthorized allows admin, operator, and service actors", () => {
+    assert.doesNotThrow(() => assertRiskScoringAuthorized({ role: "admin" }));
+    assert.doesNotThrow(() => assertRiskScoringAuthorized({ role: "operator" }));
+    assert.doesNotThrow(() => assertRiskScoringAuthorized({ role: "service" }));
+  });
+
+  it("assertRiskScoringAuthorized rejects unauthenticated or unprivileged actors", () => {
+    assert.throws(() => assertRiskScoringAuthorized(null), RiskScoringAuthorizationError);
+    assert.throws(() => assertRiskScoringAuthorized({ role: "creator" }), RiskScoringAuthorizationError);
+    assert.throws(() => assertRiskScoringAuthorized({ role: "student" }), RiskScoringAuthorizationError);
+    assert.throws(() => assertRiskScoringAuthorized({ role: "viewer" }), RiskScoringAuthorizationError);
+  });
+
+  it("enforces actor authorization when options.actor is supplied", () => {
+    assert.throws(
+      () => scoreAction(HIGH_IMPACT_ACTIONS.ADMIN_ROLE_GRANT, {}, { actor: { role: "student" } }),
+      RiskScoringAuthorizationError
+    );
+
+    const authorized = scoreAction(HIGH_IMPACT_ACTIONS.ADMIN_ROLE_GRANT, {}, { actor: { role: "admin" } });
+    assert.ok(authorized);
+    assert.equal(authorized.action, HIGH_IMPACT_ACTIONS.ADMIN_ROLE_GRANT);
   });
 });

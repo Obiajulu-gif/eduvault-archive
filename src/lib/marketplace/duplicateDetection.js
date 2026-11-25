@@ -201,18 +201,33 @@ export function compareMaterials(matA, matB, options = {}) {
  * @param {Array<object>} materials
  * @param {object} [options]
  * @param {number} [options.threshold=0.85]
+ * @param {() => Date} [options.now] - Clock for `detectedAt` (inject for reproducible output).
  * @returns {Array<object>} Candidate duplicate review pairs
  */
 export function detectDuplicates(materials, options = {}) {
   if (!Array.isArray(materials)) return [];
   const threshold = options.threshold ?? DEFAULT_SIMILARITY_THRESHOLD;
 
-  // Sort deterministically by createdAt, then materialId
+  const now = typeof options.now === 'function' ? options.now : () => new Date();
+  const detectedAt = now().toISOString();
+
+  // Sort deterministically by createdAt, then materialId. An unparseable
+  // createdAt sorts as epoch 0: returning NaN from a comparator makes the
+  // order (and therefore which record is "canonical") depend on input order.
+  // Ids compare by code unit, not localeCompare, so the result does not
+  // depend on the host's ICU locale data.
+  const timeOf = (m) => {
+    const t = new Date(m.createdAt || 0).getTime();
+    return Number.isFinite(t) ? t : 0;
+  };
+  const idOf = (m) => String(m.materialId || m._id || '');
   const sorted = [...materials].sort((a, b) => {
-    const timeA = new Date(a.createdAt || 0).getTime();
-    const timeB = new Date(b.createdAt || 0).getTime();
+    const timeA = timeOf(a);
+    const timeB = timeOf(b);
     if (timeA !== timeB) return timeA - timeB;
-    return String(a.materialId || a._id || '').localeCompare(String(b.materialId || b._id || ''));
+    const idA = idOf(a);
+    const idB = idOf(b);
+    return idA < idB ? -1 : idA > idB ? 1 : 0;
   });
 
   const candidates = [];
@@ -238,7 +253,7 @@ export function detectDuplicates(materials, options = {}) {
           reasons: comparison.reasons,
           fingerprintCanonical: comparison.fingerprintA,
           fingerprintDuplicate: comparison.fingerprintB,
-          detectedAt: new Date().toISOString(),
+          detectedAt,
         });
       }
     }

@@ -1,12 +1,178 @@
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
-import { getDb } from '@/lib/mongodb';
-import { logger } from '@/lib/logger';
-import { ensureCorrelationId } from '@/lib/monitoring/telemetry';
-import { validateWebhookDestination, safeFetch, SsrfError } from './ssrfGuard';
+import { getDb } from '../mongodb.js';
+import { logger } from '../logger.js';
+import { ensureCorrelationId } from '../monitoring/telemetry.js';
+import { validateWebhookDestination, safeFetch, SsrfError } from './ssrfGuard.js';
 
 const replayCache = new Map();
 const DEFAULT_REPLAY_TTL_SECONDS = 300;
 const DEFAULT_ROTATION_GRACE_SECONDS = 86400;
+
+// ─── Replay-window enforcement — Issue #1096 ─────────────────────────────
+//
+// A per-endpoint configurable replay-window enforcer that:
+//   - Accepts a custom `replayWindowSeconds` per receiver instance so
+//     high-throughput endpoints can use a tighter window and low-volume ones
+//     a broader grace period.
+//   - Rejects delivery when the signed timestamp falls outside the window
+//     (future-dated and past-dated payloads both rejected).
+//   - Tracks seen signatures in an internal LRU-like map; evicts expired
+//     entries on every verify call to bound memory.
+//   - Exposes `stats()` for observability and `clear()` for test isolation.
+//   - Treats missing, malformed, or unsigned headers as rejections.
+
+export class ReplayWindowViolationError extends Error {
+  constructor(reason) {
+    super(`Webhook replay-window violation: ${reason}`);
+    this.name = 'ReplayWindowViolationError';
+    this.code = 'REPLAY_WINDOW_VIOLATION';
+    this.reason = reason;
+    this.status = 400;
+  }
+}
+
+/**
+ * Create a stateful replay-window enforcer for a webhook receiver.
+ *
+ * @param {object} [options]
+ * @param {number}   [options.replayWindowSeconds=300]  Symmetric skew window (past and future).
+ * @param {number}   [options.maxCacheSize=10000]       Max signatures held before forced eviction.
+ * @param {Function} [options.now]                       Injectable clock: () => unix seconds.
+ * @returns {{ verify, stats, clear }}
+ */
+export function createReplayWindowEnforcer({
+  replayWindowSeconds = DEFAULT_REPLAY_TTL_SECONDS,
+  maxCacheSize = 10_000,
+  now = () => Math.floor(Date.now() / 1000),
+} = {}) {
+  if (!Number.isFinite(replayWindowSeconds) || replayWindowSeconds <= 0) {
+    throw new TypeError('replayWindowSeconds must be a positive number');
+  }
+
+  // signature → expiresAt (unix seconds)
+  const seen = new Map();
+  let _accepted = 0;
+  let _rejectedExpired = 0;
+  let _rejectedReplay = 0;
+  let _rejectedMalformed = 0;
+
+  function evictExpired(nowSec) {
+    for (const [key, expiresAt] of seen.entries()) {
+      if (expiresAt <= nowSec) seen.delete(key);
+    }
+  }
+
+  function enforceMaxSize() {
+    if (seen.size < maxCacheSize) return;
+    // Evict oldest entries (insertion order) until below limit
+    const toDelete = seen.size - Math.floor(maxCacheSize * 0.8);
+    let deleted = 0;
+    for (const key of seen.keys()) {
+      if (deleted >= toDelete) break;
+      seen.delete(key);
+      deleted++;
+    }
+  }
+
+  /**
+   * Verify a signed webhook delivery against the replay window.
+   *
+   * @param {string} body              Raw request body string.
+   * @param {string} signatureHeader   Value of the X-EduVault-Signature header.
+   * @param {string} secret            Expected signing secret.
+   * @returns {true}                   On success.
+   * @throws {ReplayWindowViolationError}  On any rejection.
+   */
+  function verify(body, signatureHeader, secret) {
+    const nowSec = now();
+    evictExpired(nowSec);
+
+    if (!body || !signatureHeader || !secret) {
+      _rejectedMalformed++;
+      throw new ReplayWindowViolationError('missing body, signature header, or secret');
+    }
+
+    // Parse "t=<ts>,v1=<hex>" header
+    let timestamp;
+    let signature;
+    try {
+      const parts = Object.fromEntries(
+        signatureHeader.split(',').map((p) => {
+          const eq = p.indexOf('=');
+          return [p.slice(0, eq), p.slice(eq + 1)];
+        }),
+      );
+      timestamp = Number(parts.t);
+      signature = parts.v1;
+    } catch {
+      _rejectedMalformed++;
+      throw new ReplayWindowViolationError('malformed signature header');
+    }
+
+    if (!Number.isFinite(timestamp) || !signature) {
+      _rejectedMalformed++;
+      throw new ReplayWindowViolationError('malformed signature header fields');
+    }
+
+    // Skew check: reject if the timestamp is outside ±replayWindowSeconds
+    const skew = Math.abs(nowSec - timestamp);
+    if (skew > replayWindowSeconds) {
+      _rejectedExpired++;
+      throw new ReplayWindowViolationError(
+        `timestamp is ${skew}s away from server time; window is ±${replayWindowSeconds}s`,
+      );
+    }
+
+    // Replay check: reject if we have already processed this exact signature
+    const cacheKey = signatureHeader;
+    if (seen.has(cacheKey)) {
+      _rejectedReplay++;
+      throw new ReplayWindowViolationError('replayed signature already processed');
+    }
+
+    // HMAC verification
+    const signedPayload = `${timestamp}.${body}`;
+    const expected = createHmac('sha256', secret).update(signedPayload).digest('hex');
+    const expectedBuf = Buffer.from(expected, 'hex');
+    const receivedBuf = Buffer.from(signature, 'hex');
+    const valid =
+      expectedBuf.length === receivedBuf.length && timingSafeEqual(expectedBuf, receivedBuf);
+
+    if (!valid) {
+      _rejectedMalformed++;
+      throw new ReplayWindowViolationError('HMAC signature mismatch');
+    }
+
+    // Record the signature so it cannot be replayed within the window
+    enforceMaxSize();
+    seen.set(cacheKey, timestamp + replayWindowSeconds);
+    _accepted++;
+    return true;
+  }
+
+  function stats() {
+    return {
+      replayWindowSeconds,
+      cacheSize: seen.size,
+      accepted: _accepted,
+      rejectedExpired: _rejectedExpired,
+      rejectedReplay: _rejectedReplay,
+      rejectedMalformed: _rejectedMalformed,
+    };
+  }
+
+  function clear() {
+    seen.clear();
+    _accepted = 0;
+    _rejectedExpired = 0;
+    _rejectedReplay = 0;
+    _rejectedMalformed = 0;
+  }
+
+  return { verify, stats, clear };
+}
+
+// ─── End replay-window enforcement ───────────────────────────────────────
 
 function replayCacheKey(signatureHeader) {
   return signatureHeader;
@@ -220,7 +386,7 @@ export async function sendWebhookWithRetry(url, payload, retries = 3, { signingS
   return false;
 }
 
-import { enqueueSideEffect, getNextCausalLink } from '@/lib/backend/outbox';
+import { enqueueSideEffect, getNextCausalLink } from '../backend/outbox.js';
 
 export async function broadcastPurchaseEvent(materialId, purchaseData) {
   try {
