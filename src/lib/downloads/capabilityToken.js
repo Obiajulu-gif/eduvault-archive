@@ -23,6 +23,8 @@ const CAPABILITY_TOKEN_SECRET =
 // download, short enough that a leaked URL (referrer header, browser
 // history, proxy log) stops working quickly.
 export const CAPABILITY_TTL_MS = Number(process.env.CAPABILITY_TTL_MS || 15_000);
+export const CAPABILITY_MIN_TTL_MS = Number(process.env.CAPABILITY_MIN_TTL_MS || 1_000);
+export const CAPABILITY_MAX_TTL_MS = Number(process.env.CAPABILITY_MAX_TTL_MS || 300_000);
 
 // Maximum bytes a single capability can serve (prevents quota bypass).
 export const CAPABILITY_MAX_BYTES = Number(process.env.CAPABILITY_MAX_BYTES || 10_000_000); // 10MB
@@ -43,17 +45,40 @@ function signaturesMatch(expectedHex, receivedHex) {
  * quota. The signature covers the full payload, so a client cannot alter
  * any field (byte range, expiry, buyer) without invalidating the token.
  */
-export function generateCapabilityToken({ buyer, material, byteRangeStart, byteRangeEnd, nonce }) {
-  const issuedAtMs = Date.now();
+export function generateCapabilityToken({
+  buyer,
+  material,
+  byteRangeStart,
+  byteRangeEnd,
+  maxBytes,
+  ttlMs,
+  nonce,
+  now = Date.now(),
+}) {
+  const issuedAtMs = now;
+  const effectiveTtlMs =
+    ttlMs !== undefined && ttlMs !== null ? Number(ttlMs) : CAPABILITY_TTL_MS;
+  const rangeBytes =
+    byteRangeEnd !== null && byteRangeEnd !== undefined
+      ? byteRangeEnd - byteRangeStart + 1
+      : undefined;
+  const effectiveQuota =
+    maxBytes !== undefined && maxBytes !== null
+      ? Number(maxBytes)
+      : rangeBytes !== undefined
+        ? rangeBytes
+        : CAPABILITY_MAX_BYTES;
+
   const payload = {
     buyer,
     material,
     byteRangeStart,
     byteRangeEnd,
-    byteRangeQuota: byteRangeEnd !== null && byteRangeEnd !== undefined ? byteRangeEnd - byteRangeStart + 1 : undefined,
+    byteRangeQuota: effectiveQuota,
+    maxBytes: effectiveQuota,
     nonce: nonce || uuidv4(),
     iat: issuedAtMs,
-    exp: issuedAtMs + CAPABILITY_TTL_MS,
+    exp: issuedAtMs + effectiveTtlMs,
     jti: uuidv4(),
   };
 
@@ -65,12 +90,22 @@ export function generateCapabilityToken({ buyer, material, byteRangeStart, byteR
 }
 
 /**
- * Verify a capability token's signature, expiry, and identity binding.
+ * Verify a capability token's signature, expiry, identity binding, and byte limits.
  * Returns the decoded payload on success, or `{ valid: false, reason }` on
  * any failure — the reason is for audit logging, never surfaced to the
  * client as anything more specific than a generic 403/410.
  */
-export function verifyCapabilityToken(token, { buyerAddress, materialId } = {}) {
+export function verifyCapabilityToken(
+  token,
+  {
+    buyerAddress,
+    materialId,
+    requestedBytes,
+    requestedRangeStart,
+    requestedRangeEnd,
+    now = Date.now(),
+  } = {}
+) {
   if (!token) return { valid: false, reason: 'missing_token' };
 
   let envelope;
@@ -106,18 +141,59 @@ export function verifyCapabilityToken(token, { buyerAddress, materialId } = {}) 
     return { valid: false, reason: 'missing_nonce' };
   }
 
-  const requestedBytes =
+  const tokenQuota = payload.maxBytes ?? payload.byteRangeQuota;
+  const payloadBytes =
     payload.byteRangeEnd !== undefined && payload.byteRangeEnd !== null
       ? payload.byteRangeEnd - payload.byteRangeStart + 1
-      : payload.byteRangeQuota;
-  if (payload.byteRangeQuota !== undefined && requestedBytes > payload.byteRangeQuota) {
+      : tokenQuota;
+  if (tokenQuota !== undefined && payloadBytes > tokenQuota) {
     return { valid: false, reason: 'byte_range_quota_exceeded' };
   }
-  if (requestedBytes !== undefined && requestedBytes > CAPABILITY_MAX_BYTES) {
+  if (payloadBytes !== undefined && payloadBytes > CAPABILITY_MAX_BYTES) {
+    return { valid: false, reason: 'byte_range_exceeds_max' };
+  }
+  if (tokenQuota !== undefined && tokenQuota > CAPABILITY_MAX_BYTES) {
     return { valid: false, reason: 'byte_range_exceeds_max' };
   }
 
-  const now = Date.now();
+  // Enforce redemption-time byte limit if caller specifies requested bytes or range
+  if (requestedBytes !== undefined && requestedBytes !== null) {
+    if (!Number.isSafeInteger(requestedBytes) || requestedBytes <= 0) {
+      return { valid: false, reason: 'invalid_requested_bytes' };
+    }
+    if (tokenQuota !== undefined && requestedBytes > tokenQuota) {
+      return { valid: false, reason: 'requested_bytes_exceed_limit' };
+    }
+    if (requestedBytes > CAPABILITY_MAX_BYTES) {
+      return { valid: false, reason: 'byte_range_exceeds_max' };
+    }
+  }
+
+  if (requestedRangeStart !== undefined && requestedRangeEnd !== undefined) {
+    if (
+      !Number.isSafeInteger(requestedRangeStart) ||
+      !Number.isSafeInteger(requestedRangeEnd) ||
+      requestedRangeStart < 0 ||
+      requestedRangeEnd < requestedRangeStart
+    ) {
+      return { valid: false, reason: 'invalid_requested_range' };
+    }
+    if (requestedRangeStart < payload.byteRangeStart) {
+      return { valid: false, reason: 'requested_range_out_of_bounds' };
+    }
+    if (
+      payload.byteRangeEnd !== null &&
+      payload.byteRangeEnd !== undefined &&
+      requestedRangeEnd > payload.byteRangeEnd
+    ) {
+      return { valid: false, reason: 'requested_range_out_of_bounds' };
+    }
+    const reqRangeSize = requestedRangeEnd - requestedRangeStart + 1;
+    if (tokenQuota !== undefined && reqRangeSize > tokenQuota) {
+      return { valid: false, reason: 'requested_bytes_exceed_limit' };
+    }
+  }
+
   if (typeof payload.iat !== 'number' || payload.iat > now + 60_000) {
     return { valid: false, reason: 'future_dated' };
   }
