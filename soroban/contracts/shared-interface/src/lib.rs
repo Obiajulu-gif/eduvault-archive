@@ -83,11 +83,16 @@ pub mod decimals {
         if original_payment <= 0 || refund_ratio_bps == 0 {
             return 0;
         }
-        let bps = if refund_ratio_bps > 10_000 { 10_000 } else { refund_ratio_bps };
-        (original_payment * (bps as i128)) / 10_000
+        let bps = if refund_ratio_bps > 10_000 {
+            10_000
+        } else {
+            refund_ratio_bps
+        } as i128;
+        let q = original_payment / 10_000;
+        let r = original_payment % 10_000;
+        q * bps + (r * bps) / 10_000
     }
 }
-
 
 /// A single accepted-asset price quote for a material.
 #[contracttype]
@@ -231,7 +236,13 @@ pub mod events {
     /// `buyer`.
     pub const PURCHASE_COMPLETED: EventSchema = EventSchema {
         name: "purchase.completed",
-        topics: &["purchase", "completed", "purchase_id", "material_id", "buyer"],
+        topics: &[
+            "purchase",
+            "completed",
+            "purchase_id",
+            "material_id",
+            "buyer",
+        ],
         fields: &[
             "seller",
             "asset",
@@ -264,7 +275,13 @@ pub mod events {
     /// `buyer`.
     pub const PURCHASE_REFUNDED: EventSchema = EventSchema {
         name: "purchase.refunded",
-        topics: &["purchase", "refunded", "purchase_id", "material_id", "buyer"],
+        topics: &[
+            "purchase",
+            "refunded",
+            "purchase_id",
+            "material_id",
+            "buyer",
+        ],
         fields: &["asset", "refund_amount", "entitlement_revoked"],
     };
 
@@ -275,8 +292,7 @@ pub mod events {
     /// (granted) and `entitlement_revoked` (revoked). These two fields are
     /// the cross-contract entitlement schema and must stay present on their
     /// respective events.
-    pub const ENTITLEMENT_STATUS_FIELDS: &[&str] =
-        &["entitlement_active", "entitlement_revoked"];
+    pub const ENTITLEMENT_STATUS_FIELDS: &[&str] = &["entitlement_active", "entitlement_revoked"];
 
     /// Every production event schema tracked by the snapshot suite in
     /// `test.rs`. A new production event must be added here (and covered by a

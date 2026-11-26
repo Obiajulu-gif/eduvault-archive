@@ -165,17 +165,20 @@ export async function POST(request) {
         await enqueueSideEffect({
           sourceAggregate: 'quarantine',
           sourceId: quarantine.contentHash,
-          intent: {
-            type: 'indexer',
-            channel: 'scan_content',
-            payload: {
-              contentHash: quarantine.contentHash,
-              fileName: quarantine.fileName,
-              mimeType: quarantine.mimeType,
-              sizeBytes: quarantine.sizeBytes,
-              action: 'scan',
+            intent: {
+              type: 'indexer',
+              channel: 'scan_content',
+              action: 'scan_content',
+              payload: {
+                action: 'scan_content',
+                contentHash: quarantine.contentHash,
+                byteHash,
+                expectedByteHash: byteHash,
+                fileName: quarantine.fileName,
+                mimeType: quarantine.mimeType,
+                sizeBytes: quarantine.sizeBytes,
+              },
             },
-          },
         });
 
         // #638: generate a sandboxed structural preview off the request path.

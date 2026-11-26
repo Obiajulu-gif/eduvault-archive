@@ -199,8 +199,19 @@ function detectKind(text) {
 export function pseudonymize(value) {
   if (value === undefined || value === null || value === "") return value;
   const text = String(value).trim();
+  // Idempotent (#1086): telemetry pseudonymizes before delivery and the pino
+  // hook runs again on the same line. Re-hashing a pseudonym would give the
+  // same wallet two different ids in telemetry vs. plain logs.
+  if (isPseudonym(text)) return text;
   const { kind, normalized } = detectKind(text);
   return `${kind}#${hmacHex(normalized)}`;
+}
+
+const PSEUDONYM_PATTERN = new RegExp(`^(?:stellar|evm|email|ip|id)#[0-9a-f]{${PSEUDONYM_HEX_LENGTH}}$`);
+
+/** True for values already produced by `pseudonymize`. */
+export function isPseudonym(value) {
+  return typeof value === "string" && PSEUDONYM_PATTERN.test(value);
 }
 
 /** Replace identifier-shaped substrings (wallets, emails, IPs) inside free text. */
@@ -296,6 +307,20 @@ export function protectLogFields(fields) {
   const correlationId = getCorrelationId();
   if (correlationId && safe.correlationId === undefined) safe.correlationId = correlationId;
   return safe;
+}
+
+/**
+ * Field protection for telemetry `metadata` / `error` payloads (#1086). Same
+ * classify → pseudonymize → redact pipeline as log lines, but without
+ * injecting a correlation id (telemetry records carry their own). Applied in
+ * `telemetry.js` before delivery, so custom sinks/exporters get the same
+ * protection pino output does.
+ */
+export function protectTelemetryFields(fields) {
+  if (fields === null || fields === undefined || typeof fields !== "object") {
+    return typeof fields === "string" ? redactSensitive(maskIdentifiersInText(fields)) : fields;
+  }
+  return redactSensitive(protectFields(boundFields(fields).value));
 }
 
 /**

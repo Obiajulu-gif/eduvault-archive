@@ -1,11 +1,73 @@
-// Chunked upload API endpoint for large files (#740)
+export const dynamic = 'force-dynamic'
+export const runtime = 'nodejs'
+
 import { NextResponse } from 'next/server'
 import { auditLog } from '@/lib/api/audit'
 import { withApiHardening } from '@/lib/api/hardening'
+import { requireAdmin, requirePermission } from '@/lib/api/auth'
 import { getDb } from '@/lib/mongodb'
-import { UploadSessionManager, computeChunkHash, validateChunkIntegrity } from '@/lib/storage/chunkedUpload'
+import { pinata } from '@/lib/pinata'
+import { createQuarantineRecord } from '@/lib/publishing/quarantine'
+import { getClamAvSignatureVersion } from '@/lib/publishing/malwareScanner'
+import { enqueueSideEffect } from '@/lib/backend/outbox'
+import {
+  cleanupExpiredUploads,
+  createUploadSession,
+  finalizeUploadSession,
+  getUploadProgress,
+  pauseUploadSession,
+  recordUploadChunk,
+  ResumableUploadError,
+  resumeUploadSession,
+} from '@/lib/storage/resumableUpload'
 
-export const dynamic = 'force-dynamic'
+const BAD_REQUEST_CODES = new Set([
+  'INVALID_FILE_NAME',
+  'INVALID_FILE_SIZE',
+  'INVALID_CHUNK_SIZE',
+  'INVALID_MIME_TYPE',
+  'INVALID_EXPECTED_HASH',
+  'INVALID_CHUNK_INDEX',
+  'INVALID_CHUNK_SIZE',
+  'INVALID_SESSION_STATE',
+  'CHUNK_HASH_MISMATCH',
+  'INCOMPLETE_UPLOAD',
+  'MISSING_CHUNK',
+  'LENGTH_MISMATCH',
+  'BYTE_HASH_MISMATCH',
+  'MISSING_DEPENDENCY',
+])
+
+function statusForUploadError(error) {
+  if (!(error instanceof ResumableUploadError)) return 500
+  if (error.code === 'UNAUTHORIZED_UPLOAD') return 403
+  if (error.code === 'SESSION_NOT_FOUND') return 404
+  if (error.code === 'SESSION_EXPIRED') return 410
+  if (error.code === 'SESSION_FINALIZED') return 409
+  return BAD_REQUEST_CODES.has(error.code) ? 400 : 500
+}
+
+function errorResponse(error, event, metadata = {}) {
+  const status = statusForUploadError(error)
+  auditLog({
+    event,
+    route: 'upload/chunked',
+    method: 'POST',
+    status,
+    reason: error.message,
+    metadata,
+  })
+  return NextResponse.json(
+    { error: error.message, code: error.code || 'UPLOAD_FAILED' },
+    { status }
+  )
+}
+
+async function authenticatedUploader(request) {
+  const authorization = await requirePermission(request, 'creator:manage')
+  if (!authorization.ok) return { authorization }
+  return { authorization, uploader: authorization.user }
+}
 
 export async function POST(request) {
   return withApiHardening(
@@ -14,108 +76,68 @@ export async function POST(request) {
     async () => {
       try {
         const db = await getDb()
-        const sessionManager = new UploadSessionManager(db)
         const action = request.nextUrl.searchParams.get('action')
 
-        // Action: create-session
         if (action === 'create-session') {
+          const { uploader, authorization } = await authenticatedUploader(request)
+          if (!uploader) return authorization.response || NextResponse.json({ error: 'Creator access required' }, { status: authorization.status })
+
           const body = await request.json()
-          const {
-            fileName,
-            fileSize,
-            chunkSize = 5 * 1024 * 1024, // 5MB default
-            mimeType,
-          } = body
-
-          if (!fileName || !fileSize) {
-            return NextResponse.json(
-              { error: 'File name and size required' },
-              { status: 400 }
-            )
-          }
-
-          const totalChunks = Math.ceil(fileSize / chunkSize)
-          const creatorAddress = request.headers.get('x-wallet-address') || 'anonymous'
-
           try {
-            const session = await sessionManager.createSession(
-              { fileName, size: fileSize, mimeType, chunkSize },
-              {
-                chunkSize,
-                totalChunks,
-                creatorAddress,
-              }
-            )
-
+            const session = await createUploadSession({
+              db,
+              uploader,
+              metadata: {
+                fileName: body.fileName,
+                size: body.fileSize,
+                chunkSize: body.chunkSize,
+                mimeType: body.mimeType,
+                expectedHash: body.expectedHash || body.fileHash,
+              },
+            })
             auditLog({
               event: 'upload_session_created',
               route: 'upload/chunked',
               method: 'POST',
               status: 201,
-              metadata: { sessionId: session._id, totalChunks },
+              metadata: { sessionId: session._id, totalChunks: session.totalChunks },
             })
-
-            return NextResponse.json(
-              {
-                success: true,
-                sessionId: session._id,
-                uploadToken: session.uploadToken,
-                totalChunks,
-                chunkSize,
-                expiresIn: Math.round(
-                  (session.expiresAt - new Date()) / 1000
-                ),
-              },
-              { status: 201 }
-            )
+            return NextResponse.json({
+              success: true,
+              sessionId: session._id,
+              uploadToken: session.uploadToken,
+              totalChunks: session.totalChunks,
+              chunkSize: session.chunkSize,
+              expiresIn: Math.round((session.expiresAt - new Date()) / 1000),
+            }, { status: 201 })
           } catch (error) {
-            auditLog({
-              event: 'upload_session_create_failed',
-              route: 'upload/chunked',
-              method: 'POST',
-              status: 500,
-              reason: error.message,
-            })
-            return NextResponse.json(
-              { error: error.message },
-              { status: 500 }
-            )
+            return errorResponse(error, 'upload_session_create_failed')
           }
         }
 
-        // Action: upload-chunk
         if (action === 'upload-chunk') {
-          const { sessionId, chunkIndex, uploadToken } = await request.json()
+          const { uploader, authorization } = await authenticatedUploader(request)
+          if (!uploader) return authorization.response || NextResponse.json({ error: 'Creator access required' }, { status: authorization.status })
 
+          const body = await request.json()
+          const { sessionId, chunkIndex, uploadToken, chunkData, chunkHash } = body
           if (!sessionId || chunkIndex === undefined || !uploadToken) {
-            return NextResponse.json(
-              { error: 'Session ID, chunk index, and upload token required' },
-              { status: 400 }
-            )
+            return NextResponse.json({ error: 'Session ID, chunk index, and upload token required' }, { status: 400 })
+          }
+          if (typeof chunkData !== 'string' || !/^[A-Za-z0-9+/]*={0,2}$/.test(chunkData)) {
+            return NextResponse.json({ error: 'Base64 chunkData is required' }, { status: 400 })
           }
 
           try {
-            const session = await sessionManager.getSession(sessionId, uploadToken)
-
-            if (chunkIndex >= session.totalChunks || chunkIndex < 0) {
-              return NextResponse.json(
-                { error: `Invalid chunk index: ${chunkIndex}` },
-                { status: 400 }
-              )
-            }
-
-            // In production, this would receive the actual chunk data
-            // For now, we record the metadata
-            const chunkData = Buffer.alloc(0) // Placeholder
-            const chunkHash = await computeChunkHash(chunkData)
-
-            const progress = await sessionManager.recordChunkUpload(
+            const progress = await recordUploadChunk({
+              db,
               sessionId,
+              uploadToken,
+              uploader,
               chunkIndex,
-              chunkHash,
-              chunkData.length
-            )
-
+              chunkBytes: Buffer.from(chunkData, 'base64'),
+              expectedChunkHash: chunkHash,
+            })
             auditLog({
               event: 'chunk_uploaded',
               route: 'upload/chunked',
@@ -123,156 +145,138 @@ export async function POST(request) {
               status: 200,
               metadata: { sessionId, chunkIndex, percentage: progress.percentage },
             })
-
-            return NextResponse.json({
-              success: true,
-              chunkIndex,
-              uploadedBytes: progress.uploadedBytes,
-              totalBytes: session.totalBytes,
-              percentage: progress.percentage,
-              completedChunks: progress.completedChunks,
-            })
+            return NextResponse.json({ success: true, ...progress })
           } catch (error) {
-            auditLog({
-              event: 'chunk_upload_failed',
-              route: 'upload/chunked',
-              method: 'POST',
-              status: 400,
-              reason: error.message,
-            })
-            return NextResponse.json(
-              { error: error.message },
-              { status: 400 }
-            )
+            return errorResponse(error, 'chunk_upload_failed', { sessionId, chunkIndex })
           }
         }
 
-        // Action: finalize-upload
-        if (action === 'finalize-upload') {
-          const { sessionId, uploadToken, fileHash } = await request.json()
+        if (action === 'get-progress') {
+          const { uploader, authorization } = await authenticatedUploader(request)
+          if (!uploader) return authorization.response || NextResponse.json({ error: 'Creator access required' }, { status: authorization.status })
 
-          if (!sessionId || !uploadToken || !fileHash) {
-            return NextResponse.json(
-              { error: 'Session ID, upload token, and file hash required' },
-              { status: 400 }
-            )
+          const body = await request.json()
+          const { sessionId, uploadToken } = body
+          if (!sessionId || !uploadToken) {
+            return NextResponse.json({ error: 'Session ID and upload token required' }, { status: 400 })
+          }
+          try {
+            return NextResponse.json({
+              success: true,
+              ...await getUploadProgress({ db, sessionId, uploadToken, uploader }),
+            })
+          } catch (error) {
+            return errorResponse(error, 'upload_progress_failed', { sessionId })
+          }
+        }
+
+        if (action === 'pause-upload') {
+          const { uploader, authorization } = await authenticatedUploader(request)
+          if (!uploader) return authorization.response || NextResponse.json({ error: 'Creator access required' }, { status: authorization.status })
+
+          const body = await request.json()
+          const { sessionId, uploadToken } = body
+          if (!sessionId || !uploadToken) {
+            return NextResponse.json({ error: 'Session ID and upload token required' }, { status: 400 })
+          }
+          try {
+            return NextResponse.json({
+              success: true,
+              ...await pauseUploadSession({ db, sessionId, uploadToken, uploader }),
+            })
+          } catch (error) {
+            return errorResponse(error, 'upload_pause_failed', { sessionId })
+          }
+        }
+
+        if (action === 'resume-upload') {
+          const { uploader, authorization } = await authenticatedUploader(request)
+          if (!uploader) return authorization.response || NextResponse.json({ error: 'Creator access required' }, { status: authorization.status })
+
+          const body = await request.json()
+          const { sessionId, uploadToken } = body
+          if (!sessionId || !uploadToken) {
+            return NextResponse.json({ error: 'Session ID and upload token required' }, { status: 400 })
+          }
+          try {
+            return NextResponse.json({
+              success: true,
+              ...await resumeUploadSession({ db, sessionId, uploadToken, uploader }),
+            })
+          } catch (error) {
+            return errorResponse(error, 'upload_resume_failed', { sessionId })
+          }
+        }
+
+        if (action === 'finalize-upload') {
+          const { uploader, authorization } = await authenticatedUploader(request)
+          if (!uploader) return authorization.response || NextResponse.json({ error: 'Creator access required' }, { status: authorization.status })
+
+          const body = await request.json()
+          const { sessionId, uploadToken } = body
+          if (!sessionId || !uploadToken) {
+            return NextResponse.json({ error: 'Session ID and upload token required' }, { status: 400 })
           }
 
           try {
-            const session = await sessionManager.getSession(sessionId, uploadToken)
-            const verification = await sessionManager.verifyAndFinalizeSession(
+            const signatureVersion = await getClamAvSignatureVersion()
+            const result = await finalizeUploadSession({
+              db,
               sessionId,
-              fileHash
-            )
-
+              uploadToken,
+              uploader,
+              pinFn: async ({ bytes, fileName, mimeType }) => {
+                const file = new File([bytes], fileName, { type: mimeType })
+                const uploaded = await pinata.upload.public.file(file)
+                return {
+                  cid: uploaded.cid,
+                  url: await pinata.gateways.public.convert(uploaded.cid),
+                }
+              },
+              createQuarantineFn: (input) => createQuarantineRecord({ db, materialId: null, ...input }),
+              enqueueScanFn: async ({ quarantine }) => {
+                await enqueueSideEffect({
+                  sourceAggregate: 'quarantine',
+                  sourceId: quarantine.contentHash,
+                  intent: {
+                    type: 'indexer',
+                    channel: 'scan_content',
+                    action: 'scan_content',
+                    payload: {
+                      action: 'scan_content',
+                      contentHash: quarantine.contentHash,
+                      byteHash: quarantine.byteHash,
+                      expectedByteHash: quarantine.byteHash,
+                      sizeBytes: quarantine.sizeBytes,
+                      mimeType: quarantine.mimeType,
+                      scanner: signatureVersion ? 'clamav' : 'ipfs-fetch-scanner',
+                      signatureVersion: signatureVersion || 'unversioned',
+                    },
+                  },
+                })
+              },
+            })
             auditLog({
               event: 'upload_finalized',
               route: 'upload/chunked',
               method: 'POST',
               status: 200,
-              metadata: { sessionId },
+              metadata: { sessionId, cid: result.cid },
             })
-
-            return NextResponse.json({
-              success: true,
-              sessionId,
-              finalFileHash: verification.finalFileHash,
-              manifestHash: verification.manifestHash,
-              totalChunks: verification.totalChunks,
-              totalBytes: verification.totalBytes,
-              message: 'Upload verified and ready for pinning',
-            })
+            return NextResponse.json({ success: true, ...result })
           } catch (error) {
-            auditLog({
-              event: 'upload_finalization_failed',
-              route: 'upload/chunked',
-              method: 'POST',
-              status: 400,
-              reason: error.message,
-            })
-            return NextResponse.json(
-              { error: error.message },
-              { status: 400 }
-            )
+            return errorResponse(error, 'upload_finalization_failed', { sessionId })
           }
         }
 
-        // Action: get-progress
-        if (action === 'get-progress') {
-          const { sessionId } = await request.json()
-
-          if (!sessionId) {
-            return NextResponse.json(
-              { error: 'Session ID required' },
-              { status: 400 }
-            )
-          }
-
-          try {
-            const progress = await sessionManager.getSessionProgress(sessionId)
-            return NextResponse.json({ success: true, ...progress })
-          } catch (error) {
-            return NextResponse.json(
-              { error: error.message },
-              { status: 404 }
-            )
-          }
+        if (action === 'cleanup-expired') {
+          const admin = await requireAdmin(request)
+          if (!admin) return NextResponse.json({ error: 'Admin access required' }, { status: 403 })
+          const cleaned = await cleanupExpiredUploads({ db })
+          return NextResponse.json({ success: true, ...cleaned })
         }
 
-        // Action: pause-upload
-        if (action === 'pause-upload') {
-          const { sessionId } = await request.json()
-
-          if (!sessionId) {
-            return NextResponse.json(
-              { error: 'Session ID required' },
-              { status: 400 }
-            )
-          }
-
-          try {
-            const paused = await sessionManager.pauseSession(sessionId)
-            return NextResponse.json({
-              success: paused,
-              message: paused ? 'Upload paused' : 'Failed to pause upload',
-            })
-          } catch (error) {
-            return NextResponse.json(
-              { error: error.message },
-              { status: 400 }
-            )
-          }
-        }
-
-        // Action: resume-upload
-        if (action === 'resume-upload') {
-          const { sessionId, uploadToken } = await request.json()
-
-          if (!sessionId || !uploadToken) {
-            return NextResponse.json(
-              { error: 'Session ID and upload token required' },
-              { status: 400 }
-            )
-          }
-
-          try {
-            const resumed = await sessionManager.resumeSession(sessionId, uploadToken)
-            return NextResponse.json({
-              success: resumed,
-              message: resumed ? 'Upload resumed' : 'Failed to resume upload',
-            })
-          } catch (error) {
-            return NextResponse.json(
-              { error: error.message },
-              { status: 400 }
-            )
-          }
-        }
-
-        return NextResponse.json(
-          { error: 'Unknown action' },
-          { status: 400 }
-        )
+        return NextResponse.json({ error: 'Unknown action' }, { status: 400 })
       } catch (error) {
         auditLog({
           event: 'upload_chunked_error',
@@ -281,10 +285,7 @@ export async function POST(request) {
           status: 500,
           reason: error.message,
         })
-        return NextResponse.json(
-          { error: error.message || 'Upload failed' },
-          { status: 500 }
-        )
+        return NextResponse.json({ error: error.message || 'Upload failed' }, { status: 500 })
       }
     }
   )
@@ -295,25 +296,22 @@ export async function GET(request) {
     request,
     { route: 'upload/chunked', rateLimit: { limit: 50, windowMs: 60_000 } },
     async () => {
+      const { uploader, authorization } = await authenticatedUploader(request)
+      if (!uploader) return authorization.response || NextResponse.json({ error: 'Creator access required' }, { status: authorization.status })
+
+      const sessionId = request.nextUrl.searchParams.get('sessionId')
+      const uploadToken = request.nextUrl.searchParams.get('uploadToken')
+      if (!sessionId || !uploadToken) {
+        return NextResponse.json({ error: 'Session ID and upload token required' }, { status: 400 })
+      }
       try {
         const db = await getDb()
-        const sessionManager = new UploadSessionManager(db)
-
-        const sessionId = request.nextUrl.searchParams.get('sessionId')
-        if (!sessionId) {
-          return NextResponse.json(
-            { error: 'Session ID required' },
-            { status: 400 }
-          )
-        }
-
-        const progress = await sessionManager.getSessionProgress(sessionId)
-        return NextResponse.json({ success: true, ...progress })
+        return NextResponse.json({
+          success: true,
+          ...await getUploadProgress({ db, sessionId, uploadToken, uploader }),
+        })
       } catch (error) {
-        return NextResponse.json(
-          { error: error.message },
-          { status: 404 }
-        )
+        return errorResponse(error, 'upload_progress_failed', { sessionId })
       }
     }
   )

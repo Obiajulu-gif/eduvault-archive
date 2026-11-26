@@ -1,4 +1,7 @@
+import nodeCrypto from "node:crypto";
+
 const textEncoder = new TextEncoder();
+const subtleCrypto = globalThis.crypto?.subtle || nodeCrypto?.webcrypto?.subtle;
 
 function base64UrlDecode(input) {
   const normalized = input.replace(/-/g, "+").replace(/_/g, "/");
@@ -43,7 +46,7 @@ export async function verifyDashboardToken(token, secret) {
       return { valid: false, reason: "malformed" };
     }
 
-    const importedKey = await crypto.subtle.importKey(
+    const importedKey = await subtleCrypto.importKey(
       "raw",
       textEncoder.encode(secret),
       { name: "HMAC", hash: "SHA-256" },
@@ -52,7 +55,7 @@ export async function verifyDashboardToken(token, secret) {
     );
 
     const signingInput = textEncoder.encode(`${headerPart}.${payloadPart}`);
-    const expectedSignature = new Uint8Array(await crypto.subtle.sign("HMAC", importedKey, signingInput));
+    const expectedSignature = new Uint8Array(await subtleCrypto.sign("HMAC", importedKey, signingInput));
     const providedSignature = base64UrlDecode(signaturePart);
 
     if (!timingSafeEqual(expectedSignature, providedSignature)) {

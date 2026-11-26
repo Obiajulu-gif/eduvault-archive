@@ -9,7 +9,12 @@ import { isSessionRevoked } from "@/lib/auth/sessionRevocation";
 export async function getUserFromCookie(request) {
   const cookieHeader = request.headers.get("cookie") || "";
   const cookieMatch = cookieHeader.match(/auth_token=([^;]+)/);
-  const token = cookieMatch ? decodeURIComponent(cookieMatch[1]) : null;
+  let token = null;
+  try {
+    token = cookieMatch ? decodeURIComponent(cookieMatch[1]) : null;
+  } catch {
+    return null; // malformed percent-encoding (URIError) is no session, not a server error
+  }
   if (!token) return null;
   const verification = await verifyDashboardToken(token, process.env.JWT_SECRET);
   if (!verification.valid) {

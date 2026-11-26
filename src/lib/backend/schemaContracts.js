@@ -75,15 +75,11 @@ export const COLLECTIONS = {
   // Migration / deployment runs and their rollback verification evidence. See
   // src/lib/migrations/rollbackVerification.js.
   rollbackVerifications: "rollback_verifications",
-  // #794/#834/#976/#1105: in-app notifications, delivery receipts, and preferences.
-  notifications: "notifications",
-  notificationPreferences: "notification_preferences",
-  notificationDeliveryReceipts: "notification_delivery_receipts",
-  // #789/#1102: durable background jobs with lease/retry/cancellation.
-  backgroundJobs: "background_jobs",
-  // #953/#1105: signed receipts for critical operations.
-  operationReceipts: "operation_receipts",
-  receipts: "operation_receipts",
+  entitlementReconciliations: "entitlement_reconciliations",
+  uploadSessions: "upload_sessions",
+  uploadChunks: "upload_chunks",
+  scanProvenance: "scan_provenance",
+  payoutSettlementReconciliations: "payout_settlement_reconciliations",
 };
 
 export const REQUIRED_INDEXES = {
@@ -258,6 +254,29 @@ export const REQUIRED_INDEXES = {
       },
     },
     { keys: { name: 1, startedAt: -1 }, options: { name: "rollback_verifications_name_started_idx" } },
+  ],
+  entitlement_reconciliations: [
+    { keys: { planId: 1 }, options: { unique: true, name: "entitlement_reconciliations_plan_idx" } },
+    { keys: { refundId: 1 }, options: { unique: true, name: "entitlement_reconciliations_refund_idx" } },
+    { keys: { status: 1, createdAt: -1 }, options: { name: "entitlement_reconciliations_status_idx", background: true } },
+  ],
+  upload_sessions: [
+    { keys: { uploader: 1, state: 1, expiresAt: 1 }, options: { name: "upload_sessions_owner_state_idx", background: true } },
+    { keys: { expiresAt: 1 }, options: { name: "upload_sessions_expiry_idx", background: true } },
+  ],
+  upload_chunks: [
+    { keys: { sessionId: 1, chunkIndex: 1 }, options: { unique: true, name: "upload_chunks_session_chunk_idx" } },
+  ],
+  scan_provenance: [
+    { keys: { idempotencyKey: 1 }, options: { unique: true, name: "scan_provenance_idempotency_idx" } },
+    { keys: { evidenceId: 1 }, options: { unique: true, name: "scan_provenance_evidence_idx" } },
+    { keys: { byteHash: 1, contentHash: 1 }, options: { name: "scan_provenance_content_idx", background: true } },
+    { keys: { contentHash: 1, scannedAt: -1 }, options: { name: "scan_provenance_timeline_idx", background: true } },
+  ],
+  payout_settlement_reconciliations: [
+    { keys: { eventId: 1 }, options: { unique: true, name: "payout_settlement_event_idx" } },
+    { keys: { payoutId: 1, createdAt: -1 }, options: { name: "payout_settlement_payout_idx", background: true } },
+    { keys: { status: 1, updatedAt: -1 }, options: { name: "payout_settlement_status_idx", background: true } },
   ],
   saved_materials: [
     { keys: { walletAddress: 1, savedAt: -1 } },
