@@ -64,6 +64,20 @@ MONGODB_URI="mongodb://localhost:27017/eduvault" node scripts/reconcile-projecti
 All executed mutations are recorded to `auditLedger` (`reconciliation.projections_repaired`).
 
 ### 3. Edge Cases & Invariants
-- **Fails Closed**: If the database connection drops or queries fail, the reconciler aborts without partial corruptions.
-- **Idempotent**: Re-running the execution multiple times produces the same clean state.
+- **Authorization Gated**: Rejects unauthenticated or non-privileged callers before inspecting or mutating state. Roles permitted by default: `admin`, `operator`, `system`.
+- **Retry Resilient**: Transient database connection timeouts and optimistic concurrency collisions are retried up to `maxRetries` (default: 2) with linear backoff.
+- **Fault-Isolated**: A failure updating one projection does not abort healthy items; failed items are isolated into `report.failedItems`.
+- **Rollback Capable**: Captures a pre-repair `rollbackSnapshot` during repair execution. If post-repair sanity checks detect anomalies, invoke `rollbackProjectionRepairs(db, report.rollbackSnapshot)` to atomically restore prior projection documents or prune newly created projections.
+- **Fails Closed**: If database connections drop or queries fail, the reconciler aborts without corrupting source-of-truth records.
+- **Idempotent**: Re-running execution multiple times produces the same clean zero-drift state.
 - **Zero Downtime**: Repairs are non-blocking atomic upserts and prunes per document.
+
+## Rollback Procedure
+If a repair batch needs to be rolled back after execution:
+```javascript
+import { rollbackProjectionRepairs } from '@/lib/reconciliation/projectionReconciler.js';
+
+// Restore pre-repair state from the report's snapshot
+const { restoredCount, prunedCount } = await rollbackProjectionRepairs(db, report.rollbackSnapshot);
+console.log(`Rolled back: ${restoredCount} restored, ${prunedCount} pruned.`);
+```
