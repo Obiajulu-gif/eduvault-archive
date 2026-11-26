@@ -1,4 +1,4 @@
-# Release readiness evidence
+# Release Readiness Evidence
 
 The release gate validates `release/readiness.json` for the commit being
 released. Every migration must be applied or explicitly marked unnecessary.
@@ -7,10 +7,10 @@ verified rollback rehearsal. The gate also requires passing dependency and
 secret checks, release-candidate smoke tests, and a recent successful rollback
 rehearsal that names the restored known-good commit.
 
-Run the same check locally with:
+## Evidence mode
 
 ```bash
-node scripts/release-readiness.mjs --evidence release/readiness.json --commit <commit-sha>
+node scripts/release-readiness.mjs --evidence release/readiness.json --commit <sha>
 ```
 
 Missing or stale evidence blocks the release. Evidence mode is read-only and

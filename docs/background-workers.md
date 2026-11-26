@@ -140,3 +140,26 @@ Run the test suite verifying job enqueueing, retry backoff, lease locking, error
 ```bash
 npx tsx --test tests/backend/background-worker.test.mjs
 ```
+
+## Safe Cancellation and Cleanup (#1102)
+
+Long-running jobs support cooperative cancellation:
+
+- `cancelJob(jobId, { reason, cleanupFn })` marks pending jobs `cancelled` immediately. Running jobs become `cancel_requested` so workers can stop at a safe checkpoint.
+- `isJobCancellationRequested(jobId)` lets workers poll for cancellation during long loops.
+- `markJobCancelled(jobId, ...)` finalizes cooperative cancellation.
+- `completeJob`/`failJob` will not overwrite a cancellation request; they finalize as cancelled.
+- Optional `cleanupFn` runs only after cancellation state is persisted. Cleanup failures are recorded on the job record.
+
+### Admin API
+
+`POST /api/admin/storage-jobs` supports:
+
+```json
+{ "action": "cancel-job", "jobId": "<id>", "options": { "reason": "operator request" } }
+```
+
+### Recovery
+
+- If cleanup fails, job remains cancelled with `cleanup.status=failed` and error context; operators can retry cleanup manually.
+- Already-terminal jobs return an `already_*` reason and are not mutated.

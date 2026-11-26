@@ -1,4 +1,5 @@
 import { ObjectId } from "mongodb";
+import crypto from "node:crypto";
 import { COLLECTIONS } from "../backend/schemaContracts.js";
 import { isFeatureFlagEnabled } from "../featureFlags.js";
 import { getNotificationDelivery } from "./preferences.js";
@@ -151,8 +152,42 @@ export async function notify(db, { recipient, type, dedupeKey, title, message, l
  *
  * @returns {Promise<{ updated: boolean, deliveryStatus: string|null, attempts: number|null }>}
  */
+function buildDeliveryReceipt(notification, { status, error = null, attempt, at = new Date() } = {}) {
+  const recipient = String(notification.recipient);
+  const payload = {
+    notificationId: String(notification._id),
+    recipient,
+    dedupeKey: notification.dedupeKey,
+    type: notification.type,
+    status,
+    attempt,
+    at: at.toISOString(),
+    error: status === DELIVERY_STATUSES.sent ? null : safeDeliveryError(error),
+  };
+  const receiptId = crypto.createHash("sha256").update(JSON.stringify(payload)).digest("hex");
+  return {
+    receiptId,
+    ...payload,
+    createdAt: at,
+  };
+}
+
+async function persistDeliveryReceipt(db, receipt) {
+  const collectionName = COLLECTIONS.notificationDeliveryReceipts || "notification_delivery_receipts";
+  try {
+    await db.collection(collectionName).updateOne(
+      { receiptId: receipt.receiptId },
+      { $setOnInsert: receipt },
+      { upsert: true }
+    );
+  } catch (err) {
+    if (err?.code !== 11000) throw err;
+  }
+  return receipt;
+}
+
 export async function recordDeliveryAttempt(db, id, { recipient, status, error = null } = {}) {
-  if (!ObjectId.isValid(id)) return { updated: false, deliveryStatus: null, attempts: null };
+  if (!ObjectId.isValid(id)) return { updated: false, deliveryStatus: null, attempts: null, receipt: null };
   if (!DELIVERY_STATUSES[status]) throw new Error(`Unknown delivery status: ${status}`);
   if (status === DELIVERY_STATUSES.suppressed) throw new Error("suppressed is set when a notification is created, not by delivery");
 
@@ -175,8 +210,21 @@ export async function recordDeliveryAttempt(db, id, { recipient, status, error =
     .collection(COLLECTIONS.notifications)
     .findOneAndUpdate(filter, update, { returnDocument: "after" });
 
-  if (!updated) return { updated: false, deliveryStatus: null, attempts: null };
-  return { updated: true, deliveryStatus: updated.deliveryStatus, attempts: updated.attempts ?? 0 };
+  if (!updated) return { updated: false, deliveryStatus: null, attempts: null, receipt: null };
+
+  const receipt = buildDeliveryReceipt(updated, {
+    status,
+    error,
+    attempt: updated.attempts ?? 0,
+    at: now,
+  });
+  await persistDeliveryReceipt(db, receipt);
+  await db.collection(COLLECTIONS.notifications).updateOne(
+    { _id: updated._id },
+    { $set: { lastDeliveryReceiptId: receipt.receiptId, updatedAt: now } }
+  );
+
+  return { updated: true, deliveryStatus: updated.deliveryStatus, attempts: updated.attempts ?? 0, receipt };
 }
 
 /**
@@ -237,17 +285,19 @@ export async function retryFailedDelivery(db, id, deliverFn, { recipient, maxAtt
       outcome: "sent",
       deliveryStatus: DELIVERY_STATUSES.sent,
       attempts: recorded.attempts ?? previousAttempts + 1,
+      receipt: recorded.receipt ?? null,
     };
   } catch (error) {
     const attempts = previousAttempts + 1;
     const status = attempts >= maxAttempts ? DELIVERY_STATUSES.exhausted : DELIVERY_STATUSES.failed;
-    await recordDeliveryAttempt(db, id, { recipient, status, error });
+    const recorded = await recordDeliveryAttempt(db, id, { recipient, status, error });
     return {
       outcome: status,
       deliveryStatus: status,
       attempts,
       maxAttempts,
       error: safeDeliveryError(error),
+      receipt: recorded.receipt ?? null,
     };
   }
 }
@@ -271,10 +321,12 @@ export async function getDeliveryDiagnostics(db, recipient, { limit = 50 } = {})
   return docs.map((doc) => ({
     id: String(doc._id),
     type: doc.type,
+    dedupeKey: doc.dedupeKey,
     deliveryStatus: doc.deliveryStatus,
     attempts: doc.attempts ?? 0,
     lastAttemptAt: doc.lastAttemptAt ?? null,
     lastError: doc.lastError ?? null,
+    lastDeliveryReceiptId: doc.lastDeliveryReceiptId ?? null,
   }));
 }
 

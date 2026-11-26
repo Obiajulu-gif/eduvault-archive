@@ -309,6 +309,11 @@ export async function completeJob(jobId, result = null, { workerId = null, db = 
   const collection = database.collection(BACKGROUND_JOBS_COLLECTION);
   const now = new Date();
 
+  const existing = await collection.findOne({ jobId });
+  if (existing?.status === 'cancel_requested' || existing?.status === 'cancelled') {
+    return markJobCancelled(jobId, { workerId, result, db: database });
+  }
+
   const update = {
     $set: {
       status: 'completed',
@@ -351,6 +356,9 @@ export async function failJob(jobId, error, { workerId = null, db = null } = {})
   const job = await collection.findOne({ jobId });
   if (!job) {
     throw new Error(`Job not found: ${jobId}`);
+  }
+  if (job.status === 'cancel_requested' || job.status === 'cancelled') {
+    return markJobCancelled(jobId, { workerId, db: database });
   }
 
   const currentAttempt = job.attemptCount || 1;
@@ -470,6 +478,135 @@ export async function processNextJob({
     result: execution.result,
     error: execution.error,
   };
+}
+
+/**
+ * Cancel a pending or running background job safely.
+ *
+ * Cancellation is cooperative for running jobs: we mark the job as
+ * `cancel_requested` so workers can observe it and stop at a safe boundary.
+ * Pending jobs transition to `cancelled` immediately. Terminal jobs are
+ * returned unchanged. Optional cleanupFn runs only after the cancellation
+ * state is persisted, so cleanup is never executed against a still-runnable job.
+ */
+export async function cancelJob(jobId, {
+  workerId = null,
+  reason = 'cancelled_by_request',
+  cleanupFn = null,
+  db = null,
+} = {}) {
+  if (!jobId || typeof jobId !== 'string') {
+    throw new TypeError('jobId must be a non-empty string');
+  }
+  if (cleanupFn !== null && typeof cleanupFn !== 'function') {
+    throw new TypeError('cleanupFn must be a function when provided');
+  }
+
+  const database = await resolveDb(db);
+  const collection = database.collection(BACKGROUND_JOBS_COLLECTION);
+  const now = new Date();
+  const job = await collection.findOne({ jobId });
+  if (!job) return { cancelled: false, job: null, reason: 'not_found' };
+
+  const terminal = new Set(['completed', 'cancelled', 'dead_letter']);
+  if (terminal.has(job.status)) {
+    return { cancelled: false, job, reason: `already_${job.status}` };
+  }
+
+  const nextStatus = job.status === 'running' ? 'cancel_requested' : 'cancelled';
+  const update = {
+    $set: {
+      status: nextStatus,
+      cancelRequestedAt: job.cancelRequestedAt || now,
+      cancelRequestedBy: workerId || job.cancelRequestedBy || 'system',
+      cancelReason: reason,
+      updatedAt: now,
+      ...(nextStatus === 'cancelled'
+        ? { completedAt: now, lockedUntil: null, lockedBy: null }
+        : {}),
+    },
+    $push: {
+      attempts: {
+        attempt: job.attemptCount || 0,
+        workerId,
+        finishedAt: now,
+        status: nextStatus,
+        error: { message: reason, name: 'Cancellation', code: 'JOB_CANCELLED', failedAt: now, attempt: job.attemptCount || 0 },
+      },
+    },
+  };
+
+  const updatedDoc = await collection.findOneAndUpdate({ jobId }, update, { returnDocument: 'after' });
+  const updated = updatedDoc?.value || updatedDoc;
+
+  let cleanup = null;
+  if (cleanupFn && updated?.status === 'cancelled') {
+    try {
+      cleanup = await cleanupFn({ job: updated, db: database, now: new Date() });
+      await collection.updateOne(
+        { jobId },
+        { $set: { cleanup: { status: 'completed', completedAt: new Date(), result: cleanup ?? null }, updatedAt: new Date() } }
+      );
+    } catch (cleanupError) {
+      await collection.updateOne(
+        { jobId },
+        {
+          $set: {
+            cleanup: {
+              status: 'failed',
+              failedAt: new Date(),
+              error: formatErrorContext(cleanupError, updated.attemptCount || 0),
+            },
+            updatedAt: new Date(),
+          },
+        }
+      );
+      return { cancelled: true, job: await collection.findOne({ jobId }), cleanup: { status: 'failed' } };
+    }
+  }
+
+  return { cancelled: true, job: await collection.findOne({ jobId }), cleanup };
+}
+
+/** Returns true when a running job has been asked to cancel. */
+export async function isJobCancellationRequested(jobId, { db = null } = {}) {
+  if (!jobId) return false;
+  const database = await resolveDb(db);
+  const job = await database.collection(BACKGROUND_JOBS_COLLECTION).findOne(
+    { jobId },
+    { projection: { status: 1 } }
+  );
+  return job?.status === 'cancel_requested' || job?.status === 'cancelled';
+}
+
+/** Persist a terminal cancelled state for a job that cooperatively stopped. */
+export async function markJobCancelled(jobId, { workerId = null, result = null, db = null } = {}) {
+  const database = await resolveDb(db);
+  const collection = database.collection(BACKGROUND_JOBS_COLLECTION);
+  const now = new Date();
+  const updated = await collection.findOneAndUpdate(
+    { jobId, status: { $in: ['running', 'cancel_requested', 'pending'] } },
+    {
+      $set: {
+        status: 'cancelled',
+        completedAt: now,
+        lockedUntil: null,
+        lockedBy: null,
+        updatedAt: now,
+        ...(result !== null ? { result } : {}),
+      },
+      $push: {
+        attempts: {
+          workerId,
+          finishedAt: now,
+          status: 'cancelled',
+          error: null,
+        },
+      },
+    },
+    { returnDocument: 'after' }
+  );
+  return updated?.value || updated;
 }
 
 /**

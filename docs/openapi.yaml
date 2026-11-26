@@ -680,6 +680,151 @@ security:
 
 paths:
   # --------------------------------------------------------------------------
+  # Notifications (#794/#834/#976/#1105)
+  # --------------------------------------------------------------------------
+  /api/notifications:
+    get:
+      summary: List current user's notifications
+      operationId: listNotifications
+      tags: [Notifications]
+      parameters:
+        - name: unread
+          in: query
+          schema: { type: string, enum: ["true","false"] }
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 50, default: 20 }
+      responses:
+        "200":
+          description: Notification inbox
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NotificationList"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+    patch:
+      summary: Mark notifications read
+      operationId: markNotificationsRead
+      tags: [Notifications]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                ids:
+                  type: array
+                  items: { type: string }
+                all:
+                  type: boolean
+      responses:
+        "200":
+          description: Updated count
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [updated]
+                properties:
+                  updated: { type: integer }
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/notifications/preferences:
+    get:
+      summary: List notification preferences
+      operationId: getNotificationPreferences
+      tags: [Notifications]
+      responses:
+        "200":
+          description: Preferences
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [preferences]
+                properties:
+                  preferences:
+                    type: array
+                    items:
+                      type: object
+                      required: [type, enabled, mandatory]
+                      properties:
+                        type: { type: string }
+                        enabled: { type: boolean }
+                        mandatory: { type: boolean }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+    put:
+      summary: Update one optional notification preference
+      operationId: putNotificationPreference
+      tags: [Notifications]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [type, enabled]
+              properties:
+                type: { type: string }
+                enabled: { type: boolean }
+      responses:
+        "200":
+          description: Updated preference
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [type, enabled, mandatory]
+                properties:
+                  type: { type: string }
+                  enabled: { type: boolean }
+                  mandatory: { type: boolean }
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/notifications/delivery-receipts:
+    get:
+      summary: List delivery receipts/diagnostics for current user
+      operationId: listNotificationDeliveryReceipts
+      tags: [Notifications]
+      parameters:
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 100, default: 50 }
+      responses:
+        "200":
+          description: Delivery diagnostics
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [receipts]
+                properties:
+                  receipts:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id: { type: string }
+                        type: { type: string }
+                        dedupeKey: { type: string }
+                        deliveryStatus: { type: string }
+                        attempts: { type: integer }
+                        lastAttemptAt: { type: [string, "null"], format: date-time }
+                        lastError: { type: [string, "null"] }
+                        lastDeliveryReceiptId: { type: [string, "null"] }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  # --------------------------------------------------------------------------
   # Marketplace Discovery & Pagination
   # --------------------------------------------------------------------------
   /api/market-materials:
