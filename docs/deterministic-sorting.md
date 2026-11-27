@@ -1,6 +1,15 @@
 # Deterministic Sorting for Mixed-Status Records and Events
 
-`src/lib/backend/sortContract.js` defines one total order for lists whose items have different statuses and sometimes identical timestamps. The same set of items always comes out in the same order, whatever order the database, a retry or a cache returned them in. Tests: `src/lib/backend/__tests__/sortContract.test.js` (records, pagination) and `sortContractEvents.test.js` (events, paging, authorization, verification).
+`src/lib/backend/sortContract.js` defines one total order for lists whose items have different statuses and sometimes identical timestamps (#887, #1141). The same set of items always comes out in the same order, whatever order the database, a retry or a cache returned them in. Tests: `tests/backend/sort-contract.test.mjs`.
+
+## Complexity Design
+- **Time Complexity**:
+  - `sortRecords` / `sortEvents`: $O(N \log N)$ where $N$ is the number of records/events, using JavaScript's native introsort / Timsort implementation with $O(1)$ comparator evaluations.
+  - `paginateRecords`: $O(N \log N)$ to sort, followed by $O(K)$ array slice where $K$ is `pageSize`.
+  - `pageAfter`: $O(N \log N)$ sort + $O(N)$ linear index search to locate cursor item + $O(\text{limit})$ slice.
+  - `verifyOrdering`: $O(N)$ single pass with $O(1)$ set insertions and adjacent pair comparisons.
+- **Space Complexity**:
+  - $O(N)$ memory overhead to allocate new shallow-copied sorted arrays, ensuring immutable functional semantics that never mutate caller inputs.
 
 ## Records: `sortRecords`
 

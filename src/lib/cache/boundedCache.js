@@ -17,6 +17,31 @@ export const LookupStatus = Object.freeze({
   STALE: "stale",
 });
 
+export class CacheAuthorizationError extends Error {
+  constructor(message = "Unauthorized cache scope access.") {
+    super(message);
+    this.name = "CacheAuthorizationError";
+    this.status = 403;
+  }
+}
+
+export function assertCacheScopeAuthorized(actor, scope) {
+  if (scope === PUBLIC_SCOPE) return true;
+  if (!actor) {
+    throw new CacheAuthorizationError("Actor identity is required to access non-public cache scope.");
+  }
+  if (actor.role === "admin" || actor.role === "service" || actor.role === "operator") {
+    return true;
+  }
+  const actorId = actor.id || actor.sub || actor.walletAddress;
+  const expectedScope = `user:${actorId}`;
+  if (scope !== expectedScope) {
+    throw new CacheAuthorizationError(`Actor is not authorized to access cache scope "${scope}".`);
+  }
+  return true;
+}
+
+
 const DEFAULTS = Object.freeze({
   maxEntries: 500,
   maxBytes: 8 * 1024 * 1024,
@@ -117,7 +142,8 @@ export function createBoundedCache(options = {}) {
   }
 
   /** Store a value. Returns false (and caches nothing) if it cannot be copied or could never fit. */
-  function set(key, value, { scope, ttlMs, tags = [], version = null } = {}) {
+  function set(key, value, { scope, ttlMs, tags = [], version = null, actor } = {}) {
+    if (actor) assertCacheScopeAuthorized(actor, scope);
     validateName(key, "key");
     validateName(scope, "scope");
     const ttl = ttlMs ?? config.defaultTtlMs;
@@ -164,7 +190,8 @@ export function createBoundedCache(options = {}) {
    * `version` is the caller's current version of the source data: an entry
    * stored under a different version is reported STALE and removed.
    */
-  function lookup(key, { scope, version } = {}) {
+  function lookup(key, { scope, version, actor } = {}) {
+    if (actor) assertCacheScopeAuthorized(actor, scope);
     validateName(key, "key");
     validateName(scope, "scope");
     const composite = compose(scope, key);
@@ -271,7 +298,8 @@ export function createBoundedCache(options = {}) {
   }
 
   /** Everything cached for one scope, e.g. when a viewer's permissions or session change. */
-  function invalidateScope(scope) {
+  function invalidateScope(scope, { actor } = {}) {
+    if (actor) assertCacheScopeAuthorized(actor, scope);
     validateName(scope, "scope");
     let removed = 0;
     for (const [composite, entry] of [...entries]) {
@@ -326,6 +354,28 @@ export function createBoundedCache(options = {}) {
     return { removed, findings };
   }
 
+  /**
+   * Non-mutating snapshot of current cache entries for reconciliation/inspection.
+   * Does not update LRU order or hit/miss counters.
+   */
+  function snapshot({ scope } = {}) {
+    if (scope !== undefined) validateName(scope, "scope");
+    const items = [];
+    for (const entry of entries.values()) {
+      if (scope !== undefined && entry.scope !== scope) continue;
+      items.push({
+        scope: entry.scope,
+        key: entry.key,
+        value: copy(entry.value),
+        version: entry.version,
+        tags: [...entry.tags],
+        storedAt: entry.storedAt,
+        expiresAt: entry.expiresAt,
+      });
+    }
+    return items;
+  }
+
   function stats() {
     const lookups = counters.hits + counters.misses + counters.expired + counters.staleVersion;
     return {
@@ -338,5 +388,5 @@ export function createBoundedCache(options = {}) {
     };
   }
 
-  return { set, get, lookup, peekStale, getOrLoad, invalidate, invalidateTag, invalidateScope, invalidatePrefix, clear, findStale, purgeStale, stats };
+  return { set, get, lookup, peekStale, getOrLoad, invalidate, invalidateTag, invalidateScope, invalidatePrefix, clear, findStale, purgeStale, snapshot, stats };
 }

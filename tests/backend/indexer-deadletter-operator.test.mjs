@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
+  inspectDeadLetter,
   listDeadLetterEvents,
   quarantineDeadLetter,
   retryDeadLetter,
@@ -174,4 +175,23 @@ test('duplicate event handling remains idempotent during operator retry', async 
 test('classifyIndexerError still distinguishes transient and poison failures', () => {
   assert.equal(classifyIndexerError({ code: 'ETIMEDOUT' }), 'transient');
   assert.equal(classifyIndexerError({ message: 'invalid payload' }), 'poison');
+});
+
+test('inspectDeadLetter reports whether a retry would be accepted without writing', async () => {
+  const { db, deadLetters, audit } = createDeadLetterDb([
+    { _id: 'poison-1', status: 'failed', raw: { bogus: true }, parsed: null },
+    { _id: 'held-1', status: 'quarantined', raw: { bogus: true }, parsed: { type: 'purchase' } },
+  ]);
+
+  const poison = await inspectDeadLetter(db, 'poison-1');
+  assert.equal(poison.entry._id, 'poison-1');
+  assert.equal(poison.canRetry, false);
+  assert.equal(poison.retryBlockedBy, 'unparseable');
+
+  const held = await inspectDeadLetter(db, 'held-1');
+  assert.equal(held.retryBlockedBy, 'quarantined');
+
+  await assert.rejects(inspectDeadLetter(db, 'missing'), /not found/);
+  assert.equal(deadLetters.size, 2);
+  assert.equal(audit.length, 0);
 });

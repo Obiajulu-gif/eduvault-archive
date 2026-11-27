@@ -15,6 +15,7 @@
  */
 
 import { readFileSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import {
   evaluateReleaseReadiness,
   ReleaseDecision,
@@ -38,6 +39,23 @@ const expectedCommit = args.find(a => a.startsWith('--commit='))?.slice('--commi
 
 const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017/eduvault';
 const MONGODB_DB = process.env.MONGODB_DB || 'eduvault';
+
+const COMMIT_SHA = /^[0-9a-f]{7,40}$/i;
+
+// Files that differ between the evidenced commit and the release commit, or
+// null when git cannot tell (unknown commit, shallow clone, not a SHA).
+function changedFilesBetween(fromCommit, toCommit) {
+  if (typeof fromCommit !== 'string' || typeof toCommit !== 'string' || fromCommit === toCommit) return null;
+  // Only hex SHAs reach git, so evidence content can never be read as a git option.
+  if (!COMMIT_SHA.test(fromCommit) || !COMMIT_SHA.test(toCommit)) return null;
+  try {
+    return execFileSync('git', ['diff', '--name-only', fromCommit, toCommit], { encoding: 'utf8' })
+      .split('\n')
+      .filter(Boolean);
+  } catch {
+    return null;
+  }
+}
 
 // Migration plan mode (#1080): checks every migration in the plan has a
 // rehearsed rollback (or an approved irreversible sign-off), a fresh dry run,
@@ -80,13 +98,14 @@ if (planPath) {
 }
 
 // Evidence mode is used by the release workflow. It is intentionally
-// dependency-free and checks the exact commit, migration proof, security
+// dependency-free and checks the commit, migration proof, security
 // checks, smoke test, and rollback rehearsal recorded in the evidence file.
 if (evidencePath) {
   const { evaluateReleaseReadiness: evaluateEvidence } = await import('../src/lib/release/readiness.js');
   try {
     const evidence = JSON.parse(readFileSync(evidencePath, 'utf8'));
-    const report = evaluateEvidence(evidence, { expectedCommit });
+    const changedFilesSinceEvidence = changedFilesBetween(evidence?.commit, expectedCommit);
+    const report = evaluateEvidence(evidence, { expectedCommit, changedFilesSinceEvidence });
     console.log(JSON.stringify(report, null, 2));
     process.exit(report.ready ? 0 : 1);
   } catch (error) {

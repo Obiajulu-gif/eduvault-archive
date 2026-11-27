@@ -39,13 +39,27 @@ Validates document schemas against sample data without database writes:
 MONGODB_URI="mongodb://localhost:27017/eduvault" node scripts/migrations/migrate-catalog-collection.mjs --dry-run
 ```
 
-### Run Migration
+### Schema Consistency Check
+Verifies catalog collection documents without executing migration:
+```bash
+MONGODB_URI="mongodb://localhost:27017/eduvault" node scripts/migrations/migrate-catalog-collection.mjs --verify-only
+```
+
+### Run Rollback-Verified Migration
+Executes batched migration wrapped with full pre/post-fingerprinting and invariant validation:
 ```bash
 MONGODB_URI="mongodb://localhost:27017/eduvault" node scripts/migrations/migrate-catalog-collection.mjs --batch-size=200
 ```
 
 ### Rollback Procedure
-If unexpected regressions occur, execute rollback to safely restore the previous schema:
+If unexpected regressions or invariant failures occur, the tooling automatically rolls back and proves identical restored state. Operators can also trigger an explicit verified rollback:
 ```bash
 MONGODB_URI="mongodb://localhost:27017/eduvault" node scripts/migrations/migrate-catalog-collection.mjs --rollback
 ```
+
+### Authorization & Safety Guarantees
+1. **Operator Authorization**: Requires `checkDeploymentAuthorization` (roles `admin`, `deployer`, `release_engineer`, or permissions `system:migrate`, `system:release`).
+2. **Pre-Migration Fingerprinting**: Cryptographic digest and document counts of `materials` and `migration_checkpoints` captured prior to mutation.
+3. **Automated Rollback & Invariant Re-verification**: If migration batches fail or post-check invariants breach, `migrationDef.down(doc)` is applied, fingerprints are re-compared, and unmigrated state is mathematically proven.
+4. **Resumable Checkpoints**: Batched updates record progress in `migration_checkpoints`, allowing interrupted jobs to resume without duplicate writes.
+

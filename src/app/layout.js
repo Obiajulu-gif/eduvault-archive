@@ -6,6 +6,7 @@ import { ToastProvider } from "@/providers/ToastProvider";
 import { CartProvider } from "@/providers/CartProvider";
 import { ComparisonProvider } from "@/providers/ComparisonProvider";
 import CartDrawer from "@/components/CartDrawer";
+import CheckoutRecoveryNotice from "@/components/transactions/CheckoutRecoveryNotice";
 import ComparisonMatrix from "@/components/ComparisonMatrix";
 import SupportWidget from "@/components/SupportWidget";
 import SessionWarning from "@/components/SessionWarning";
@@ -84,6 +85,7 @@ export default async function RootLayout({ children }) {
                   {children}
                 </main>
                 <CartDrawer />
+                <CheckoutRecoveryNotice />
                 <ComparisonMatrix />
                 <SupportWidget />
                 <SessionWarning />

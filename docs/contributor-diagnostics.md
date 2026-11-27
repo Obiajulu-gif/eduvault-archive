@@ -1,6 +1,91 @@
-# Contributor diagnostics
+# Contributor Diagnostics Command
 
-Run `npm run diagnostics:contributor -- --json` when local setup or dependency checks fail. The report combines runtime details, presence-only environment checks, dependency health, and remediation hints. Values are never printed, so it is safe to attach the JSON report to a support request. An unavailable service is retryable; a misconfigured dependency requires updating local configuration.
+**Issue #1154** — `scripts/contributor-diagnostics.mjs` & `src/lib/health/contributorDiagnostics.js`
+
+## Overview
+
+The `diagnostics:contributor` command provides local environment verification, runtime inspection, dependency reachability checks, and actionable remediation instructions for EduVault contributors.
+
+All output strictly redacts sensitive credentials, connection strings, secret tokens, and Stellar private keys. The output is safe to paste into issues, PR discussions, and Discord support channels.
+
+---
+
+## Usage
+
+```bash
+# Run human-readable diagnostics
+npm run diagnostics:contributor
+
+# Run in machine-readable JSON mode (safe to attach to bug reports)
+npm run diagnostics:contributor -- --json
+
+# Retry transient/network dependencies up to 3 times with exponential backoff
+npm run diagnostics:contributor -- --retries=3
+
+# Strict mode: fail with exit code 1 on degraded services as well as misconfigured
+npm run diagnostics:contributor -- --strict
+
+# Minimal output (status summary only)
+npm run diagnostics:contributor -- --quiet
+
+# View help and options
+npm run diagnostics:contributor -- --help
+```
+
+---
+
+## Checked Components
+
+1. **Runtime & Tooling:**
+   - Node.js version and compatibility check (requires `>=20.0.0` for full production parity).
+   - Platform OS (`win32`, `linux`, `darwin`) and CPU architecture.
+   - Lockfile presence (`package-lock.json`, `pnpm-lock.yaml`, `yarn.lock`).
+2. **Environment Variables Presence:**
+   - `MONGODB_URI`
+   - `PINATA_JWT`
+   - `NEXT_PUBLIC_STELLAR_RPC_URL`
+   - `NEXT_PUBLIC_HORIZON_URL`
+   - `NEXT_PUBLIC_MATERIAL_REGISTRY_CONTRACT_ID`
+   - `NEXT_PUBLIC_PURCHASE_MANAGER_CONTRACT_ID`
+   *(Evaluated as boolean presence only; values are never printed).*
+3. **External Dependencies:**
+   - MongoDB database connectivity ping.
+   - Pinata IPFS authentication.
+   - Stellar Horizon and Soroban RPC endpoint accessibility.
+   - Local mock or live SMTP email service.
+   - On-chain Soroban contract deployment status.
+
+---
+
+## Execution Paths (#1154)
+
+### 1. Normal Path
+- Executes all dependency checks sequentially or aggregates provided dependency reports.
+- Formats status as `HEALTHY`, `DEGRADED`, `UNAVAILABLE`, or `MISCONFIGURED`.
+- Returns exit code `0` if all services are healthy (or degraded without `--strict`).
+
+### 2. Failure Path
+- **Misconfigured:** If required environment variables are missing or use invalid protocols (e.g. `http://` instead of `mongodb://`), reports `MISCONFIGURED` and exits with code `1`.
+- **Incompatible Node Version:** Warns if the installed Node version is below version 20.
+- **Remediation hints:** Every failing dependency provides specific, step-by-step resolution hints.
+
+### 3. Retry Path
+- Network-dependent external services (Stellar RPC, Pinata gateway, MongoDB ping) can experience transient timeouts.
+- When `--retries=<n>` is specified, the runner retries up to `n` times with exponential backoff (`retryDelayMs * 2^(attempt - 1)`).
+- When a service remains unreachable, the report marks `retryable: true`, distinguishing network blips from permanent configuration errors.
+
+### 4. Authorization Path
+- By default, local execution runs in contributor mode without elevated credentials.
+- When invoked programmatically or in operator contexts, `assertContributorDiagnosticsAuthorized(actor)` verifies caller credentials.
+- Permitted roles: `contributor`, `operator`, `admin`, and `service`. Unauthorized callers receive `ContributorDiagnosticsAuthorizationError` (HTTP 403).
+
+---
+
+## Edge Cases, Recovery & Rollback
+
+- **Offline / Air-Gapped Development:** If working offline, Stellar and Pinata checks will report `UNAVAILABLE` (`retryable: true`). Local mock fallbacks allow continuing frontend development.
+- **Placeholder Values:** Environment variables containing placeholder values (such as `YOUR_PINATA_JWT` or `mongodb://localhost`) are detected and flagged as `MISCONFIGURED`.
+- **Zero State Impact:** Diagnostics are completely read-only and generate no side-effects or persistent database changes. Rollback is immediate by clearing CLI flags or environment overrides.
 
 ## Local setup failures (#1079)
 

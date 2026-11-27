@@ -959,6 +959,21 @@ export async function listDeadLetterEvents(db, { status, limit = 50 } = {}) {
   return dlCol.find(query).sort({ lastAttemptedAt: -1 }).limit(limit).toArray();
 }
 
+/**
+ * Read-only view of one dead-letter event plus whether `retryDeadLetter`
+ * would accept it, so an operator can check before retrying. Never writes.
+ */
+export async function inspectDeadLetter(db, eventId) {
+  const entry = await db.collection(COLLECTIONS.deadLetterEvents).findOne({ _id: eventId });
+  if (!entry) {
+    throw new Error(`Dead-letter event not found: ${eventId}`);
+  }
+  let retryBlockedBy = null;
+  if (entry.status === 'quarantined') retryBlockedBy = 'quarantined';
+  else if (!(entry.parsed || parseContractEvent(entry.raw))) retryBlockedBy = 'unparseable';
+  return { entry, canRetry: retryBlockedBy === null, retryBlockedBy };
+}
+
 export async function retryDeadLetter(db, eventId, { operator = 'system' } = {}) {
   const dlCol = db.collection(COLLECTIONS.deadLetterEvents);
   const entry = await dlCol.findOne({ _id: eventId });

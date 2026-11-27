@@ -5,9 +5,8 @@
  * side effects with leased execution, bounded retries, and dead-letter handling.
  */
 
-import { getDb } from '@/lib/mongodb';
-import { sendPurchaseReceiptEmail } from '@/lib/email';
-import { sendWebhookWithRetry } from '@/lib/webhooks/sender';
+import { getDb } from '../mongodb.js';
+import { sendPurchaseReceiptEmail } from '../email.js';
 import {
   leaseNextIntent,
   markDelivered,
@@ -15,8 +14,12 @@ import {
   releaseLease,
 } from './outbox';
 import { applyMaterialSearchProjection } from './materialSearchProjection.js';
-import { runPreviewPipeline } from './previewPipeline.js';
 import { applyAnalyticsEvent } from './analyticsEvents.js';
+import {
+  recordScanProvenance,
+  SCAN_PROVENANCE_ERROR_CODES,
+  ScanProvenanceError,
+} from '../publishing/scanProvenance.js';
 
 const WORKER_ID = process.env.WORKER_ID || `worker-${process.pid}`;
 const POLL_INTERVAL_MS = parseInt(process.env.SIDE_EFFECT_POLL_MS || '5000', 10);
@@ -29,6 +32,7 @@ async function processEmailIntent(intent) {
 }
 
 async function processWebhookIntent(intent) {
+  const { sendWebhookWithRetry } = await import('../webhooks/sender.js');
   const { urls, payload, signingSecret } = intent.intent.payload;
   if (!Array.isArray(urls)) {
     throw new Error('Webhook intent missing urls array');
@@ -50,14 +54,121 @@ async function processWebhookIntent(intent) {
   }
 }
 
-async function processIndexerIntent(intent) {
+function isRecognizedScanIntent(intent) {
+  const inner = intent?.intent || {};
+  const payload = inner.payload || {};
+  const action = inner.action || payload.action;
+  return (
+    action === 'scan_content'
+    || action === 'scan'
+    || payload.action === 'scan'
+    || inner.channel === 'scan_content'
+    || payload.channel === 'scan_content'
+  );
+}
+
+async function fetchScanBytes({ contentHash }) {
+  if (typeof globalThis.fetch !== 'function') {
+    throw new Error('No fetch implementation available to retrieve scan bytes');
+  }
+
+  const gateway = process.env.NEXT_PUBLIC_GATEWAY_URL
+    || process.env.IPFS_GATEWAY_URL
+    || 'https://gateway.pinata.cloud';
+  const url = `${gateway.replace(/\/$/, '')}/ipfs/${encodeURIComponent(contentHash)}`;
+  const response = await globalThis.fetch(url, { signal: AbortSignal.timeout(30_000) });
+  if (!response.ok) {
+    throw new Error(`Unable to fetch scan bytes: ${response.status}`);
+  }
+  return new Uint8Array(await response.arrayBuffer());
+}
+
+export async function processScanIntent(intent, options = {}) {
+  const inner = intent?.intent || {};
+  const payload = inner.payload || {};
+  if (!isRecognizedScanIntent(intent)) {
+    throw new ScanProvenanceError(SCAN_PROVENANCE_ERROR_CODES.INVALID_INPUT, 'Intent is not a scan_content intent');
+  }
+
+  const db = options.db || await getDb();
+  const contentHash = payload.contentHash || payload.cid || intent.sourceId;
+  if (!contentHash) {
+    throw new ScanProvenanceError(SCAN_PROVENANCE_ERROR_CODES.INVALID_INPUT, 'Scan intent missing contentHash');
+  }
+
+  const quarantineCollection = typeof db.collection === 'function'
+    ? db.collection('quarantine')
+    : null;
+  const quarantine = quarantineCollection && typeof quarantineCollection.findOne === 'function'
+    ? await quarantineCollection.findOne({ contentHash })
+    : null;
+
+  const byteHash = payload.byteHash ?? payload.expectedByteHash ?? quarantine?.byteHash;
+  const sizeBytes = payload.sizeBytes ?? quarantine?.sizeBytes;
+  if (!byteHash || sizeBytes === undefined || sizeBytes === null) {
+    throw new ScanProvenanceError(SCAN_PROVENANCE_ERROR_CODES.INVALID_INPUT, 'Scan intent missing byteHash or sizeBytes');
+  }
+
+  let bytes = options.bytes ?? payload.bytes ?? payload.contentBytes;
+  if (bytes === undefined || bytes === null) {
+    const fetcher = options.fetchBytes || fetchScanBytes;
+    bytes = await fetcher({ contentHash, payload, quarantine });
+  }
+
+  const signatureVersion = payload.signatureVersion
+    ?? payload.scanResult?.signatureVersion
+    ?? (payload.scanner && typeof payload.scanner === 'object' ? payload.scanner.signatureVersion : null)
+    ?? process.env.MALWARE_SCANNER_SIGNATURE_VERSION
+    ?? 'unversioned';
+  const scanner = payload.scanner
+    ?? payload.scannerName
+    ?? payload.scanResult?.scannerName
+    ?? (payload.scanner && typeof payload.scanner === 'object' ? payload.scanner.name : null)
+    ?? process.env.MALWARE_SCANNER_NAME
+    ?? 'clamav';
+
+  const scanResult = payload.scanResult || {
+    verdict: payload.verdict ?? null,
+    threats: payload.threats ?? [],
+    signatureVersion,
+    scannerName: typeof scanner === 'string' ? scanner : scanner.name,
+    artifactHash: contentHash,
+  };
+  const recordProvenance = options.recordProvenance || recordScanProvenance;
+  const now = options.now || new Date();
+
+  return recordProvenance({
+    db,
+    bytes,
+    contentHash,
+    cid: payload.cid ?? contentHash,
+    byteHash,
+    sizeBytes,
+    scanner,
+    signatureVersion,
+    actor: options.actor || { id: WORKER_ID, role: 'system' },
+    allowSystem: true,
+    scannedAt: payload.scannedAt ?? now,
+    now,
+    scanResult,
+    mimeType: payload.mimeType,
+    materialId: payload.materialId,
+    uploaderAddress: payload.uploaderAddress ?? quarantine?.uploaderAddress,
+  });
+}
+
+async function processIndexerIntent(intent, options = {}) {
+  if (isRecognizedScanIntent(intent)) {
+    return processScanIntent(intent, options);
+  }
+
   if (intent.intent?.action !== 'material_search_sync') {
     console.log(`[SideEffectWorker] Indexer intent not yet implemented: ${intent._id}`);
     await new Promise(resolve => setTimeout(resolve, 100));
     return;
   }
 
-  const db = await getDb();
+  const db = options.db || await getDb();
   await applyMaterialSearchProjection(db, intent.intent.payload);
 }
 
@@ -71,12 +182,13 @@ export async function processPreviewIntent(intent) {
   // records the outcome on `material_previews` and never throws, so a preview
   // failure does not fail (or retry) the intent and never affects the original
   // file's gating.
+  const { runPreviewPipeline } = await import('./previewPipeline.js');
   const { contentHash, mimeType, sizeBytes, materialId } = intent.intent.payload || {};
   const result = await runPreviewPipeline({ contentHash, mimeType, sizeBytes, materialId });
   console.log(`[SideEffectWorker] Preview ${contentHash} -> ${result.state}${result.reason ? ` (${result.reason})` : ''}`);
 }
 
-export async function processSideEffectIntent(intent) {
+export async function processSideEffectIntent(intent, options = {}) {
   const type = intent.intent?.type;
 
   switch (type) {
@@ -87,8 +199,7 @@ export async function processSideEffectIntent(intent) {
       await processWebhookIntent(intent);
       break;
     case 'indexer':
-      await processIndexerIntent(intent);
-      break;
+      return processIndexerIntent(intent, options);
     case 'preview':
       await processPreviewIntent(intent);
       break;

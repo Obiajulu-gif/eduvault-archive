@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import {
+  inspectDeadLetter,
   listDeadLetterEvents,
   quarantineDeadLetter,
   retryDeadLetter,
@@ -15,6 +16,16 @@ if (command === 'list') {
   const limit = Number(args.find((arg) => arg.startsWith('--limit='))?.split('=')[1] || 50);
   const events = await listDeadLetterEvents(db, { status, limit });
   console.log(JSON.stringify(events, null, 2));
+  process.exit(0);
+}
+
+if (command === 'inspect') {
+  const eventId = args[0];
+  if (!eventId) {
+    console.error('Usage: node scripts/indexer-deadletter.mjs inspect <eventId>');
+    process.exit(1);
+  }
+  console.log(JSON.stringify(await inspectDeadLetter(db, eventId), null, 2));
   process.exit(0);
 }
 
@@ -42,5 +53,5 @@ if (command === 'quarantine') {
   process.exit(0);
 }
 
-console.error('Usage: node scripts/indexer-deadletter.mjs <list|retry|quarantine> ...');
+console.error('Usage: node scripts/indexer-deadletter.mjs <list|inspect|retry|quarantine> ...');
 process.exit(1);
