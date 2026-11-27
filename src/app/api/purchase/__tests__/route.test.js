@@ -8,7 +8,9 @@ const {
   mockBroadcastPurchaseEvent,
   mockGetMaterialAccessStatus,
   mockGetDb,
+  mockCreateCheckoutQuote,
   mockConsumeCheckoutQuote,
+  mockValidateCheckoutQuote,
 } = vi.hoisted(() => ({
   mockGetUserFromCookie: vi.fn(),
   mockCreateEntitlement: vi.fn(),
@@ -16,7 +18,9 @@ const {
   mockBroadcastPurchaseEvent: vi.fn(),
   mockGetMaterialAccessStatus: vi.fn(),
   mockGetDb: vi.fn(),
+  mockCreateCheckoutQuote: vi.fn(),
   mockConsumeCheckoutQuote: vi.fn(),
+  mockValidateCheckoutQuote: vi.fn(),
 }));
 
 vi.mock('@/lib/api/auth', () => ({ getUserFromCookie: mockGetUserFromCookie }));
@@ -31,10 +35,15 @@ vi.mock('@/lib/purchases/access', async () => {
   };
 });
 vi.mock('@/lib/mongodb', () => ({ getDb: mockGetDb }));
-vi.mock('@/lib/checkout/quotes', () => ({
-  createCheckoutQuote: vi.fn(),
-  consumeCheckoutQuote: mockConsumeCheckoutQuote,
-}));
+vi.mock('@/lib/checkout/quotes', async () => {
+  const actual = await vi.importActual('@/lib/checkout/quoteConstants');
+  return {
+    ...actual,
+    createCheckoutQuote: mockCreateCheckoutQuote,
+    consumeCheckoutQuote: mockConsumeCheckoutQuote,
+    validateCheckoutQuote: mockValidateCheckoutQuote,
+  };
+});
 
 // Fake collection that mimics a Mongo unique index on { buyerAddress, materialId }:
 // insertOne throws a duplicate-key error (code 11000) if a matching doc already exists.
@@ -142,5 +151,191 @@ describe('POST /api/purchase - concurrent duplicate requests', () => {
     // Receipt + webhook must fire exactly once per actual purchase, not once per request.
     expect(mockSendReceiptIfEligible).toHaveBeenCalledTimes(1);
     expect(mockBroadcastPurchaseEvent).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('POST /api/purchase - pre-signing stale quote validation (action: validate_quote)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockGetUserFromCookie.mockResolvedValue({ walletAddress: 'GBUYER123' });
+    mockGetDb.mockResolvedValue({
+      collection: () => {
+        throw new Error('Unexpected direct collection access');
+      },
+    });
+  });
+
+  it('returns 200 fresh payload on the normal path', async () => {
+    const expiresAt = new Date('2030-01-01T00:10:00.000Z');
+    const checkedAt = new Date('2030-01-01T00:00:00.000Z');
+    mockValidateCheckoutQuote.mockResolvedValue({
+      fresh: true,
+      stale: false,
+      authorized: true,
+      quote: {
+        quoteId: 'quote-fresh',
+        materialId: 'mat-1',
+        buyerAddress: 'gbuyer123',
+        terms: { price: 10, asset: 'USDC', creatorAddress: 'gcreator', materialVersion: 1 },
+      },
+      expiresAt,
+      remainingMs: 600_000,
+      checkedAt,
+    });
+
+    const res = await POST(makeRequest({
+      action: 'validate_quote',
+      materialId: 'mat-1',
+      quoteId: 'quote-fresh',
+      minRemainingMs: 15_000,
+    }));
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.fresh).toBe(true);
+    expect(body.stale).toBe(false);
+    expect(body.quoteId).toBe('quote-fresh');
+    expect(body.price).toBe(10);
+    expect(mockValidateCheckoutQuote).toHaveBeenCalledWith(expect.anything(), {
+      quoteId: 'quote-fresh',
+      materialId: 'mat-1',
+      buyerAddress: 'gbuyer123',
+      minRemainingMs: 15_000,
+    });
+  });
+
+  it('returns 400 VALIDATION_FIELD when quoteId is missing', async () => {
+    const res = await POST(makeRequest({
+      action: 'validate_quote',
+      materialId: 'mat-1',
+    }));
+    const body = await res.json();
+
+    expect(res.status).toBe(400);
+    expect(body.code).toBe('VALIDATION_FIELD');
+    expect(body.error).toMatch(/Missing quoteId/i);
+  });
+
+  it('returns 410 SETTLEMENT_QUOTE_EXPIRED when quote is expired before signing', async () => {
+    mockValidateCheckoutQuote.mockResolvedValue({
+      fresh: false,
+      stale: true,
+      authorized: true,
+      canRefresh: true,
+      reason: 'QUOTE_EXPIRED',
+      expiresAt: new Date('2025-01-01T00:00:00.000Z'),
+      checkedAt: new Date('2026-01-01T00:00:00.000Z'),
+    });
+
+    const res = await POST(makeRequest({
+      action: 'validate_quote',
+      materialId: 'mat-1',
+      quoteId: 'quote-expired',
+    }));
+    const body = await res.json();
+
+    expect(res.status).toBe(410);
+    expect(res.headers.get('content-type')).toBe('application/problem+json');
+    expect(body.code).toBe('SETTLEMENT_QUOTE_EXPIRED');
+    expect(body.stale).toBe(true);
+    expect(body.reason).toBe('QUOTE_EXPIRED');
+    expect(body.canRefresh).toBe(true);
+  });
+
+  it('returns 409 CONFLICT_STATE with changedFields when listing terms drifted', async () => {
+    mockValidateCheckoutQuote.mockResolvedValue({
+      fresh: false,
+      stale: true,
+      authorized: true,
+      canRefresh: true,
+      reason: 'TERMS_CHANGED',
+      changedFields: ['price'],
+      quoteTerms: { price: 10, asset: 'USDC', creatorAddress: 'gcreator', materialVersion: 1 },
+      currentTerms: { price: 15, asset: 'USDC', creatorAddress: 'gcreator', materialVersion: 1 },
+      checkedAt: new Date('2026-01-01T00:00:00.000Z'),
+    });
+
+    const res = await POST(makeRequest({
+      action: 'validate_quote',
+      materialId: 'mat-1',
+      quoteId: 'quote-drifted',
+    }));
+    const body = await res.json();
+
+    expect(res.status).toBe(409);
+    expect(body.code).toBe('CONFLICT_STATE');
+    expect(body.stale).toBe(true);
+    expect(body.reason).toBe('TERMS_CHANGED');
+    expect(body.changedFields).toEqual(['price']);
+    expect(body.currentTerms.price).toBe(15);
+    expect(body.canRefresh).toBe(true);
+  });
+
+  it('returns 403 AUTH_WALLET_MISMATCH when body buyerAddress differs from session wallet', async () => {
+    const res = await POST(makeRequest({
+      action: 'validate_quote',
+      materialId: 'mat-1',
+      quoteId: 'quote-1',
+      buyerAddress: 'GDIFFERENTWALLET',
+    }));
+    const body = await res.json();
+
+    expect(res.status).toBe(403);
+    expect(body.code).toBe('AUTH_WALLET_MISMATCH');
+    expect(mockValidateCheckoutQuote).not.toHaveBeenCalled();
+  });
+
+  it('returns 401 AUTH_UNAUTHENTICATED when neither session nor buyerAddress is present', async () => {
+    mockGetUserFromCookie.mockResolvedValue(null);
+
+    const res = await POST(makeRequest({
+      action: 'validate_quote',
+      materialId: 'mat-1',
+      quoteId: 'quote-1',
+    }));
+    const body = await res.json();
+
+    expect(res.status).toBe(401);
+    expect(body.code).toBe('AUTH_UNAUTHENTICATED');
+  });
+
+  it('supports retry after stale detection by issuing a fresh quote and validating it', async () => {
+    const expiresAt = new Date('2030-01-01T00:10:00.000Z');
+    mockCreateCheckoutQuote.mockResolvedValue({
+      quoteId: 'quote-2',
+      materialId: 'mat-1',
+      buyerAddress: 'gbuyer123',
+      terms: { price: 15, asset: 'USDC', creatorAddress: 'gcreator', materialVersion: 2 },
+      expiresAt,
+    });
+    mockValidateCheckoutQuote.mockResolvedValue({
+      fresh: true,
+      stale: false,
+      authorized: true,
+      quote: {
+        quoteId: 'quote-2',
+        materialId: 'mat-1',
+        buyerAddress: 'gbuyer123',
+        terms: { price: 15, asset: 'USDC', creatorAddress: 'gcreator', materialVersion: 2 },
+      },
+      expiresAt,
+      remainingMs: 599_000,
+      checkedAt: new Date('2030-01-01T00:00:01.000Z'),
+    });
+
+    const quoteRes = await POST(makeRequest({ action: 'quote', materialId: 'mat-1' }));
+    const quoteBody = await quoteRes.json();
+    expect(quoteRes.status).toBe(201);
+    expect(quoteBody.quoteId).toBe('quote-2');
+
+    const validateRes = await POST(makeRequest({
+      action: 'validate_quote',
+      materialId: 'mat-1',
+      quoteId: quoteBody.quoteId,
+    }));
+    const validateBody = await validateRes.json();
+    expect(validateRes.status).toBe(200);
+    expect(validateBody.fresh).toBe(true);
+    expect(validateBody.price).toBe(15);
   });
 });

@@ -5,6 +5,8 @@ import {
   REPAIR_ACTION,
   generateRootCauseHint,
   runProjectionReconciliation,
+  rollbackProjectionRepairs,
+  authorizeProjectionReconciliation,
 } from '../../src/lib/reconciliation/projectionReconciler.js';
 
 function createMockDb(initialData = {}) {
@@ -23,6 +25,13 @@ function createMockDb(initialData = {}) {
       const map = collections[name];
 
       return {
+        async findOne(query) {
+          for (const doc of map.values()) {
+            const matches = Object.entries(query).every(([k, v]) => doc[k] === v);
+            if (matches) return JSON.parse(JSON.stringify(doc));
+          }
+          return null;
+        },
         find() {
           return {
             async toArray() {
@@ -214,4 +223,181 @@ test('executes repairs idempotently and achieves zero drift post-repair', async 
   // 3. Post-repair re-scan: 0 drift detected!
   const postReport = await runProjectionReconciliation({ db, scope: 'all', dryRun: true });
   assert.equal(postReport.driftCount, 0);
+});
+
+test('authorization path: rejects unauthorized or non-privileged actors', async () => {
+  const db = createMockDb({});
+
+  // 1. Missing actor
+  await assert.rejects(
+    async () => {
+      await runProjectionReconciliation({ db, actor: null });
+    },
+    (err) => err.code === 'AUTH_FORBIDDEN' || err.status === 403
+  );
+
+  // 2. Unauthorized role
+  await assert.rejects(
+    async () => {
+      await runProjectionReconciliation({ db, actor: { role: 'learner' } });
+    },
+    (err) => err.code === 'AUTH_FORBIDDEN'
+  );
+
+  // 3. Custom authorize check returning false
+  await assert.rejects(
+    async () => {
+      await runProjectionReconciliation({
+        db,
+        actor: { role: 'admin' },
+        authorize: () => false,
+      });
+    },
+    (err) => err.code === 'AUTH_FORBIDDEN'
+  );
+
+  // 4. Authorized operator succeeds
+  const allowedReport = await runProjectionReconciliation({
+    db,
+    actor: { role: 'operator' },
+    dryRun: true,
+  });
+  assert.equal(allowedReport.dryRun, true);
+});
+
+test('retry path: recovers from transient database failure during repair', async () => {
+  const db = createMockDb({
+    purchases: {
+      'p-1': {
+        materialId: 'mat-retry',
+        buyerAddress: 'gbuyer-retry',
+        status: 'confirmed',
+      },
+    },
+    entitlement_cache: {},
+  });
+
+  // Inject transient error into updateOne on first attempt
+  let attempts = 0;
+  const originalCollection = db.collection.bind(db);
+  db.collection = (name) => {
+    const col = originalCollection(name);
+    if (name === 'entitlement_cache') {
+      const origUpdate = col.updateOne.bind(col);
+      col.updateOne = async (...args) => {
+        attempts++;
+        if (attempts === 1) {
+          throw new Error('Transient connection pool timeout');
+        }
+        return origUpdate(...args);
+      };
+    }
+    return col;
+  };
+
+  const report = await runProjectionReconciliation({
+    db,
+    scope: 'entitlements',
+    dryRun: false,
+    maxRetries: 2,
+    retryDelayMs: 1,
+    sleep: async () => {},
+  });
+
+  assert.equal(report.repairedCount, 1);
+  assert.equal(report.errorsCount, 0);
+  assert.equal(report.retriedCount, 1);
+});
+
+test('failure path: records permanent per-item error in failedItems without aborting healthy items', async () => {
+  const db = createMockDb({
+    purchases: {
+      'p-healthy': {
+        materialId: 'mat-healthy',
+        buyerAddress: 'gbuyer1',
+        status: 'confirmed',
+      },
+      'p-failing': {
+        materialId: 'mat-fail',
+        buyerAddress: 'gbuyer2',
+        status: 'confirmed',
+      },
+    },
+    entitlement_cache: {},
+  });
+
+  const originalCollection = db.collection.bind(db);
+  db.collection = (name) => {
+    const col = originalCollection(name);
+    if (name === 'entitlement_cache') {
+      const origUpdate = col.updateOne.bind(col);
+      col.updateOne = async (query, ...args) => {
+        if (query.materialId === 'mat-fail') {
+          throw new Error('Database write constraint violation');
+        }
+        return origUpdate(query, ...args);
+      };
+    }
+    return col;
+  };
+
+  const report = await runProjectionReconciliation({
+    db,
+    scope: 'entitlements',
+    dryRun: false,
+    maxRetries: 1,
+    retryDelayMs: 1,
+    sleep: async () => {},
+  });
+
+  assert.equal(report.repairedCount, 1);
+  assert.equal(report.errorsCount, 1);
+  assert.equal(report.failedItems.length, 1);
+  assert.equal(report.failedItems[0].targetId, 'mat-fail:gbuyer2');
+  assert.match(report.failedItems[0].error, /constraint violation/);
+});
+
+test('rollback path: rollbackProjectionRepairs restores pre-repair state', async () => {
+  const db = createMockDb({
+    purchases: {
+      'p-1': {
+        materialId: 'mat-existing',
+        buyerAddress: 'gbuyer1',
+        status: 'completed',
+        settlementState: 'active',
+      },
+    },
+    entitlement_cache: {
+      'mat-existing:gbuyer1': {
+        materialId: 'mat-existing',
+        buyerAddress: 'gbuyer1',
+        active: false, // Discrepancy
+        updatedAt: '2026-01-01T00:00:00.000Z',
+      },
+    },
+  });
+
+  // Execute repairs and capture report
+  const report = await runProjectionReconciliation({
+    db,
+    scope: 'entitlements',
+    dryRun: false,
+  });
+
+  assert.equal(report.repairedCount, 1);
+  assert.equal(report.rollbackSnapshot.length, 1);
+  assert.equal(report.rollbackSnapshot[0].existedBefore, true);
+
+  // Verify entitlement projection is now repaired (active: true)
+  const repairedDoc = await db.collection('entitlement_cache').findOne({ materialId: 'mat-existing', buyerAddress: 'gbuyer1' });
+  assert.equal(repairedDoc.active, true);
+
+  // Now perform rollback
+  const rollbackRes = await rollbackProjectionRepairs(db, report.rollbackSnapshot);
+  assert.equal(rollbackRes.restoredCount, 1);
+
+  // Verify projection is rolled back to previous state (active: false)
+  const rolledBackDoc = await db.collection('entitlement_cache').findOne({ materialId: 'mat-existing', buyerAddress: 'gbuyer1' });
+  assert.equal(rolledBackDoc.active, false);
+  assert.equal(rolledBackDoc.updatedAt, '2026-01-01T00:00:00.000Z');
 });

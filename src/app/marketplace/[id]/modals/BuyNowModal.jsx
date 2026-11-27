@@ -1,12 +1,12 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import Image from "next/image";
 import { AnimatePresence, motion } from "framer-motion";
 import {
   FaCheckCircle,
-  FaExternalLinkAlt,
-  FaShoppingBag,
+  FaExclamationTriangle,
+  FaSyncAlt,
   FaTimes,
 } from "react-icons/fa";
 import { useAccount } from "wagmi";
@@ -19,51 +19,121 @@ import { getExplorerTxUrl } from "@/lib/config/chain";
 import { getSupportedPaymentAssets } from "@/lib/config/assets";
 import { TransactionStatus } from "@/lib/transactions/transaction";
 import { useTransactionCenter } from "@/providers/TransactionProvider";
+import { purchaseService } from "@/services/purchaseService";
+import {
+  DEFAULT_SIGNING_BUFFER_MS,
+  evaluateClientQuoteFreshness,
+  formatStaleQuoteMessage,
+  verifyQuoteBeforeSigning,
+} from "@/lib/checkout/staleQuoteGuard";
 
 const SUPPORTED_ASSETS = getSupportedPaymentAssets();
 
-function useQuote(materialId, asset, price) {
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState(null);
-  const [quote, setQuote] = useState(null);
+function formatFeeForAsset(assetCode) {
+  return assetCode === "XLM" ? "0.10" : "0.05";
+}
+
+function formatQuotePayload(serverQuote, fallbackAssetCode) {
+  const assetCode = serverQuote?.asset || fallbackAssetCode || "XLM";
+  const numericPrice = Number.parseFloat(serverQuote?.price ?? 0);
+  return {
+    quoteId: serverQuote?.quoteId || null,
+    materialId: serverQuote?.materialId || null,
+    buyerAddress: serverQuote?.buyerAddress || null,
+    price: Number.isFinite(numericPrice) ? numericPrice : 0,
+    amount: Number.isFinite(numericPrice) ? numericPrice.toFixed(2) : "0.00",
+    asset: assetCode,
+    fee: formatFeeForAsset(assetCode),
+    creatorAddress: serverQuote?.creatorAddress || null,
+    materialVersion: serverQuote?.materialVersion || 1,
+    expiresAt: serverQuote?.expiresAt || null,
+  };
+}
+
+function useQuote({ isOpen, materialId, asset, price, buyerAddress }) {
+  const [state, setState] = useState({
+    requestKey: null,
+    quote: null,
+    error: null,
+  });
   const [refreshKey, setRefreshKey] = useState(0);
 
+  const previewResult = useMemo(() => {
+    if (!isOpen || !materialId || !asset || buyerAddress) {
+      return { quote: null, error: null };
+    }
+    const parsedPrice = Number.parseFloat(price || 0);
+    if (Number.isNaN(parsedPrice)) {
+      return { quote: null, error: new Error("Invalid material price") };
+    }
+    return {
+      quote: {
+        quoteId: null,
+        materialId: String(materialId),
+        buyerAddress: null,
+        price: parsedPrice,
+        amount: parsedPrice.toFixed(2),
+        asset: asset.code,
+        fee: formatFeeForAsset(asset.code),
+        expiresAt: null,
+      },
+      error: null,
+    };
+  }, [isOpen, materialId, asset, price, buyerAddress]);
+
+  const activeRequestKey =
+    isOpen && materialId && asset && buyerAddress
+      ? `${materialId}:${asset.code}:${buyerAddress}:${refreshKey}`
+      : null;
+
   useEffect(() => {
-    if (!materialId || !asset) return;
+    if (!activeRequestKey) return;
 
-    const loadingTimer = window.setTimeout(() => {
-      setLoading(true);
-      setError(null);
-    }, 0);
+    let cancelled = false;
 
-    const timeout = window.setTimeout(() => {
-      const parsedPrice = Number.parseFloat(price || 0);
-
-      if (Number.isNaN(parsedPrice)) {
-        setError(new Error("Invalid material price"));
-        setQuote(null);
-      } else {
-        setQuote({
-          amount: parsedPrice.toFixed(2),
-          asset: asset.code,
-          fee: asset.code === "XLM" ? "0.10" : "0.05",
+    purchaseService
+      .requestQuote({ materialId, buyerAddress })
+      .then((serverQuote) => {
+        if (cancelled) return;
+        setState({
+          requestKey: activeRequestKey,
+          quote: formatQuotePayload(serverQuote, asset.code),
+          error: null,
         });
-      }
-
-      setLoading(false);
-    }, 350);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setState({
+          requestKey: activeRequestKey,
+          quote: null,
+          error: err instanceof Error ? err : new Error("Unable to load checkout quote"),
+        });
+      });
 
     return () => {
-      window.clearTimeout(loadingTimer);
-      window.clearTimeout(timeout);
+      cancelled = true;
     };
-  }, [materialId, asset, price, refreshKey]);
+  }, [activeRequestKey, materialId, asset, buyerAddress]);
 
+  const refresh = useCallback(() => {
+    setRefreshKey((current) => current + 1);
+  }, []);
+
+  if (!activeRequestKey) {
+    return {
+      loading: false,
+      error: previewResult.error,
+      quote: previewResult.quote,
+      refresh,
+    };
+  }
+
+  const isCurrent = state.requestKey === activeRequestKey;
   return {
-    loading,
-    error,
-    quote,
-    refresh: () => setRefreshKey((current) => current + 1),
+    loading: !isCurrent,
+    error: isCurrent ? state.error : null,
+    quote: isCurrent ? state.quote : null,
+    refresh,
   };
 }
 
@@ -84,6 +154,14 @@ export default function BuyNowModal({
   const { state: stellarState } = useWallet();
   const stellarAddress = stellarState.status === "Connected" ? stellarState.session.address : null;
   const address = stellarAddress || evmAddress;
+  const {
+    activeTransaction,
+    beginTransaction,
+    markStatus,
+    confirmTransaction,
+    failTransaction,
+    clearTransaction,
+  } = useTransactionCenter();
 
   const createPurchaseMutation = useCreatePurchase();
   const startAccessRequestMutation = useStartAccessRequest();
@@ -95,15 +173,70 @@ export default function BuyNowModal({
   const [checkoutError, setCheckoutError] = useState(null);
   const [downloadError, setDownloadError] = useState(null);
   const [isDownloading, setIsDownloading] = useState(false);
+  const [isVerifyingQuote, setIsVerifyingQuote] = useState(false);
+  const [quoteAlert, setQuoteAlert] = useState(null);
 
   const {
     loading: quoteLoading,
     error: quoteError,
     quote,
-    refresh,
-  } = useQuote(materialId, selectedAsset, price);
+    refresh: refreshQuoteState,
+  } = useQuote({
+    isOpen,
+    materialId,
+    asset: selectedAsset,
+    price,
+    buyerAddress: address,
+  });
+
+  const handleRefreshQuote = useCallback(() => {
+    setQuoteAlert(null);
+    setCheckoutError(null);
+    refreshQuoteState();
+  }, [refreshQuoteState]);
+
+  useEffect(() => {
+    if (!isOpen || !quote?.quoteId || !quote?.expiresAt) return;
+
+    const checkExpiry = () => {
+      const freshness = evaluateClientQuoteFreshness({
+        quote,
+        materialId,
+        buyerAddress: address,
+        expectedPrice: price,
+        signingBufferMs: DEFAULT_SIGNING_BUFFER_MS,
+      });
+
+      if (!freshness.fresh) {
+        const formatted = formatStaleQuoteMessage(freshness);
+        setQuoteAlert({
+          ok: false,
+          kind: "stale",
+          source: "client",
+          reason: freshness.reason,
+          canRefresh: formatted.canRefresh,
+          title: formatted.title,
+          message: formatted.message,
+          changedFields: freshness.changedFields || [],
+          quoteTerms: freshness.quoteTerms || null,
+          currentTerms: freshness.currentTerms || null,
+        });
+      }
+    };
+
+    const expiresAtMs = new Date(quote.expiresAt).getTime();
+    const delayMs = Math.max(0, expiresAtMs - DEFAULT_SIGNING_BUFFER_MS - Date.now());
+    const timer = window.setTimeout(checkExpiry, delayMs + 50);
+
+    return () => {
+      window.clearTimeout(timer);
+    };
+  }, [isOpen, quote, materialId, address, price]);
 
   const isReceiptVisible = receiptStatus !== "idle";
+  const isQuoteBlocked = Boolean(
+    quoteAlert && (quoteAlert.kind === "stale" || quoteAlert.kind === "auth")
+  );
   const explorerHint = useMemo(
     () => (receipt?.transactionHash ? getExplorerTxUrl(receipt.transactionHash) : activeTransaction.explorerUrl),
     [activeTransaction.explorerUrl, receipt?.transactionHash],
@@ -116,6 +249,8 @@ export default function BuyNowModal({
     setCheckoutError(null);
     setDownloadError(null);
     setIsDownloading(false);
+    setIsVerifyingQuote(false);
+    setQuoteAlert(null);
     clearTransaction();
   };
 
@@ -160,13 +295,37 @@ export default function BuyNowModal({
       return;
     }
 
-    const txHash = createLocalTxHash();
-    const purchasedAt = new Date().toISOString();
-    const amount = quote?.amount || price;
-    const asset = quote?.asset || selectedAsset.code;
-
     setCheckoutError(null);
     setDownloadError(null);
+    setQuoteAlert(null);
+    setIsVerifyingQuote(true);
+
+    let verifiedQuote;
+    try {
+      const verification = await verifyQuoteBeforeSigning({
+        quote,
+        materialId,
+        buyerAddress: address,
+        expectedPrice: price,
+        validateQuoteFn: purchaseService.validateQuote,
+      });
+
+      if (!verification.ok) {
+        setQuoteAlert(verification);
+        return;
+      }
+
+      verifiedQuote = verification.quote;
+    } finally {
+      setIsVerifyingQuote(false);
+    }
+
+    const txHash = createLocalTxHash();
+    const purchasedAt = new Date().toISOString();
+    const amount = verifiedQuote?.amount || quote?.amount || price;
+    const asset = verifiedQuote?.asset || quote?.asset || selectedAsset.code;
+    const activeQuoteId = verifiedQuote?.quoteId || quote?.quoteId || null;
+
     setReceipt({
       itemName: materialTitle || `Material #${materialId}`,
       creator: materialCreator,
@@ -214,6 +373,7 @@ export default function BuyNowModal({
         buyerAddress: address,
         transactionHash: txHash,
         signedXdr: null,
+        quoteId: activeQuoteId,
         email,
         amount,
         asset,
@@ -237,10 +397,25 @@ export default function BuyNowModal({
         explorerUrl: getExplorerTxUrl(confirmedHash),
         title: "Purchase confirmed",
         message: "Your receipt is ready and your encrypted material can be downloaded.",
-        explorerUrl: getExplorerTxUrl(confirmedHash),
       });
     } catch (err) {
       const error = err instanceof Error ? err : new Error("Purchase failed. Please try again.");
+      const errorCode = err?.data?.code || err?.code;
+      if (errorCode === "SETTLEMENT_QUOTE_EXPIRED" || errorCode === "CONFLICT_STATE") {
+        const formatted = formatStaleQuoteMessage({
+          reason: errorCode === "SETTLEMENT_QUOTE_EXPIRED" ? "QUOTE_EXPIRED" : "QUOTE_NOT_FOUND",
+          fallbackMessage: error.message,
+        });
+        setQuoteAlert({
+          ok: false,
+          kind: "stale",
+          source: "settlement",
+          reason: errorCode,
+          canRefresh: true,
+          title: formatted.title,
+          message: formatted.message,
+        });
+      }
       setCheckoutError(error);
       setReceiptStatus("error");
       onAccessUpdated?.();
@@ -354,12 +529,14 @@ export default function BuyNowModal({
                   ) : null}
                 </div>
 
-                <div className="mb-5 flex flex-col gap-3 rounded-2xl border border-slate-100 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/50 px-4 py-3 text-sm sm:flex-row sm:items-center sm:justify-between">
+                <div className="mb-4 flex flex-col gap-3 rounded-2xl border border-slate-100 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/50 px-4 py-3 text-sm sm:flex-row sm:items-center sm:justify-between">
                   <span className="text-slate-600 dark:text-slate-400">You will pay</span>
                   {quoteLoading ? (
                     <span className="text-slate-400 dark:text-slate-500">Loading quote...</span>
                   ) : quoteError ? (
-                    <span className="text-rose-500 dark:text-rose-400">Error loading quote</span>
+                    <span className="text-rose-500 dark:text-rose-400">
+                      {quoteError.message || "Error loading quote"}
+                    </span>
                   ) : quote ? (
                     <div className="flex items-center gap-2 font-semibold text-slate-900 dark:text-slate-100">
                       <Image src="/images/stellar.png" alt={selectedAsset.label} width={20} height={20} />
@@ -371,12 +548,65 @@ export default function BuyNowModal({
                   )}
                   <button
                     type="button"
-                    onClick={refresh}
-                    className="text-left text-xs font-medium text-blue-600 dark:text-blue-400 underline sm:text-right"
+                    onClick={handleRefreshQuote}
+                    disabled={quoteLoading || isVerifyingQuote}
+                    className="text-left text-xs font-medium text-blue-600 dark:text-blue-400 underline disabled:opacity-50 sm:text-right"
                   >
                     Refresh
                   </button>
                 </div>
+
+                {quoteAlert ? (
+                  <div
+                    role="alert"
+                    data-testid="stale-quote-alert"
+                    className={`mb-4 rounded-2xl border px-4 py-3 text-sm ${
+                      quoteAlert.kind === "auth"
+                        ? "border-rose-200 bg-rose-50 text-rose-800 dark:border-rose-900/60 dark:bg-rose-950/40 dark:text-rose-200"
+                        : "border-amber-200 bg-amber-50 text-amber-900 dark:border-amber-900/60 dark:bg-amber-950/40 dark:text-amber-200"
+                    }`}
+                  >
+                    <div className="flex items-start gap-3">
+                      <FaExclamationTriangle className="mt-0.5 shrink-0" aria-hidden="true" />
+                      <div className="flex-1">
+                        <p className="font-semibold">{quoteAlert.title}</p>
+                        <p className="mt-1 text-xs leading-5 opacity-90">{quoteAlert.message}</p>
+                        <div className="mt-3 flex flex-wrap gap-2">
+                          {quoteAlert.canRefresh ? (
+                            <button
+                              type="button"
+                              onClick={handleRefreshQuote}
+                              disabled={quoteLoading}
+                              className="inline-flex items-center gap-1.5 rounded-lg bg-amber-600 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-amber-700 disabled:opacity-60"
+                            >
+                              <FaSyncAlt aria-hidden="true" />
+                              Refresh quote
+                            </button>
+                          ) : null}
+                          {quoteAlert.kind === "error" ? (
+                            <button
+                              type="button"
+                              onClick={handlePay}
+                              disabled={isVerifyingQuote}
+                              className="inline-flex items-center gap-1.5 rounded-lg bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-slate-800 disabled:opacity-60 dark:bg-slate-100 dark:text-slate-900"
+                            >
+                              Retry verification
+                            </button>
+                          ) : null}
+                          {quoteAlert.kind === "auth" ? (
+                            <button
+                              type="button"
+                              onClick={() => setShowWallet(true)}
+                              className="inline-flex items-center gap-1.5 rounded-lg bg-rose-600 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-rose-700"
+                            >
+                              Reconnect wallet
+                            </button>
+                          ) : null}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                ) : null}
 
                 <TransactionStatusPanel
                   transaction={activeTransaction}
@@ -391,13 +621,17 @@ export default function BuyNowModal({
                     createPurchaseMutation.isPending ||
                     startAccessRequestMutation.isPending ||
                     quoteLoading ||
-                    !quote
+                    isVerifyingQuote ||
+                    !quote ||
+                    isQuoteBlocked
                   }
                   className="mt-5 w-full rounded-2xl bg-blue-600 py-3 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:opacity-60"
                 >
-                  {createPurchaseMutation.isPending || startAccessRequestMutation.isPending
-                    ? "Processing..."
-                    : "Pay and unlock access"}
+                  {isVerifyingQuote
+                    ? "Verifying quote..."
+                    : createPurchaseMutation.isPending || startAccessRequestMutation.isPending
+                      ? "Processing..."
+                      : "Pay and unlock access"}
                 </button>
               </div>
             </motion.div>

@@ -43,6 +43,47 @@ npx vitest run src/app/dashboard/upload/components/__tests__/UploadForm.a11y.tes
   error (two `export default` statements and undefined references), restoring
   the primary discovery screen to a working state.
 
+## Session timeout dialog: keyboard and async status (#1153)
+
+`src/components/SessionWarning.jsx` is mounted on every page (`src/app/layout.js`). It shows a
+`role="alertdialog"` warning shortly before the session cookie expires, and a "Session expired" dialog once
+it has expired. Tests: `src/components/__tests__/SessionWarning.test.jsx`. They run the real
+`useSessionExpiry` hook with `fetch` mocked, so the refresh request's real outcomes drive the dialog.
+
+```bash
+npx vitest run src/components/__tests__/SessionWarning.test.jsx
+```
+
+| Path | Behaviour covered |
+|------|-------------------|
+| Normal | When the warning opens, focus moves to "Keep me signed in". Tab and Shift+Tab stay inside the dialog. Enter renews the session, the dialog closes and focus returns to the element that had it before. |
+| Async status | While renewing, the button reads "Renewing..." and is disabled. A failed renewal is announced with `role="alert"`. The countdown is `role="timer"`. |
+| Retry | After a failure the button is enabled again. A second attempt that succeeds closes the dialog and clears the alert. |
+| Authorization | A refresh rejected by the server (e.g. 401) switches to the "Session expired" dialog with focus on "Sign in again". |
+| Audit | No axe violations in either dialog. |
+
+Fixes made for this coverage:
+
+- **Focus moves into the dialog.** Both dialogs declared `aria-modal="true"` but left focus behind them, so
+  keyboard and screen-reader users were still on the page underneath. They now use the shared
+  `useFocusTrap` hook, as `Modal` does. That gives focus on open, Tab containment, and focus restored on close.
+- **No announcement every second.** The countdown was `aria-live="polite"` and changed every second, so
+  screen readers queued a new announcement each second. `role="timer"` has an implicit `aria-live` of
+  `off` (WAI-ARIA 1.2). The time is still readable on demand, and the dialog's description announces the
+  warning once.
+
+Edge cases:
+
+- **Escape does nothing.** Neither dialog has a dismiss action. Closing the warning would let the session
+  lapse unnoticed, and the expired dialog has to lead to signing in again.
+- **Warning turns into expired.** If the refresh is rejected while the warning is open, the warning's trap
+  releases and the expired dialog's trap takes focus. Focus ends on "Sign in again", never on the page.
+- **Network failure vs rejection.** A network error keeps the warning open with an alert, so the user can
+  retry. A non-OK refresh response means the session cannot be renewed and is treated as expired. Recovery
+  in that case is to sign in again (the button reloads the page).
+- **Known gap.** The renew button is `disabled` while the request is in flight, and browsers may move
+  focus off a disabled element. That is unchanged here. The alert still announces the outcome.
+
 ## Manual verification checklist
 
 Automated checks can't catch everything. Before shipping a change to a primary

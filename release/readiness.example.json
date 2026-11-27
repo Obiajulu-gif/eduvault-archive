@@ -7,7 +7,8 @@
       "id": "add_notification_preferences_001",
       "status": "applied",
       "dryRunPassed": true,
-      "rollbackDocumented": true
+      "rollbackDocumented": true,
+      "rollbackVerification": "verified"
     }
   ],
   "securityChecks": {
