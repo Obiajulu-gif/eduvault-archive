@@ -7,6 +7,8 @@
  * Consumers (listing/publishing/delivery) must verify the material is not quarantined.
  */
 
+import { createHash } from 'node:crypto';
+
 export const QUARANTINE_STATES = {
   PENDING: 'pending',
   CLEAN: 'clean',
@@ -25,6 +27,7 @@ export const QUARANTINE_REASONS = {
   SCANNER_TIMEOUT: 'scanner_timeout',
   SCANNER_OUTAGE: 'scanner_outage',
   MANUAL_REVIEW_REQUIRED: 'manual_review_required',
+  CONTENT_HASH_MISMATCH: 'content_hash_mismatch',
 };
 
 const DEFAULT_CONFIG = {
@@ -54,6 +57,7 @@ export function createIpfsFetchScanner({ fetchImpl = globalThis.fetch } = {}) {
       }
 
       const bytes = new Uint8Array(await response.arrayBuffer());
+      const byteHash = createHash('sha256').update(bytes).digest('hex');
       const sample = new TextDecoder().decode(bytes.slice(0, Math.min(bytes.length, 4096)));
       const infected = sample.includes('EICAR-STANDARD-ANTIVIRUS-TEST-FILE');
 
@@ -62,8 +66,10 @@ export function createIpfsFetchScanner({ fetchImpl = globalThis.fetch } = {}) {
             infected: true,
             reason: QUARANTINE_REASONS.MALWARE_SIGNATURE,
             threats: ['EICAR-Test-File'],
+            byteHash,
+            sizeBytes: bytes.length,
           }
-        : { infected: false };
+        : { infected: false, byteHash, sizeBytes: bytes.length };
     },
   };
 }
@@ -253,6 +259,31 @@ export async function runScanner({
         mimeType,
         sizeBytes,
       });
+
+      const observedByteHash = scanOutput?.byteHash ? String(scanOutput.byteHash).toLowerCase() : null;
+      const expectedByteHash = quarantine.byteHash ? String(quarantine.byteHash).toLowerCase() : null;
+      const observedSize = scanOutput?.sizeBytes;
+      const hashMismatch = expectedByteHash && observedByteHash && expectedByteHash !== observedByteHash;
+      const sizeMismatch = Number.isFinite(quarantine.sizeBytes)
+        && Number.isFinite(observedSize)
+        && quarantine.sizeBytes !== observedSize;
+      if (hashMismatch || sizeMismatch) {
+        return finalizeQuarantine({
+          db,
+          contentHash,
+          state: QUARANTINE_STATES.REJECTED,
+          reason: QUARANTINE_REASONS.CONTENT_HASH_MISMATCH,
+          scanner: scanOutput.scannerName || scannerImpl.name || 'default',
+          scanResult: {
+            verdict: 'rejected',
+            byteHash: observedByteHash,
+            sizeBytes: observedSize,
+            expectedByteHash,
+            expectedSizeBytes: quarantine.sizeBytes,
+          },
+        });
+      }
+
       // Provenance (issue #637): signature version distinct from engine
       // version (some engines version their signature DB independently of
       // the engine binary), plus explicit scan timing.

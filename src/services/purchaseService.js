@@ -1,6 +1,28 @@
 import { apiClient } from '@/lib/api/apiClient';
 
 export const purchaseService = {
+  requestQuote: async ({ materialId, buyerAddress }) => {
+    return apiClient('/api/purchase', {
+      body: {
+        action: 'quote',
+        materialId,
+        buyerAddress,
+      },
+    });
+  },
+
+  validateQuote: async ({ materialId, quoteId, buyerAddress, minRemainingMs }) => {
+    return apiClient('/api/purchase', {
+      body: {
+        action: 'validate_quote',
+        materialId,
+        quoteId,
+        buyerAddress,
+        ...(minRemainingMs !== undefined ? { minRemainingMs } : {}),
+      },
+    });
+  },
+
   createPurchase: async (purchaseData) => {
     return apiClient('/api/purchase', { body: purchaseData });
   },

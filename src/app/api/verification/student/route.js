@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { NextResponse } from "next/server";
 import connectToDatabase from "@/lib/mongodb";
 import { validateAuth } from "@/lib/auth/session";
@@ -190,11 +191,13 @@ export async function POST(request) {
         // malware-scan pipeline as every other uploaded file. The
         // verification record stores the pinned content hash (and gateway
         // URL for moderator review) rather than a raw buffer in MongoDB.
+        const byteHash = createHash("sha256").update(Buffer.from(await document.arrayBuffer())).digest("hex");
         const uploadedFile = await pinata.upload.public.file(document);
         const contentHash = uploadedFile.cid;
         const quarantine = await createQuarantineRecord({
           db,
           contentHash,
+          byteHash,
           fileName: document.name,
           mimeType: document.type,
           sizeBytes: document.size,
@@ -207,12 +210,15 @@ export async function POST(request) {
           intent: {
             type: "indexer",
             channel: "scan_content",
+            action: "scan_content",
             payload: {
+              action: "scan_content",
               contentHash,
+              byteHash,
+              expectedByteHash: byteHash,
               fileName: document.name,
               mimeType: document.type,
               sizeBytes: document.size,
-              action: "scan",
             },
           },
         });

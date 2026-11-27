@@ -378,3 +378,112 @@ wallets, nested user ids, tx hashes, emails in error messages, URLs with
 tokens, raw payloads, secrets), pseudonym stability and key dependence, the
 real pino wiring, the lint selectors, and a scan of `src/` and `scripts/` for
 interpolated log messages.
+
+## High-cardinality redaction and trace sampling (#1086)
+
+### Identifier pseudonymization before every sink
+
+The pino logger hook (#883) pseudonymized identifiers in plain logs. Telemetry
+delivered to a **custom sink** (`setTelemetrySink`, exporters), however, only
+went through `redactSensitive`. As a result, wallet addresses, user ids, IPs
+and emails in `metadata` and `error.message` reached exporters raw. They are
+high-cardinality personal identifiers.
+
+`emitRecord` now runs `metadata` and `error` through `protectTelemetryFields`
+(`logSafety.js`) before delivery. It uses the same field classes and keyed
+pseudonyms as plain logs:
+
+```json
+{ "metadata": { "walletAddress": "stellar#9f2c4e1a0b7d3e55", "userId": "id#41aa0c2e9d1b7f03", "materialId": "mat-1" } }
+```
+
+`pseudonymize` is now idempotent: an existing `<kind>#<16 hex>` value is
+returned unchanged. Without this, a telemetry line re-processed by the pino hook
+would hash the pseudonym again, and one wallet would get different ids in
+telemetry and in logs.
+
+### Correlation id hardening
+
+`x-correlation-id`, `x-request-id` and `traceparent` are echoed into every
+record of a request, and correlation ids are not pseudonymized. A client-supplied
+value is therefore accepted only if it is 1-128 characters of `[A-Za-z0-9._:-]`
+and contains no wallet, email or IP. Anything else is replaced by a
+server-generated UUID. W3C `traceparent` values pass unchanged.
+
+### Trace-coherent sampling
+
+The token bucket samples records independently, so one request could be half
+kept and its retry sampled differently. An optional head-sampling stage now
+runs before the bucket. It keeps or drops **whole traces**, deterministically:
+FNV-1a of `correlationId` is compared with the rate.
+
+- Configure with `TELEMETRY_TRACE_SAMPLE_RATE` (0-1, default `1` = disabled) or
+  `createTelemetryGuard({ config: { traceSampleRate, operationSampleRates } })`.
+  Invalid values fail open to `1`.
+- Same correlation id → same decision on every instance and every retry.
+- Failures are never trace-sampled. They still go through their larger bucket.
+- Drops are tallied exactly like bucket drops (`suppressed`, summaries,
+  `sampledOut`), plus a new `traceSampledOut` counter. `kept + suppressed`
+  still equals true volume.
+- Records without a correlation id are kept (fail open).
+
+### Sampling overrides (authorized, time-boxed)
+
+```js
+await applyTelemetrySamplingOverride({
+  actor,                       // needs telemetry:sampling:override (admins via "*")
+  override: { id: "inc-42", operation: "checkout.quote", rate: 1, ttlMs: 15 * 60_000, reason: "INC-42" },
+});
+// or one trace: { id: "repro-7", correlationId: "req-abc", rate: 1, ttlMs: 600000, reason: "repro" }
+await revokeTelemetrySamplingOverride({ actor, id: "inc-42" });
+listTelemetrySamplingOverrides();
+```
+
+Rules:
+- Exactly one target: `operation` or `correlationId`.
+- `rate` is in [0, 1].
+- `ttlMs` is between 1 s and 1 h.
+- `reason` is required.
+- Unknown fields are rejected. An override can change **sampling only**;
+  redaction and label validation cannot be disabled this way.
+- Precedence: trace override > highest matching operation override > static
+  per-operation rate > global rate.
+- Retrying with the same `id` and parameters is a no-op. The same `id` with
+  different parameters returns `409`.
+- At most `maxOverrides` (20) can be active. Beyond that, `429`.
+- The audit hook runs **before** the override is stored and fails closed. By
+  default it emits an unsampled `telemetry.sampling_override` record, with the
+  operator pseudonymized.
+- Overrides are in memory and per process. They expire on their own, and a
+  restart or `resetTelemetryGuard()` clears them.
+
+### Edge cases
+
+- **Low rate hides a rare success path.** Use an operation override rather than
+  raising the global rate.
+- **Multiple instances.** Decisions agree across instances because the hash is
+  deterministic. Overrides must be applied on each instance (per-process state).
+- **Pseudonym correlation across instances** still requires a shared
+  `LOG_HASH_SECRET`. That requirement is unchanged.
+- **Error messages** keep their text, with identifiers replaced in place. Secret
+  shapes are still redacted afterwards.
+
+### Rollback
+
+| Switch | Effect |
+| --- | --- |
+| `TELEMETRY_PSEUDONYMIZE=off` | Metadata and error identifiers are delivered as before #1086. Secret redaction stays on. |
+| `TELEMETRY_TRACE_SAMPLE_RATE=1` (default) | Trace sampling disabled. Only the token bucket applies, as before. |
+| `revokeTelemetrySamplingOverride` / restart | Removes overrides |
+| `TELEMETRY_GUARD=off` | Unchanged: bypasses the guard entirely (including trace sampling) |
+
+No data migration is needed. Only newly emitted records change. Dashboards that
+grouped by raw `metadata.walletAddress`-style fields must switch to the
+pseudonym, which is stable per value and per `LOG_HASH_SECRET`.
+
+### Verification
+
+```bash
+npx tsx --test tests/backend/telemetry-redaction-sampling.test.mjs tests/backend/log-safety.test.mjs
+npx vitest run src/lib/monitoring
+```

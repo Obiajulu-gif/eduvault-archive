@@ -17,6 +17,9 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          # The evidence names an earlier commit; the gate diffs against it.
+          fetch-depth: 0
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -24,5 +27,8 @@ jobs:
           node-version: 20
 
       # The gate only reads the evidence file, so no npm install is needed.
+      # On pull_request GITHUB_SHA is the synthetic merge commit, so use the PR head.
       - name: Check release evidence for this commit
-        run: node scripts/release-readiness.mjs --evidence release/readiness.json --commit "$GITHUB_SHA"
+        env:
+          RELEASE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: node scripts/release-readiness.mjs --evidence release/readiness.json --commit "$RELEASE_COMMIT"
