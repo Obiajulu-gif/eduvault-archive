@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { withApiHardening } from "@/lib/api/hardening";
-import jwt from "jsonswebtoken";
+import jwt from "jsonwebtoken";
 import { getDb } from "@/lib/mongodb";
 import { ObjectId } from "mongodb";
 
@@ -11,15 +11,21 @@ const COLLECTION_NAME = "collections";
 /**
  * Unique index on `{ creatorId, idempotencyKey }` guarantees that concurrent
  * submissions of the same collection by the same creator collapse to a single
- * document. Requests without an idempotency key are not constrained (the
- * index is sparse), so the existing create-only behaviour is preserved.
+ * document. Only documents with a string key are indexed, so requests without
+ * an idempotency key stay unconstrained. (The earlier sparse index did not do
+ * that: a sparse compound index still indexes every document that has
+ * `creatorId`, so a creator's second keyless collection hit E11000.)
  */
 async function ensureCollectionIndexes(db) {
   await db
     .collection(COLLECTION_NAME)
     .createIndex(
       { creatorId: 1, idempotencyKey: 1 },
-      { unique: true, sparse: true, name: "collections_creator_idempotency" }
+      {
+        unique: true,
+        partialFilterExpression: { idempotencyKey: { $type: "string" } },
+        name: "collections_creator_idempotency_key",
+      }
     );
 }
 
@@ -53,6 +59,10 @@ export async function POST(request) {
 
         const idempotencyKey =
           payload.idempotencyKey || request.headers.get("x-idempotency-key") || null;
+        // The unique index only covers string keys; anything else would not be deduplicated.
+        if (idempotencyKey !== null && typeof idempotencyKey !== "string") {
+          return NextResponse.json({ error: "idempotencyKey must be a string" }, { status: 400 });
+        }
 
         if (idempotencyKey) {
           const existing = await db

@@ -4,6 +4,10 @@ import { useEffect, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { FaClock, FaSignOutAlt } from "react-icons/fa";
 import { useSessionExpiry } from "@/hooks/useSessionExpiry";
+import useFocusTrap from "@/hooks/useFocusTrap";
+
+// Neither dialog has a dismiss action, so Escape must not close them.
+const ignoreEscape = () => {};
 
 function formatCountdown(msRemaining) {
   const totalSeconds = Math.max(0, Math.floor(msRemaining / 1000));
@@ -19,6 +23,8 @@ function formatCountdown(msRemaining) {
  */
 export default function SessionWarning() {
   const { isWarning, isExpired, expiresAt, keepAlive } = useSessionExpiry();
+  const warningRef = useFocusTrap(isWarning, ignoreEscape);
+  const expiredRef = useFocusTrap(isExpired, ignoreEscape);
   const [msRemaining, setMsRemaining] = useState(0);
   const [isRenewing, setIsRenewing] = useState(false);
   const [renewError, setRenewError] = useState(null);
@@ -45,7 +51,7 @@ export default function SessionWarning() {
           aria-modal="true"
           aria-labelledby="session-expired-heading"
         >
-          <div className="w-full max-w-sm rounded-2xl bg-white dark:bg-surface-strong p-6 text-center shadow-xl">
+          <div ref={expiredRef} className="w-full max-w-sm rounded-2xl bg-white dark:bg-surface-strong p-6 text-center shadow-xl">
             <FaSignOutAlt className="mx-auto mb-3 text-2xl text-red-500" aria-hidden="true" />
             <h2 id="session-expired-heading" className="mb-1 text-lg font-bold text-gray-900 dark:text-foreground">
               Session expired
@@ -101,10 +107,11 @@ export default function SessionWarning() {
         aria-labelledby="session-warning-heading"
         aria-describedby="session-warning-description"
       >
-        <div className="relative w-full max-w-sm rounded-t-2xl bg-white dark:bg-surface-strong p-6 shadow-lg sm:rounded-2xl">
+        <div ref={warningRef} className="relative w-full max-w-sm rounded-t-2xl bg-white dark:bg-surface-strong p-6 shadow-lg sm:rounded-2xl">
           <div className="mb-4 flex items-center justify-center gap-2 text-amber-500">
             <FaClock className="text-xl" aria-hidden="true" />
-            <span className="text-2xl font-bold tabular-nums" aria-live="polite">
+            {/* role="timer" is aria-live="off": a polite region here was re-announced every second. */}
+            <span className="text-2xl font-bold tabular-nums" role="timer">
               {formatCountdown(msRemaining)}
             </span>
           </div>
