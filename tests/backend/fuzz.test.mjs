@@ -27,6 +27,9 @@ import {
   validatePrice,
   validateProfilePayload,
   validateMaterialPayload,
+  validateMaterialUpdatePayload,
+  validateExpectedVersion,
+  validateChangeReason,
   validateUploadPayload,
   validateUploadFileMetadata,
   validateDateRangeQuery,
@@ -386,7 +389,7 @@ describe("fuzz: validateUploadFileMetadata — file size and type", () => {
     for (const meta of FUZZ_FILE_META) {
       assertSafeOrValidation(
         () => validateUploadFileMetadata(meta, "file"),
-        `validateUploadFileMetadata(${JSON.stringify(meta).slice(0, 80)})`
+        `validateUploadFileMetadata(${String(JSON.stringify(meta)).slice(0, 80)})`
       );
     }
   });
@@ -568,6 +571,94 @@ describe("fuzz: ValidationError messages do not leak stack traces or raw errors"
         assert.ok(!msg.includes("at "),          `Stack trace leaked in: ${msg.slice(0, 100)}`);
         assert.ok(!msg.includes("node_modules"), `Internal path leaked in: ${msg.slice(0, 100)}`);
       }
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #1147: update / retry / authorization paths
+// ---------------------------------------------------------------------------
+
+// A JSON body or a header can never carry a Symbol or a function, so those
+// corpus entries are not reachable inputs for request-level validators.
+const requestReachable = (value) => typeof value !== "symbol" && typeof value !== "function";
+
+describe("fuzz: validateMaterialUpdatePayload — failure path (#1147)", () => {
+  test("every fuzz body either returns allowed fields or throws ValidationError", () => {
+    for (const body of FUZZ_OBJECTS) {
+      assertSafeOrValidation(() => validateMaterialUpdatePayload(body), `validateMaterialUpdatePayload(${String(body)})`);
+    }
+  });
+
+  test("null and primitive bodies are a ValidationError, not a TypeError", () => {
+    for (const body of [null, undefined, 0, "", "string", true, 42]) {
+      assert.throws(() => validateMaterialUpdatePayload(body), ValidationError);
+    }
+  });
+
+  test("every fuzz string in each editable field is handled safely", () => {
+    for (const field of ["title", "description", "usageRights", "visibility", "thumbnailUrl", "category"]) {
+      for (const value of FUZZ_STRINGS) {
+        assertSafeOrValidation(() => validateMaterialUpdatePayload({ [field]: value }), `${field}=${String(value).slice(0, 40)}`);
+      }
+    }
+  });
+
+  test("dangerous thumbnailUrl schemes are never stored", () => {
+    for (const url of ["javascript:alert(1)", "data:text/html,<script>alert(1)</script>", "vbscript:msgbox(1)", "//evil.example"]) {
+      const { threw, result } = assertSafeOrValidation(() => validateMaterialUpdatePayload({ thumbnailUrl: url }), url);
+      assert.ok(threw || result.thumbnailUrl === null, `stored dangerous thumbnailUrl ${url}`);
+    }
+  });
+
+  test("price boundaries match creation: negatives, non-finite and > 1 000 000 rejected", () => {
+    for (const price of [-1, -0.001, Infinity, -Infinity, NaN, "abc", 1_000_001, Number.MAX_SAFE_INTEGER]) {
+      assert.throws(() => validateMaterialUpdatePayload({ price }), ValidationError, `price=${price}`);
+    }
+    assert.equal(validateMaterialUpdatePayload({ price: 0 }).price, 0);
+    assert.equal(validateMaterialUpdatePayload({ price: 1_000_000 }).price, 1_000_000);
+  });
+
+  test("a body with only unknown or prototype keys has no editable fields", () => {
+    for (const body of [{}, { evil: "<script>" }, JSON.parse('{"__proto__":{"admin":true}}')]) {
+      assert.throws(() => validateMaterialUpdatePayload(body), ValidationError);
+    }
+    assert.equal({}.admin, undefined, "Object.prototype was polluted");
+  });
+});
+
+describe("fuzz: validateExpectedVersion — retry path (#1147)", () => {
+  const inputs = [...FUZZ_NUMBERS, ...FUZZ_STRINGS].filter(requestReachable);
+
+  test("every reachable input returns null, a positive integer, or throws ValidationError", () => {
+    for (const value of inputs) {
+      const { threw, result } = assertSafeOrValidation(() => validateExpectedVersion(value), `validateExpectedVersion(${String(value)})`);
+      if (!threw) {
+        assert.ok(result === null || (Number.isInteger(result) && result >= 1), `unexpected version ${result}`);
+      }
+    }
+  });
+
+  test("absent versions mean 'no precondition' (first attempt)", () => {
+    for (const value of [undefined, null, ""]) assert.equal(validateExpectedVersion(value), null);
+  });
+
+  test("zero, negative, fractional and non-finite versions are rejected", () => {
+    for (const value of [0, -1, 1.5, NaN, Infinity, -Infinity, "abc", "1abc"]) {
+      assert.throws(() => validateExpectedVersion(value), ValidationError, `version=${String(value)}`);
+    }
+  });
+
+  test("a retried request carrying the same If-Match value parses to the same version", () => {
+    assert.equal(validateExpectedVersion("7"), 7);
+    assert.equal(validateExpectedVersion(7), 7);
+    assert.equal(validateExpectedVersion(validateExpectedVersion("7")), 7);
+  });
+
+  test("validateChangeReason never throws and caps length", () => {
+    for (const value of FUZZ_STRINGS) {
+      const reason = validateChangeReason(value);
+      assert.ok(reason === null || (typeof reason === "string" && reason.length <= 500));
     }
   });
 });

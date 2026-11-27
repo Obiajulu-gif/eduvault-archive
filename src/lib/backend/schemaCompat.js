@@ -134,7 +134,9 @@ export function readRecord(collection, doc, { targetVersion } = {}) {
   assertInRange(schema, target);
 
   const from = declaredVersion(doc, schema);
-  if (from > schema.latest) throw new UnsupportedSchemaVersionError(collection, from, schema);
+  // Below `min` is a retired version (#1083): reject it as documented instead
+  // of silently upgrading through migrations that are no longer supported.
+  if (from > schema.latest || from < schema.min) throw new UnsupportedSchemaVersionError(collection, from, schema);
 
   if (target > from) return migrateUp(schema, { ...doc }, from, target);
   if (target < from) return migrateDown(schema, { ...doc }, from, target);
@@ -153,7 +155,7 @@ export function writeRecord(collection, input, { version } = {}) {
   assertInRange(schema, requested);
 
   const from = declaredVersion(input, schema);
-  if (from > schema.latest) throw new UnsupportedSchemaVersionError(collection, from, schema);
+  if (from > schema.latest || from < schema.min) throw new UnsupportedSchemaVersionError(collection, from, schema);
 
   let doc = { ...input };
   if (requested > from) doc = migrateUp(schema, doc, from, requested);
