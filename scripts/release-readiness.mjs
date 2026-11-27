@@ -57,6 +57,46 @@ function changedFilesBetween(fromCommit, toCommit) {
   }
 }
 
+// Migration plan mode (#1080): checks every migration in the plan has a
+// rehearsed rollback (or an approved irreversible sign-off), a fresh dry run,
+// and retry-safe idempotency. With --with-db it also blocks on unresolved
+// rollback_verifications runs, failing closed if the database is unreachable.
+const planFlag = args.findIndex(a => a === '--migration-plan');
+const planPath = args.find(a => a.startsWith('--migration-plan='))?.slice('--migration-plan='.length)
+  || (planFlag >= 0 ? args[planFlag + 1] : null);
+if (planPath) {
+  const { evaluateMigrationRollbackGate, loadUnresolvedRuns } = await import('../src/lib/release/migrationRollbackGate.js');
+  let client = null;
+  try {
+    const plan = JSON.parse(readFileSync(planPath, 'utf8'));
+    let unresolved = { runs: [], error: null };
+    if (args.includes('--with-db')) {
+      try {
+        const { MongoClient } = await import('mongodb');
+        client = new MongoClient(MONGODB_URI, { serverSelectionTimeoutMS: 3000 });
+        await client.connect();
+        unresolved = await loadUnresolvedRuns(client.db(MONGODB_DB));
+      } catch (error) {
+        unresolved = { runs: [], error: `database unreachable (${error.code || 'connect failed'})` };
+      }
+    }
+    const permissions = rawPermissions ? rawPermissions.split(',').map(p => p.trim()) : [];
+    const report = evaluateMigrationRollbackGate(plan, {
+      actor: { id: actorId, role: actorRole, permissions },
+      expectedCommit,
+      unresolvedRuns: unresolved.runs,
+      unresolvedRunsError: unresolved.error,
+    });
+    console.log(JSON.stringify(report, null, 2));
+    if (client) await client.close();
+    process.exit(report.ready ? 0 : 1);
+  } catch (error) {
+    console.error(`[release-readiness] Migration plan check failed: ${error.message}`);
+    if (client) await client.close();
+    process.exit(1);
+  }
+}
+
 // Evidence mode is used by the release workflow. It is intentionally
 // dependency-free and checks the commit, migration proof, security
 // checks, smoke test, and rollback rehearsal recorded in the evidence file.

@@ -1,0 +1,47 @@
+{
+  "release": "v0.2.0",
+  "migrations": [
+    {
+      "id": "creator_profile_wallet_schema_v2",
+      "order": 1,
+      "author": "maintainer-alice",
+      "idempotent": true,
+      "dryRun": {
+        "status": "passed",
+        "at": "2026-10-14T09:00:00Z",
+        "attempts": 1,
+        "commit": "replace-with-the-full-commit-sha-being-released"
+      },
+      "rollback": {
+        "strategy": "down",
+        "script": "scripts/migrations/migrate-creator-profiles.mjs --rollback",
+        "rehearsalStatus": "passed",
+        "rehearsedAt": "2026-10-13T16:00:00Z"
+      }
+    },
+    {
+      "id": "backfill_preview_images_v2",
+      "order": 2,
+      "author": "maintainer-alice",
+      "idempotent": true,
+      "dryRun": { "status": "passed", "at": "2026-10-14T09:10:00Z", "attempts": 2 },
+      "rollback": {
+        "strategy": "restore_snapshot",
+        "snapshotId": "mongo-snapshot-2026-10-14T08-00Z",
+        "snapshotAt": "2026-10-14T08:00:00Z",
+        "snapshotVerified": true
+      }
+    },
+    {
+      "id": "drop_legacy_evm_columns",
+      "order": 3,
+      "author": "maintainer-alice",
+      "idempotent": true,
+      "dryRun": { "status": "passed", "at": "2026-10-14T09:20:00Z", "attempts": 1 },
+      "rollback": { "strategy": "none" },
+      "approvals": [
+        { "id": "release-bob", "role": "release_engineer", "at": "2026-10-14T10:00:00Z" }
+      ]
+    }
+  ]
+}

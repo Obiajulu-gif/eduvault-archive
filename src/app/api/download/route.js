@@ -39,9 +39,13 @@ import { getUserFromCookie } from '@/lib/api/auth';
 import { normalizeBuyerAddress } from '@/lib/purchases/access';
 import {
   generateCapabilityToken,
+  verifyCapabilityToken,
   CAPABILITY_TTL_MS,
+  CAPABILITY_MIN_TTL_MS,
+  CAPABILITY_MAX_TTL_MS,
   CAPABILITY_MAX_BYTES,
 } from '@/lib/downloads/capabilityToken';
+import { parseByteRangeParam, validateExpiryLimit } from '@/lib/downloads/signedDownloadAuth';
 import { recordDownloadAccess } from '@/lib/downloads/accessLog';
 import { buildAnalyticsEvent, enqueueAnalyticsEvent } from '@/lib/backend/analyticsEvents';
 import { withTelemetryRoute, ACTOR_TYPES } from '@/lib/monitoring/telemetry';
@@ -156,22 +160,51 @@ async function handleGet(request) {
 
   // ── 5. Generate a signed capability token and return the capability URL
 
-  // Parse byte range if provided (e.g. "0-1023")
-  let byteRangeStart = 0;
-  let byteRangeEnd = null;
-  if (rangeParam && /^(\d+)-(\d+)$/.test(rangeParam)) {
-    byteRangeStart = parseInt(rangeParam.split('-')[0], 10);
-    byteRangeEnd = parseInt(rangeParam.split('-')[1], 10);
-    if (byteRangeEnd < byteRangeStart) {
-      return renderProblemResponse("VALIDATION_FIELD", request, "Invalid byte range: end must be >= start");
+  // Parse and strictly validate byte range if provided (e.g. "0-1023")
+  const parsedRange = parseByteRangeParam(rangeParam);
+  if (!parsedRange.ok) {
+    return renderProblemResponse("VALIDATION_FIELD", request, parsedRange.message);
+  }
+  const { byteRangeStart, byteRangeEnd, rangeSize } = parsedRange;
+
+  // Validate optional maxBytes override
+  const maxBytesParam = searchParams.get('maxBytes');
+  let requestedMaxBytes = null;
+  if (maxBytesParam !== null && maxBytesParam !== '') {
+    requestedMaxBytes = Number.parseInt(maxBytesParam, 10);
+    if (!Number.isSafeInteger(requestedMaxBytes) || requestedMaxBytes <= 0) {
+      return renderProblemResponse("VALIDATION_FIELD", request, "Invalid maxBytes: must be a positive integer");
+    }
+    if (requestedMaxBytes > CAPABILITY_MAX_BYTES) {
+      return renderProblemResponse(
+        "VALIDATION_RANGE_TOO_LARGE",
+        request,
+        `Requested maxBytes exceeds maximum capability quota of ${CAPABILITY_MAX_BYTES / 1_000_000}MB`
+      );
     }
   }
 
-  // Compute the byte range size
-  const rangeSize = (byteRangeEnd !== null ? byteRangeEnd - byteRangeStart + 1 : null);
+  // Validate optional expiresInMs override within [CAPABILITY_MIN_TTL_MS, CAPABILITY_MAX_TTL_MS]
+  const expiresInMsParam = searchParams.get('expiresInMs');
+  const ttlCheck = validateExpiryLimit(
+    expiresInMsParam !== null && expiresInMsParam !== '' ? Number(expiresInMsParam) : undefined,
+    {
+      defaultTtlMs: CAPABILITY_TTL_MS,
+      minTtlMs: CAPABILITY_MIN_TTL_MS,
+      maxTtlMs: CAPABILITY_MAX_TTL_MS,
+    }
+  );
+  if (!ttlCheck.ok) {
+    return renderProblemResponse(
+      "VALIDATION_FIELD",
+      request,
+      `Invalid expiresInMs: must be between ${CAPABILITY_MIN_TTL_MS}ms and ${CAPABILITY_MAX_TTL_MS}ms`
+    );
+  }
+  const effectiveTtlMs = ttlCheck.ttlMs;
 
   // Enforce per-capability quota: never exceed CAPABILITY_MAX_BYTES
-  let effectiveByteRangeQuota = CAPABILITY_MAX_BYTES;
+  let effectiveByteRangeQuota = requestedMaxBytes ?? CAPABILITY_MAX_BYTES;
   if (rangeSize && rangeSize > CAPABILITY_MAX_BYTES) {
     return renderProblemResponse(
       "VALIDATION_RANGE_TOO_LARGE",
@@ -179,18 +212,26 @@ async function handleGet(request) {
       `Requested byte range exceeds maximum capability quota of ${CAPABILITY_MAX_BYTES / 1_000_000}MB`
     );
   }
+  if (rangeSize && rangeSize > effectiveByteRangeQuota) {
+    return renderProblemResponse(
+      "VALIDATION_RANGE_TOO_LARGE",
+      request,
+      "Requested byte range exceeds requested maxBytes limit"
+    );
+  }
   if (rangeSize) {
     effectiveByteRangeQuota = rangeSize;
   }
 
   // Generate a signed capability token bound to buyer, material, byte
-  // range, and nonce — the signature covers every field, so none of them
-  // can be tampered with once issued (#675).
+  // range, byte limit, expiry limit, and nonce (#675).
   const { token: capabilityToken, payload: capabilityPayload } = generateCapabilityToken({
     buyer: buyerAddress,
     material: materialId,
     byteRangeStart,
     byteRangeEnd: byteRangeEnd !== null ? byteRangeEnd : undefined,
+    maxBytes: effectiveByteRangeQuota,
+    ttlMs: effectiveTtlMs,
     nonce,
   });
 
@@ -256,7 +297,9 @@ async function handleGet(request) {
         byteRangeEnd: byteRangeEnd !== null ? byteRangeEnd : null,
         nonce,
         quotaBytes: effectiveByteRangeQuota,
-        expiresInMs: CAPABILITY_TTL_MS,
+        maxBytes: effectiveByteRangeQuota,
+        expiresInMs: effectiveTtlMs,
+        expiresAt: new Date(capabilityPayload.exp).toISOString(),
       },
     },
     {
@@ -272,6 +315,88 @@ async function handleGet(request) {
   );
 }
 
+async function handlePost(request) {
+  const user = await getUserFromCookie(request);
+  if (!user) {
+    return renderProblemResponse("AUTH_UNAUTHENTICATED", request, "Authentication required");
+  }
+
+  const userAddress = normalizeBuyerAddress(user.walletAddress || user.address || user.id);
+  if (!userAddress) {
+    return renderProblemResponse("VALIDATION_FIELD", request, "No wallet address on account");
+  }
+
+  let body;
+  try {
+    body = await request.json();
+  } catch {
+    return renderProblemResponse("VALIDATION_FIELD", request, "Invalid JSON request body");
+  }
+
+  const { token, materialId, requestedBytes, range } = body ?? {};
+  if (!token || typeof token !== 'string') {
+    return renderProblemResponse("VALIDATION_FIELD", request, "Missing signed download token");
+  }
+
+  let requestedRangeStart;
+  let requestedRangeEnd;
+  if (range !== undefined && range !== null && range !== '') {
+    const parsed = parseByteRangeParam(range);
+    if (!parsed.ok) {
+      return renderProblemResponse("VALIDATION_FIELD", request, parsed.message);
+    }
+    requestedRangeStart = parsed.byteRangeStart;
+    requestedRangeEnd = parsed.byteRangeEnd;
+  }
+
+  const verification = verifyCapabilityToken(token, {
+    buyerAddress: userAddress,
+    materialId: materialId || undefined,
+    requestedBytes,
+    requestedRangeStart,
+    requestedRangeEnd,
+  });
+
+  if (!verification.valid) {
+    const status =
+      verification.reason === 'expired'
+        ? 410
+        : verification.reason === 'requested_bytes_exceed_limit' ||
+            verification.reason === 'requested_range_out_of_bounds' ||
+            verification.reason === 'byte_range_exceeds_max'
+          ? 416
+          : 403;
+    return NextResponse.json(
+      {
+        ok: false,
+        authorized: false,
+        error: verification.reason === 'expired'
+          ? 'Download authorization expired'
+          : status === 416
+            ? 'Requested byte range or size exceeds authorized limit'
+            : 'Download authorization rejected',
+      },
+      { status }
+    );
+  }
+
+  return NextResponse.json(
+    {
+      ok: true,
+      authorized: true,
+      materialId: verification.payload.material,
+      capabilityId: verification.payload.jti,
+      maxBytes: verification.payload.maxBytes ?? verification.payload.byteRangeQuota,
+      expiresAt: new Date(verification.payload.exp).toISOString(),
+    },
+    {
+      headers: {
+        'Cache-Control': 'private, no-store',
+      },
+    }
+  );
+}
+
 export const GET = withTelemetryRoute(
   'material.download',
   ACTOR_TYPES.USER,
@@ -280,5 +405,16 @@ export const GET = withTelemetryRoute(
       request,
       { route: "material-download" },
       () => handleGet(request, context)
+    )
+);
+
+export const POST = withTelemetryRoute(
+  'material.download.verify',
+  ACTOR_TYPES.USER,
+  (request, context) =>
+    withApiErrorHandling(
+      request,
+      { route: "material-download-verify" },
+      () => handlePost(request, context)
     )
 );
