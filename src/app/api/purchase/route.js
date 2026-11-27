@@ -11,12 +11,68 @@ import {
 } from "@/lib/purchases/access";
 import { broadcastPurchaseEvent } from '@/lib/webhooks/sender';
 import { sendReceiptIfEligible } from '@/lib/email';
-import { createCheckoutQuote, consumeCheckoutQuote } from '@/lib/checkout/quotes';
+import {
+  createCheckoutQuote,
+  consumeCheckoutQuote,
+  validateCheckoutQuote,
+  STALE_QUOTE_REASONS,
+} from '@/lib/checkout/quotes';
 import { buildAnalyticsEvent, recordServerAnalyticsEvent } from '@/lib/backend/analyticsEvents';
 import { appendCriticalMutation } from '@/lib/backend/auditLedger';
 import { withTelemetryRoute, ACTOR_TYPES } from '@/lib/monitoring/telemetry';
 import { AppError, isAppError } from '@/lib/errors/AppError.js';
 import { renderErrorResponse, renderProblemResponse } from '@/lib/errors/renderErrorResponse.js';
+import { renderUserSafeErrorBody } from '@/lib/errors/userSafeError.js';
+import { getCorrelationId } from '@/lib/errors/correlation.js';
+
+const MAX_PRE_SIGN_BUFFER_MS = 60 * 1000;
+
+function renderStaleQuoteResponse(validation, req) {
+  const reasonToCode = {
+    [STALE_QUOTE_REASONS.BUYER_MISMATCH]: "AUTH_WALLET_MISMATCH",
+    [STALE_QUOTE_REASONS.QUOTE_EXPIRED]: "SETTLEMENT_QUOTE_EXPIRED",
+    [STALE_QUOTE_REASONS.QUOTE_EXPIRING_SOON]: "SETTLEMENT_QUOTE_EXPIRED",
+    [STALE_QUOTE_REASONS.MATERIAL_ARCHIVED]: "NOT_FOUND_MATERIAL",
+    [STALE_QUOTE_REASONS.MATERIAL_UNAVAILABLE]: "NOT_FOUND_MATERIAL",
+    [STALE_QUOTE_REASONS.TERMS_CHANGED]: "CONFLICT_STATE",
+    [STALE_QUOTE_REASONS.QUOTE_CONSUMED]: "CONFLICT_STATE",
+    [STALE_QUOTE_REASONS.QUOTE_NOT_FOUND]: "CONFLICT_STATE",
+    [STALE_QUOTE_REASONS.MATERIAL_MISMATCH]: "CONFLICT_STATE",
+  };
+
+  const reasonToMessage = {
+    [STALE_QUOTE_REASONS.BUYER_MISMATCH]: "This checkout quote belongs to a different wallet address. Refresh to request a quote for your active wallet.",
+    [STALE_QUOTE_REASONS.QUOTE_EXPIRED]: "Checkout quote expired before signing. Refresh to get a new quote.",
+    [STALE_QUOTE_REASONS.QUOTE_EXPIRING_SOON]: "Checkout quote is about to expire before signing can complete. Refresh to get a new quote.",
+    [STALE_QUOTE_REASONS.MATERIAL_ARCHIVED]: "This material has been archived and is no longer available for purchase.",
+    [STALE_QUOTE_REASONS.MATERIAL_UNAVAILABLE]: "This material is no longer available for purchase.",
+    [STALE_QUOTE_REASONS.TERMS_CHANGED]: "Listing terms changed after your quote was issued. Refresh your quote to review the updated terms before signing.",
+    [STALE_QUOTE_REASONS.QUOTE_CONSUMED]: "This checkout quote has already been used. Refresh to request a new quote.",
+    [STALE_QUOTE_REASONS.QUOTE_NOT_FOUND]: "Checkout quote could not be found. Refresh to request a new quote.",
+    [STALE_QUOTE_REASONS.MATERIAL_MISMATCH]: "Checkout quote does not match this material. Refresh to request a new quote.",
+  };
+
+  const code = reasonToCode[validation.reason] || "CONFLICT_STATE";
+  const correlationId = req ? getCorrelationId(req) : null;
+  const instance = req ? new URL(req.url).pathname : "";
+  const body = renderUserSafeErrorBody(new AppError(code), { correlationId, instance });
+
+  body.error = reasonToMessage[validation.reason] || body.error;
+  body.fresh = false;
+  body.stale = true;
+  body.reason = validation.reason;
+  body.canRefresh = Boolean(validation.canRefresh);
+  body.checkedAt = validation.checkedAt;
+  if (validation.expiresAt) body.expiresAt = validation.expiresAt;
+  if (validation.changedFields) body.changedFields = validation.changedFields;
+  if (validation.quoteTerms) body.quoteTerms = validation.quoteTerms;
+  if (validation.currentTerms) body.currentTerms = validation.currentTerms;
+
+  const headers = { "Content-Type": "application/problem+json" };
+  if (correlationId) headers["X-Correlation-Id"] = correlationId;
+
+  return NextResponse.json(body, { status: body.status, headers });
+}
 
 function duplicateKey(error) {
   return error?.code === 11000;
@@ -144,14 +200,35 @@ async function handlePost(req) {
     const db = await getDb();
     const body = await req.json();
 
-    const { materialId, signedXdr, email, transactionHash, amount, asset, quoteId, action, buyerAddress: bodyBuyerAddress } = body;
-    const buyerAddress = normalizeBuyerAddress(
-      user?.walletAddress || user?.address || user?.id || bodyBuyerAddress
+    const {
+      materialId,
+      signedXdr,
+      email,
+      transactionHash,
+      amount,
+      asset,
+      quoteId,
+      action,
+      minRemainingMs,
+      buyerAddress: bodyBuyerAddress,
+    } = body;
+    const sessionBuyerAddress = normalizeBuyerAddress(
+      user?.walletAddress || user?.address || user?.id
     );
+    const requestedBuyerAddress = normalizeBuyerAddress(bodyBuyerAddress);
+    const buyerAddress = sessionBuyerAddress || requestedBuyerAddress;
     const paymentCompleted = Boolean(transactionHash || signedXdr);
 
     if (!materialId) {
       return renderProblemResponse("VALIDATION_FIELD", req, "Missing materialId");
+    }
+
+    if (sessionBuyerAddress && requestedBuyerAddress && sessionBuyerAddress !== requestedBuyerAddress) {
+      return renderProblemResponse(
+        "AUTH_WALLET_MISMATCH",
+        req,
+        "Connected wallet address does not match your authenticated session."
+      );
     }
 
     if (!buyerAddress) {
@@ -164,7 +241,52 @@ async function handlePost(req) {
 
     if (action === 'quote') {
       const quote = await createCheckoutQuote(db, { materialId, buyerAddress });
-      return NextResponse.json({ quoteId: quote.quoteId, materialId: quote.materialId, ...quote.terms, expiresAt: quote.expiresAt }, { status: 201 });
+      return NextResponse.json(
+        {
+          quoteId: quote.quoteId,
+          materialId: quote.materialId,
+          buyerAddress: quote.buyerAddress,
+          ...quote.terms,
+          expiresAt: quote.expiresAt,
+        },
+        { status: 201 }
+      );
+    }
+
+    if (action === 'validate_quote') {
+      if (!quoteId) {
+        return renderProblemResponse("VALIDATION_FIELD", req, "Missing quoteId");
+      }
+
+      const clampedBufferMs = Math.min(
+        MAX_PRE_SIGN_BUFFER_MS,
+        Math.max(0, Number(minRemainingMs) || 0)
+      );
+      const validation = await validateCheckoutQuote(db, {
+        quoteId,
+        materialId,
+        buyerAddress,
+        minRemainingMs: clampedBufferMs,
+      });
+
+      if (!validation.fresh) {
+        return renderStaleQuoteResponse(validation, req);
+      }
+
+      return NextResponse.json(
+        {
+          fresh: true,
+          stale: false,
+          quoteId: validation.quote.quoteId,
+          materialId: validation.quote.materialId,
+          buyerAddress: validation.quote.buyerAddress,
+          ...validation.quote.terms,
+          expiresAt: validation.expiresAt,
+          remainingMs: validation.remainingMs,
+          checkedAt: validation.checkedAt,
+        },
+        { status: 200 }
+      );
     }
 
     const existing = await db.collection('purchases').findOne({ buyerAddress, materialId });
