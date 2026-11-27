@@ -8,6 +8,17 @@
  * 2. Merges preserve historical purchases/entitlements via transparent aliasing.
  * 3. Complete pre-merge state is snapshotted for 100% reversible rollbacks.
  * 4. Every state transition is recorded in the immutable audit log.
+ *
+ * #1085 hardening:
+ * - Merges require an APPROVED review (a DETECTED candidate can no longer be
+ *   merged without a human decision).
+ * - The pre-merge snapshot is persisted *before* any material is mutated, and
+ *   an interrupted merge resumes from it instead of failing with "already
+ *   merged" — retries are safe at every step.
+ * - Audit operation ids are derived from per-review counters instead of
+ *   `Date.now()`, so a retried step appends one ledger record, not two.
+ * - Authorization, conflict-of-interest and stale-review checks live in
+ *   `mergeReviewService.js`; API/operator entry points should call that layer.
  */
 
 import { appendAuditRecord } from '../backend/auditLedger.js';
@@ -94,9 +105,11 @@ export async function createMergeReview(db, candidate, actor = 'system') {
  * @param {string} decision - APPROVED | REJECTED | PENDING_REVIEW
  * @param {string} reviewer - Actor identifier
  * @param {string} [notes='']
+ * @param {object} [extra] - Additional review fields to persist with the decision
+ *   (used by mergeReviewService to pin material fingerprints at approval).
  * @returns {Promise<object>}
  */
-export async function updateReviewDecision(db, reviewId, decision, reviewer, notes = '') {
+export async function updateReviewDecision(db, reviewId, decision, reviewer, notes = '', extra = null) {
   if (!reviewer) {
     throw new Error('Reviewer identity is required to record decision');
   }
@@ -115,13 +128,16 @@ export async function updateReviewDecision(db, reviewId, decision, reviewer, not
   }
 
   const now = new Date().toISOString();
+  const decisionCount = (review.decisionCount || 0) + 1;
   const updateData = {
     status: decision,
     decision,
     reviewedBy: reviewer,
     reviewedAt: now,
     notes,
+    decisionCount,
     updatedAt: now,
+    ...(extra || {}),
   };
 
   await reviewCollection.updateOne({ reviewId }, { $set: updateData });
@@ -129,7 +145,7 @@ export async function updateReviewDecision(db, reviewId, decision, reviewer, not
   try {
     await appendAuditRecord({
       db,
-      operationId: `audit-${reviewId}-decision-${Date.now()}`,
+      operationId: `audit-${reviewId}-decision-${decisionCount}`,
       action: `duplicate.review_${decision.toLowerCase()}`,
       actor: reviewer,
       target: { type: 'duplicate_review', id: reviewId },
@@ -178,8 +194,8 @@ export async function executeMerge(db, reviewId, actor) {
     return { success: true, message: 'Review is already merged', review };
   }
 
-  if (review.status !== REVIEW_STATUS.APPROVED && review.status !== REVIEW_STATUS.DETECTED) {
-    throw new Error(`Cannot execute merge on review in status: ${review.status}`);
+  if (review.status !== REVIEW_STATUS.APPROVED) {
+    throw new Error(`Cannot execute merge on review in status: ${review.status} (an APPROVED review is required)`);
   }
 
   const canonical = await materialsCollection.findOne({
@@ -196,18 +212,39 @@ export async function executeMerge(db, reviewId, actor) {
     throw new Error(`Duplicate material not found: ${review.duplicateId}`);
   }
 
-  if (duplicate.status === 'merged') {
+  // A duplicate already merged by *this* review means a previous attempt was
+  // interrupted after mutating materials: resume it. Merged by anything else
+  // is a genuine conflict.
+  const resuming = duplicate.status === 'merged' && duplicate.mergeReviewId === reviewId;
+  if (duplicate.status === 'merged' && !resuming) {
     throw new Error(`Duplicate material ${review.duplicateId} is already marked as merged`);
+  }
+  if (canonical.status === 'merged') {
+    throw new Error(`Canonical material ${review.canonicalId} has itself been merged into ${canonical.mergedInto}`);
   }
 
   const now = new Date().toISOString();
+  const mergeGeneration = (review.mergeCount || 0) + 1;
 
-  // Snapshot before merge for reversibility
-  const snapshotBeforeMerge = {
-    canonical: JSON.parse(JSON.stringify(canonical)),
-    duplicate: JSON.parse(JSON.stringify(duplicate)),
-    snapshottedAt: now,
-  };
+  // Snapshot before merge for reversibility. It is persisted before the first
+  // material write. Only an attempt that already mutated the duplicate reuses
+  // it (the live documents no longer reflect the pre-merge state); if the
+  // previous attempt died before any material write, a fresh snapshot is taken.
+  let snapshotBeforeMerge = resuming && review.mergeInProgress ? review.snapshotBeforeMerge : null;
+  if (!snapshotBeforeMerge) {
+    if (resuming) {
+      throw new Error(`Merge of ${reviewId} was interrupted without a persisted snapshot; restore manually`);
+    }
+    snapshotBeforeMerge = {
+      canonical: JSON.parse(JSON.stringify(canonical)),
+      duplicate: JSON.parse(JSON.stringify(duplicate)),
+      snapshottedAt: now,
+    };
+    await reviewCollection.updateOne(
+      { reviewId },
+      { $set: { snapshotBeforeMerge, mergeInProgress: true, updatedAt: now } }
+    );
+  }
 
   // 1. Update duplicate record: set status='merged', mergedInto=canonicalId
   await materialsCollection.updateOne(
@@ -244,6 +281,8 @@ export async function executeMerge(db, reviewId, actor) {
     mergedAt: now,
     mergedBy: actor,
     snapshotBeforeMerge,
+    mergeInProgress: false,
+    mergeCount: mergeGeneration,
     updatedAt: now,
   };
 
@@ -253,7 +292,7 @@ export async function executeMerge(db, reviewId, actor) {
   try {
     await appendAuditRecord({
       db,
-      operationId: `audit-${reviewId}-merged-${Date.now()}`,
+      operationId: `audit-${reviewId}-merged-${mergeGeneration}`,
       action: 'duplicate.merged',
       actor,
       target: { type: 'duplicate_review', id: reviewId },
@@ -274,6 +313,7 @@ export async function executeMerge(db, reviewId, actor) {
     canonicalId: review.canonicalId,
     duplicateId: review.duplicateId,
     mergedAt: now,
+    resumed: resuming,
   };
 }
 
@@ -352,6 +392,10 @@ export async function reverseMerge(db, reviewId, actor, reason = '') {
         reversedAt: now,
         reversedBy: actor,
         reversalReason: reason,
+        // Keep the evidence, but clear the active snapshot so a later re-merge
+        // (after a fresh approval) captures the then-current state.
+        snapshotBeforeMerge: null,
+        lastReversedSnapshot: review.snapshotBeforeMerge,
         updatedAt: now,
       },
     }
@@ -361,7 +405,7 @@ export async function reverseMerge(db, reviewId, actor, reason = '') {
   try {
     await appendAuditRecord({
       db,
-      operationId: `audit-${reviewId}-unmerged-${Date.now()}`,
+      operationId: `audit-${reviewId}-unmerged-${review.mergeCount || 1}`,
       action: 'duplicate.unmerged',
       actor,
       target: { type: 'duplicate_review', id: reviewId },

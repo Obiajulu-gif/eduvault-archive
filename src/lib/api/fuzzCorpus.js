@@ -21,6 +21,7 @@
  *   PAGINATION  — cursor injection, negative/fractional page sizes, huge values.
  *   DATES       — invalid ISO strings, negative timestamps, far-future/far-past.
  *   FILE_META   — negative sizes, missing type, overlong file name.
+ *   AUTH_COOKIES — malformed, unsigned and forged session cookies (#1147).
  */
 
 // ---------------------------------------------------------------------------
@@ -459,4 +460,44 @@ export const FUZZ_FILE_META = Object.freeze([
   // Name injection
   { size: 100, type: "application/pdf", name: "../../etc/passwd.pdf" },
   { size: 100, type: "application/pdf", name: "<script>.pdf" },
+]);
+
+// ---------------------------------------------------------------------------
+// Session cookies (#1147) — raw `Cookie` header values for getUserFromCookie /
+// requireActiveUser. None of these may authenticate or throw. Tokens that need
+// the signing secret (expired, wrong secret) are built in the test itself.
+// ---------------------------------------------------------------------------
+
+export const FUZZ_AUTH_COOKIES = Object.freeze([
+  // Missing / empty
+  "",
+  "auth_token=",
+  "auth_token=;",
+  "other=1",
+
+  // Malformed percent-encoding: decodeURIComponent throws URIError
+  "auth_token=%",
+  "auth_token=%E0%A4%A",
+  "auth_token=%ZZ",
+  "auth_token=%C0%AF",      // overlong UTF-8
+  "auth_token=%ED%A0%80",   // lone surrogate
+  "theme=dark; auth_token=%E0%A4%A; lang=en",
+
+  // Not a JWT
+  "auth_token=not-a-jwt",
+  "auth_token=a.b",
+  "auth_token=a.b.c.d",
+  "auth_token=..",
+  "auth_token=!!!.@@@.###",
+  "auth_token=%00.%00.%00",
+  `auth_token=${"A".repeat(10_000)}`,
+
+  // Unsigned / forged: alg "none", HS256 with a made-up signature, JSON null parts
+  "auth_token=eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJzdWIiOiJhZG1pbiIsInJvbGUiOiJhZG1pbiJ9.",
+  "auth_token=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJhZG1pbiIsInJvbGUiOiJhZG1pbiJ9.c2lnbmF0dXJl",
+  "auth_token=bnVsbA.bnVsbA.c2lnbmF0dXJl",
+
+  // Header injection attempts
+  "auth_token=x\r\nSet-Cookie: auth_token=admin",
+  "auth_token={\"$ne\":null}",
 ]);
